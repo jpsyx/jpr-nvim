@@ -1,0 +1,16 @@
+[package]
+name = "review-forge-github"
+description = "The GitHub forge adapter for the review engine, over the gh CLI."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+serde_json.workspace = true
+review-core.workspace = true
+review-model.workspace = true
+
+[lints]
+workspace = true
