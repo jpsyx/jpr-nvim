@@ -15,6 +15,11 @@ ships with the `diff-review` agent skill) to a pure Neovim workflow:
 - Hand all local comments to an agent (Claude Code by default) in a Neovim side
   panel, in one batch, and see its answers inline as thread replies.
 
+The review engine underneath is deliberately frontend-neutral. Neovim is its
+first frontend; dif's terminal UI is meant to reuse the same engine later, so
+reviewers who do not use Neovim get the same workflow (see "Modularity and
+layering").
+
 It is not a general GitHub or git shell. Anything that does not serve
 reviewing a PR is out of scope.
 
@@ -55,6 +60,7 @@ reviewing a PR is out of scope.
 | State | `$XDG_STATE_HOME/jpr/<owner>/<repo>/pr-<n>/` (default `~/.local/state/...`), so it survives worktree removal. |
 | Names | Neovim plugin and `:Jpr` commands; Rust binary `jpr-review`. |
 | Architecture | One long-lived `jpr-review serve` daemon per open PR. It owns all state. |
+| Modularity | A generic review engine (ports and adapters, a `ReviewSession` facade, events, view models) in frontend-neutral crates; Neovim is a thin adapter. dif's TUI is the second intended consumer. |
 
 ## Architecture
 
@@ -74,32 +80,120 @@ agent terminal ── jpr-review reply ──socket──▶ ┘
 - The daemon pushes events to Neovim: threads changed, viewed changed, head
   moved, files changed on disk, sync status.
 
+### Modularity and layering
+
+**Goal.** Everything that is not inherently about Neovim must be reusable by
+other review frontends, first of all dif's terminal UI, so that TUI-based
+reviews can later run on the same engine without Neovim. Neovim is one
+frontend among several, not the center of the design.
+
+**Rule.** The code splits into two kinds of module, and the boundary between
+them is enforced, not just conventional:
+
+| Kind | May depend on | Must not depend on |
+| --- | --- | --- |
+| Generic (review engine) | The standard library, other generic crates, small general-purpose crates (serde, anyhow, etc.) | Neovim, Lua, any terminal or UI library, any specific frontend's concepts (buffers, windows, extmarks, keymaps, panes) |
+| Frontend (Neovim adapter) | Generic crates through their public API, Neovim | Another frontend |
+
+Generic crate names never contain `nvim` or `jpr`. A test in CI fails if a
+generic crate's dependency tree gains a frontend crate or a UI library.
+
+**Patterns used to bridge the engine to frontends:**
+
+- **Ports and adapters (hexagonal architecture).** The engine defines traits
+  (ports) for everything it needs from the outside world and never calls the
+  outside world directly. Adapters implement them:
+  - `Forge`: pull PR data and write review actions. Adapter: GitHub through
+    `gh` (dif's `GithubApi`, extended).
+  - `ReviewStore`: load and save threads, sync registry, viewed state, rounds.
+    Adapter: atomic JSON files under the XDG state directory.
+  - `Workspace`: PR checkout into a worktree, git status, fast-forward,
+    stash/restore, file watching. Adapter: `git`, `gh` and a configurable
+    worktree command.
+  - `AgentChannel`: deliver a prompt to the agent. The engine produces the
+    prompt and an `AgentProfile` (paste style, submit key); each frontend
+    implements delivery (Neovim: `chansend` into a terminal; dif: its PTY).
+  - `Clock`: time, for tests and retry scheduling.
+- **Facade (application service).** One `ReviewSession` type exposes every
+  use case (open, sync, comment, reply, edit, resolve, react, toggle viewed,
+  submit, send to agent, pre-pass, promote) as plain Rust methods over the
+  ports. Frontends only ever talk to this facade.
+- **Command/query split.** Facade methods are either commands (change state,
+  return the result or an error) or queries (return read models). The same
+  split defines the RPC protocol, so an in-process caller and an
+  out-of-process caller see the same API.
+- **Observer (event stream).** The session publishes domain events (threads
+  changed, viewed changed, head moved, files changed, sync status, agent
+  round). In-process frontends subscribe directly; the RPC layer forwards
+  them as notifications.
+- **Presenter / view model.** Anything a reviewer sees that is not
+  frontend-specific is computed in Rust as a frontend-neutral read model:
+  the changed-file list with badges, the stream rows (file headers, hunk
+  lines, filler rows that align split view, thread markers, folds), the
+  stream-row-to-anchor mapping, thread summaries for end-of-line previews,
+  the submit summary, and status counts. Frontends only draw these models.
+  The Neovim plugin turns rows into buffer lines and extmarks; dif's TUI turns
+  the same rows into ratatui widgets.
+- **Strategy.** Behavior that varies by choice is a strategy object: the agent
+  profile (Claude or Codex), the diff view mode (split or unified row
+  layout), and the forge (GitHub today).
+- **Composition root.** Only the binaries wire concrete adapters into the
+  facade. No generic crate constructs an adapter.
+
+**Versioned protocol.** The JSON-RPC protocol is documented in
+`docs/protocol.md` with a protocol version. It is the out-of-process contract
+for any frontend (Neovim today; dif's TUI could use it or link the crates
+directly).
+
 ### Repository layout
 
-The repository is both a Rust crate and a Neovim plugin.
+The repository is a Cargo workspace plus a Neovim plugin.
 
-- `src/`: the `jpr-review` binary. Large parts are copied from dif and
-  trimmed.
-  - `github/`: dif's `gh`-backed GraphQL client, anchor conversion, pull,
-    sync, offline queues and viewed sync, extended with file-level threads
-    (`subjectType: FILE`), PR conversation comments, suggestions, reactions
-    and mention candidates.
-  - `store/`: the per-PR state files (see "Data model").
-  - `diff/`: base…worktree hunks and per-file content hashes.
-  - `inject/`: dif's dispatch and prompt builder, returning prompt text
-    instead of typing keystrokes into a PTY.
-  - `rpc/`: the JSON-RPC protocol shared by stdio and the socket.
-  - `commands/`: `serve`, `reply`, `threads`, `state-path`,
-    `prepass-write`, `guide`.
-- `lua/jpr/` and `plugin/jpr.lua`: the Neovim plugin:
-  `rpc.lua`, `session.lua`, `views/{split,unified,stream,panel}.lua`,
-  `comments/{render,popup,compose}.lua`, `agent.lua`, `submit.lua`.
+Generic crates (`crates/`), reusable outside Neovim:
+
+| Crate | Responsibility |
+| --- | --- |
+| `review-model` | Domain types: threads, anchors, messages, sync status, viewed state, PR metadata, events. Pure data, serde only. |
+| `review-core` | The ports (traits), the `ReviewSession` facade, sync rules (pending vs immediate), offline queue logic, viewed reconciliation, anchor re-anchoring, agent dispatch and prompt building (from dif's `inject/`), the agent contract text printed by `guide`. No IO of its own. |
+| `review-diff` | Hunks and word diffs between two texts, content hashes, and the view-model builders for the stream and file views (rows, filler alignment, folds, anchor mapping). |
+| `review-forge-github` | The `Forge` adapter: dif's `gh`-backed GraphQL client, anchor conversion, pull and sync, extended with file-level threads (`subjectType: FILE`), PR conversation comments, suggestions, reactions and mention candidates. |
+| `review-store-fs` | The `ReviewStore` adapter: atomic JSON files and the lock-based fallback write used when no daemon is running. |
+| `review-workspace-git` | The `Workspace` adapter: worktree command, git status, fast-forward with stash/restore, file watcher. |
+| `review-rpc` | JSON-RPC server over stdio and a Unix socket that exposes the facade's commands, queries and events. Frontend-neutral. |
+
+Frontend-specific code:
+
+| Path | Responsibility |
+| --- | --- |
+| `crates/jpr-review` | The binary and composition root: `serve`, `reply`, `threads`, `state-path`, `prepass-write`, `guide`, `--version`. Wires the adapters into `ReviewSession` and `review-rpc`. |
+| `lua/jpr/`, `plugin/jpr.lua` | The Neovim adapter. `rpc.lua` (protocol client), `session.lua`, `render/` (draw view models as lines, extmarks, signs and folds), `views/{split,unified,stream,panel}.lua` (window and buffer management only), `comments/{popup,compose}.lua`, `agent.lua` (the `AgentChannel` for Neovim), `submit.lua`. No review rules live in Lua: if a decision would be the same in a TUI, it belongs in Rust. |
+
+Other files:
+
 - `install.sh` builds `jpr-review` with cargo and installs it into `BIN_DIR`
   (default `~/.local/bin`). It supports `--name <command>` and `--help`.
+- `docs/protocol.md` (RPC contract) and `docs/architecture.md` (layers and the
+  dependency rule).
 - The scaffold's unrelated design-agent boilerplate (`impeccable` agents,
   commands and skills) is removed. The scaffold's TUI dependencies (ratatui,
   crossterm) are dropped; the dependency choices are recorded in
   `docs/decisions.md`.
+
+### Reuse path for dif
+
+dif's TUI is the second intended consumer. This spec does not change dif, but
+the crates are shaped so it can adopt them incrementally:
+
+1. dif depends on the generic crates (a git dependency on this repository)
+   and replaces its copies of the GitHub layer and the dispatch and prompt
+   code with `review-forge-github` and `review-core`.
+2. dif replaces difit's comment store with `review-store-fs` behind
+   `ReviewStore`.
+3. dif renders `review-diff` view models with ratatui, giving terminal-only
+   users the same review flow without Neovim or a browser.
+
+Because dif already has its own PTY agent pane, it implements `AgentChannel`
+with that pane, and everything else is shared.
 
 ### Installation and host integration
 
@@ -132,9 +226,11 @@ Local and GitHub threads share one shape:
 
 - `id`, `origin`: `github` or `local`.
 - `anchor`: `{file, kind: line|range|file|pr, side: LEFT|RIGHT, start, end,
-  commit, snapshot}`. `snapshot` is the anchored code text (as in dif). While
-  a buffer is open an extmark tracks the anchor through edits; on reload the
-  snapshot re-anchors local threads whose lines moved.
+  commit, snapshot}`. `snapshot` is the anchored code text (as in dif).
+  Re-anchoring is engine logic: when a file changes, `review-core` uses the
+  snapshot to move local anchors whose lines shifted. A frontend may also
+  report live positions (Neovim tracks anchors with extmarks while a buffer is
+  open and sends the new lines on save), but it never decides anchors itself.
 - `state`: `open` or `resolved`, plus `outdated` from GitHub's `isOutdated`.
 - `messages[]`: `{id, author, body, created, updated, reactions[], sync}`.
   `sync` (GitHub only) is `draft`, `pending`, `published`, `failed` or
@@ -215,7 +311,7 @@ window. Unchanged files open normally.
 
 ### Stream
 
-`jpr://stream` is read-only and built from the daemon's hunks: one section per
+`jpr://stream` is read-only and drawn from the engine's stream view model: one section per
 file with a header line, viewed files folded, file-level threads under the
 header. Split mode uses two scroll-bound buffers padded to align.
 
@@ -340,14 +436,26 @@ push, after which GitHub's own reset applies.
 
 ## Testing
 
-- **Rust (`cargo test`):** a fake `GithubApi` (dif's trait) drives GraphQL and
-  REST fixture tests for anchors, pending-vs-immediate rules, queues and viewed
-  sync. Store round-trip and crash-safety tests. Golden tests for the prompt
-  and the `guide` text. Socket tests for `reply`, including its refusal of
-  GitHub ids.
+- **Engine (`cargo test`, no Neovim):** `ReviewSession` is tested through
+  in-memory fakes of every port (`Forge`, `ReviewStore`, `Workspace`,
+  `AgentChannel`, `Clock`): pending-vs-immediate rules, queues, viewed
+  reconciliation, re-anchoring, dispatch, and golden tests for the prompt and
+  the `guide` text. View-model tests cover stream rows, split filler alignment,
+  folds and the row-to-anchor mapping. Most behavior is verified at this
+  level, which is what makes it reusable by dif.
+- **Adapters:** GraphQL and REST fixture tests for `review-forge-github`;
+  round-trip and crash-safety tests for `review-store-fs`; temporary-repo tests
+  for `review-workspace-git`. Each adapter also passes a shared contract test
+  suite written against its port, so a future adapter (another forge, another
+  store) is checked the same way.
+- **Protocol:** `review-rpc` tests over stdio and the socket, including
+  `reply` refusing GitHub ids and the protocol version handshake.
+- **Dependency rule:** a test fails if any generic crate depends on a frontend
+  crate or a UI library.
 - **Lua:** headless `nvim -l` specs against a fake RPC that replays recorded
-  events: overlays, view toggling, stream line-to-anchor mapping, signs, popup
-  and compose actions.
+  events and view models. They test drawing and window behavior only (overlays,
+  view toggling, signs, popup and compose actions), since the rules are
+  already tested in Rust.
 - **End to end:** a scripted smoke run against a throwaway PR in a private
   scratch repository: open, comment, reply, mark viewed, push a change and
   confirm the DISMISSED reset, submit.
@@ -357,8 +465,11 @@ push, after which GitHub's own reset applies.
 
 Each milestone ends usable and tested.
 
-1. **Core.** Daemon, store, GitHub pull, RPC, `:Jpr open`, `install.sh`, host
-   loading. Usable for dogfooding from here on.
+1. **Core.** The workspace with the generic crates and the dependency-rule
+   test, `review-model`, the ports and `ReviewSession` skeleton, the store and
+   GitHub pull adapters, `review-rpc`, `docs/protocol.md`, the `jpr-review`
+   composition root, `:Jpr open`, `install.sh`, host loading. Usable for
+   dogfooding from here on.
 2. **Review views.** Unified and split overlays, stream, panel, viewed sync
    including DISMISSED.
 3. **GitHub comments.** Drafts (line, range, file), immediate replies,
