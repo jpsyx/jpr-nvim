@@ -68,8 +68,10 @@ pub fn main_repo_root(dir: &Path) -> Result<PathBuf> {
     )
 }
 
-/// Checks pull request `number` out into a worktree and returns its path. An
-/// existing default worktree is reused as it is.
+/// Checks pull request `number` out into a worktree and returns its path.
+///
+/// An existing default worktree is reused only when it is on the pull
+/// request's branch; a stale one is removed and checked out again.
 pub fn checkout_pr(dir: &Path, number: u64, command: &WorktreeCommand) -> Result<PathBuf> {
     match command {
         WorktreeCommand::Custom(template) => checkout_custom(dir, &render_custom(template, number)),
@@ -99,24 +101,101 @@ fn checkout_custom(dir: &Path, command: &str) -> Result<PathBuf> {
 
 fn checkout_default(dir: &Path, number: u64) -> Result<PathBuf> {
     let main = main_repo_root(dir)?;
-    let path = default_worktree_path(&main, number);
-    if path.is_dir() {
+    if let Some(path) = reusable_worktree(&main, number)? {
         return Ok(path);
     }
+    let path = default_worktree_path(&main, number);
     let path_text = path.to_string_lossy().into_owned();
     run("git", &["worktree", "add", "--detach", &path_text], &main)
         .context("creating the worktree")?;
-    let branch = format!("pr-{number}");
+    let branch = pr_branch(number);
     if let Err(error) = run(
         "gh",
         &["pr", "checkout", &number.to_string(), "-b", &branch],
         &path,
     ) {
         // Remove the empty worktree we just made, so a retry starts clean.
-        let _ = run("git", &["worktree", "remove", "--force", &path_text], &main);
-        return Err(error.context(format!("checking out pull request #{number}")));
+        let context = match remove_worktree(&main, &path) {
+            Ok(()) => format!("checking out pull request #{number}"),
+            Err(cleanup) => format!(
+                "checking out pull request #{number} (removing the partial worktree also failed: {cleanup:#})"
+            ),
+        };
+        return Err(error.context(context));
     }
     Ok(path)
+}
+
+/// The local branch `gh pr checkout` creates for pull request `number`.
+fn pr_branch(number: u64) -> String {
+    format!("pr-{number}")
+}
+
+/// The default worktree for pull request `number`, if it already exists and
+/// has the pull request's branch checked out.
+///
+/// Anything else at that path, such as a worktree left detached by an
+/// interrupted checkout, is removed so the checkout can start over. Only git
+/// worktrees are removed: any other directory there is an error, never
+/// deleted.
+fn reusable_worktree(main: &Path, number: u64) -> Result<Option<PathBuf>> {
+    let path = default_worktree_path(main, number);
+    if !path.exists() {
+        return Ok(None);
+    }
+    if is_pr_worktree(main, &path, number) {
+        return Ok(Some(path));
+    }
+    remove_worktree(main, &path).with_context(|| {
+        format!(
+            "removing the stale worktree at {}, which is not on branch {}",
+            path.display(),
+            pr_branch(number)
+        )
+    })?;
+    Ok(None)
+}
+
+/// Whether `path` is the top of a worktree of `main` with pull request
+/// `number`'s branch checked out.
+fn is_pr_worktree(main: &Path, path: &Path, number: u64) -> bool {
+    let Ok(stdout) = run(
+        "git",
+        &[
+            "rev-parse",
+            "--path-format=absolute",
+            "--show-toplevel",
+            "--git-common-dir",
+            "--abbrev-ref",
+            "HEAD",
+        ],
+        path,
+    ) else {
+        return false;
+    };
+    let mut lines = stdout.lines();
+    let (Some(top), Some(common), Some(branch)) = (lines.next(), lines.next(), lines.next()) else {
+        return false;
+    };
+    is_same_path(Path::new(top), path)
+        && is_same_path(Path::new(common), &main.join(".git"))
+        && branch == pr_branch(number)
+}
+
+/// Whether `left` and `right` resolve to the same existing path.
+fn is_same_path(left: &Path, right: &Path) -> bool {
+    matches!(
+        (left.canonicalize(), right.canonicalize()),
+        (Ok(left), Ok(right)) if left == right
+    )
+}
+
+/// Removes the worktree at `path`, discarding any changes in it.
+fn remove_worktree(main: &Path, path: &Path) -> Result<()> {
+    let path_text = path.to_string_lossy().into_owned();
+    run("git", &["worktree", "remove", "--force", &path_text], main)
+        .with_context(|| format!("removing the worktree at {}", path.display()))?;
+    Ok(())
 }
 
 /// Runs `program` in `dir` and returns its stdout, or fails with its stderr.
@@ -256,11 +335,96 @@ mod tests {
         let dir = repo();
         let root = dir.path().join("widgets");
         let existing = dir.path().join("widgets-worktrees").join("pr-5");
-        fs::create_dir_all(&existing).unwrap();
+        git(
+            &root,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "pr-5",
+                existing.to_str().unwrap(),
+            ],
+        );
         let path = checkout_pr(&root, 5, &WorktreeCommand::Default).unwrap();
         assert_eq!(
             path.canonicalize().unwrap(),
             existing.canonicalize().unwrap()
         );
+    }
+
+    /// Whether `git worktree list` in `root` mentions `path`.
+    fn is_listed_worktree(root: &Path, path: &Path) -> bool {
+        let output = Command::new("git")
+            .args(["worktree", "list", "--porcelain"])
+            .current_dir(root)
+            .output()
+            .unwrap();
+        let listing = String::from_utf8_lossy(&output.stdout).into_owned();
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        listing
+            .lines()
+            .any(|line| line.starts_with("worktree ") && line.ends_with(&name))
+    }
+
+    #[test]
+    fn nothing_is_reusable_when_the_worktree_is_missing() {
+        let dir = repo();
+        let root = dir.path().join("widgets");
+        assert_eq!(reusable_worktree(&root, 5).unwrap(), None);
+    }
+
+    #[test]
+    fn a_detached_leftover_worktree_is_removed_instead_of_reused() {
+        let dir = repo();
+        let root = dir.path().join("widgets");
+        let leftover = dir.path().join("widgets-worktrees").join("pr-5");
+        git(
+            &root,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "--detach",
+                leftover.to_str().unwrap(),
+            ],
+        );
+        assert_eq!(reusable_worktree(&root, 5).unwrap(), None);
+        assert!(!leftover.exists());
+        assert!(!is_listed_worktree(&root, &leftover));
+    }
+
+    #[test]
+    fn a_worktree_on_another_branch_is_removed_instead_of_reused() {
+        let dir = repo();
+        let root = dir.path().join("widgets");
+        let leftover = dir.path().join("widgets-worktrees").join("pr-5");
+        git(
+            &root,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "other",
+                leftover.to_str().unwrap(),
+            ],
+        );
+        assert_eq!(reusable_worktree(&root, 5).unwrap(), None);
+        assert!(!leftover.exists());
+    }
+
+    #[test]
+    fn a_directory_that_is_not_a_worktree_is_an_error_and_is_kept() {
+        let dir = repo();
+        let root = dir.path().join("widgets");
+        let stray = dir.path().join("widgets-worktrees").join("pr-5");
+        fs::create_dir_all(&stray).unwrap();
+        fs::write(stray.join("notes.txt"), "mine\n").unwrap();
+        let error = checkout_pr(&root, 5, &WorktreeCommand::Default).unwrap_err();
+        let message = format!("{error:#}");
+        assert!(message.contains("removing the stale worktree"), "{message}");
+        assert!(message.contains("pr-5"), "{message}");
+        assert!(stray.join("notes.txt").exists());
     }
 }
