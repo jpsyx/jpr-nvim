@@ -1,50 +1,111 @@
-//! Subcommand dispatch, and the narration every command shares.
-//!
-//! One thin module per command, each one a shell around a pure function. This
-//! file only routes and loads the configuration once, so every command is
-//! handed the same settings: it never decides anything a test would want to
-//! assert.
+//! Subcommand dispatch and the helpers commands share.
 
-pub mod config;
-pub mod greet;
-pub mod info;
+pub mod checkout;
+pub mod serve;
+pub mod state_path;
 
+use std::env;
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{Context, Result, bail};
 
 use crate::cli::{Cli, Command};
+use crate::prompt::{self, Question};
 use crate::theme::Theme;
 
 /// Runs the command the arguments selected.
 pub fn run(cli: &Cli, theme: Theme) -> Result<()> {
-    let path = config_path(cli)?;
-    let settings = crate::config::load(&path)?;
-    let verbose = cli.verbose || settings.verbose;
     match &cli.command {
-        Command::Greet { name } => greet::run(name.as_deref(), &settings, theme),
-        Command::Info => info::run(&path),
-        Command::Config { action } => config::run(action, &path, &settings, theme, verbose),
+        Command::Checkout { pr, worktree_cmd } => {
+            checkout::run(pr_number(*pr, theme)?, worktree_cmd.as_deref(), theme)
+        }
+        Command::Serve { pr, repo, poll } => serve::run(*pr, repo, *poll),
+        Command::StatePath { pr, repo } => {
+            let number = pr_number(*pr, theme)?;
+            state_path::run(number, &repo_name(repo.as_deref(), theme)?)
+        }
     }
 }
 
-/// The configuration file to use: what `--config` named, else the default one.
-fn config_path(cli: &Cli) -> Result<PathBuf> {
-    cli.config
-        .clone()
-        .map_or_else(crate::config::default_path, Ok)
+/// The pull request number: the flag, else asked for on a terminal.
+pub fn pr_number(flag: Option<u64>, theme: Theme) -> Result<u64> {
+    if let Some(number) = flag {
+        return Ok(number);
+    }
+    let question = Question::new(
+        "pull request number",
+        "Which pull request?",
+        "--pr <NUMBER>",
+    );
+    parse_pr_number(&prompt::ask(&question, theme)?)
 }
 
-/// Says what the tool is about to do, on stderr, always. A person should never
-/// wonder whether the tool is hung.
+/// Reads `12` or `#12`.
+pub fn parse_pr_number(answer: &str) -> Result<u64> {
+    let trimmed = answer.trim();
+    trimmed
+        .strip_prefix('#')
+        .unwrap_or(trimmed)
+        .parse()
+        .with_context(|| format!("{trimmed:?} is not a pull request number"))
+}
+
+/// The repository: the flag, else asked for on a terminal.
+pub fn repo_name(flag: Option<&str>, theme: Theme) -> Result<String> {
+    if let Some(repo) = flag {
+        return Ok(repo.to_owned());
+    }
+    let question = Question::new(
+        "repository",
+        "Which repository (owner/name)?",
+        "--repo <OWNER/NAME>",
+    );
+    prompt::ask(&question, theme)
+}
+
+/// Splits `owner/name`.
+pub fn parse_repo(value: &str) -> Result<(String, String)> {
+    match value.split_once('/') {
+        Some((owner, name)) if !owner.is_empty() && !name.is_empty() && !name.contains('/') => {
+            Ok((owner.to_owned(), name.to_owned()))
+        }
+        _ => bail!("expected the repository as owner/name, got {value:?}"),
+    }
+}
+
+/// This machine's state directory for a pull request.
+pub fn state_dir(owner: &str, name: &str, number: u64) -> Result<PathBuf> {
+    let home = env::var_os("HOME")
+        .map(PathBuf::from)
+        .context("HOME is not set")?;
+    let xdg = env::var_os("XDG_STATE_HOME").map(PathBuf::from);
+    review_store_fs::state_dir(xdg.as_deref(), &home, crate::STATE_APP, owner, name, number)
+}
+
+/// Says what the tool is about to do, on stderr.
 pub fn narrate(theme: Theme, message: &str) {
     eprintln!("{}", theme.info(message));
 }
 
-/// Says the same thing in more detail, only under `--verbose` (or the
-/// `verbose` setting). Reassurance is the default; detail is opt-in.
-pub fn detail(verbose: bool, theme: Theme, message: &str) {
-    if verbose {
-        eprintln!("{}", theme.muted(message));
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reads_pull_request_numbers() {
+        assert_eq!(parse_pr_number("12").unwrap(), 12);
+        assert_eq!(parse_pr_number(" #34\n").unwrap(), 34);
+        assert!(parse_pr_number("abc").is_err());
+    }
+
+    #[test]
+    fn splits_owner_and_name() {
+        assert_eq!(
+            parse_repo("octo/widgets").unwrap(),
+            ("octo".to_owned(), "widgets".to_owned())
+        );
+        assert!(parse_repo("widgets").is_err());
+        assert!(parse_repo("/widgets").is_err());
+        assert!(parse_repo("a/b/c").is_err());
     }
 }

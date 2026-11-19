@@ -1,27 +1,15 @@
 //! The command-line surface.
 //!
-//! Every action has a flag or a subcommand, so an agent can drive the tool
-//! without ever meeting a prompt. Values a person may omit are `Option`s: the
-//! command asks for them when there is a terminal to ask on, and fails with
-//! the flag that would have answered when there is not. See
-//! `docs/rules/cli-ux.md`.
-
-use std::path::PathBuf;
+//! The Neovim plugin drives these commands with flags. `checkout` and
+//! `state-path` ask for an omitted value on a terminal; `serve` takes only
+//! flags because its stdin is the protocol.
 
 use clap::{Parser, Subcommand};
 
-/// jpr-nvim: a command-line tool.
+/// jpr-review: the review engine behind the jpr Neovim plugin.
 #[derive(Debug, Clone, Parser)]
 #[command(version, propagate_version = true, arg_required_else_help = true)]
 pub struct Cli {
-    /// Print detailed diagnostics to stderr.
-    #[arg(short, long, global = true, env = "CLI_VERBOSE")]
-    pub verbose: bool,
-
-    /// Read and write this configuration file instead of the default one.
-    #[arg(long, global = true, env = "CLI_CONFIG", value_name = "PATH")]
-    pub config: Option<PathBuf>,
-
     /// The command to run.
     #[command(subcommand)]
     pub command: Command,
@@ -30,34 +18,35 @@ pub struct Cli {
 /// The things this tool can be asked to do.
 #[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
 pub enum Command {
-    /// Print a greeting.
-    Greet {
-        /// Who to greet. Left out on a terminal, you are asked for it.
-        #[arg(short, long)]
-        name: Option<String>,
+    /// Check a pull request out into a worktree and print where, as JSON.
+    Checkout {
+        /// The pull request number. Left out on a terminal, you are asked.
+        #[arg(long)]
+        pr: Option<u64>,
+        /// A shell command that creates the worktree and prints its path; `{n}` is the number.
+        #[arg(long, value_name = "COMMAND", env = "JPR_WORKTREE_CMD")]
+        worktree_cmd: Option<String>,
     },
-    /// Print what this build is, one `key=value` line per fact.
-    Info,
-    /// Read and change the stored configuration.
-    Config {
-        /// What to do with the configuration.
-        #[command(subcommand)]
-        action: ConfigAction,
+    /// Serve a pull request's review session as JSON-RPC on stdin and stdout.
+    Serve {
+        /// The pull request number.
+        #[arg(long)]
+        pr: u64,
+        /// The repository, as owner/name.
+        #[arg(long, value_name = "OWNER/NAME")]
+        repo: String,
+        /// Seconds between background syncs; 0 syncs only on request.
+        #[arg(long, value_name = "SECONDS", default_value_t = 60)]
+        poll: u64,
     },
-}
-
-/// What `config` can be asked to do.
-#[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
-pub enum ConfigAction {
-    /// Print the effective configuration, one `key=value` line per setting.
-    Show,
-    /// Set one setting and save it.
-    Set {
-        /// Which setting to change. Left out on a terminal, you are asked.
-        key: Option<String>,
-
-        /// The new value. Left out on a terminal, you are asked.
-        value: Option<String>,
+    /// Print the directory that holds a pull request's review state.
+    StatePath {
+        /// The pull request number. Left out on a terminal, you are asked.
+        #[arg(long)]
+        pr: Option<u64>,
+        /// The repository, as owner/name. Left out on a terminal, you are asked.
+        #[arg(long, value_name = "OWNER/NAME")]
+        repo: Option<String>,
     },
 }
 
@@ -73,7 +62,7 @@ mod tests {
 
     #[test]
     fn a_bare_invocation_shows_the_help() {
-        let error = Cli::try_parse_from(["tool"]).expect_err("a subcommand is required");
+        let error = Cli::try_parse_from(["jpr-review"]).expect_err("a subcommand is required");
         assert_eq!(
             error.kind(),
             clap::error::ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
@@ -81,70 +70,42 @@ mod tests {
     }
 
     #[test]
-    fn verbose_is_accepted_after_a_subcommand() {
-        let cli = Cli::try_parse_from(["tool", "info", "--verbose"]).expect("global flag parses");
-        assert!(cli.verbose);
-        assert_eq!(cli.command, Command::Info);
-    }
-
-    #[test]
-    fn the_config_file_can_be_named_after_a_subcommand() {
-        let cli = Cli::try_parse_from(["tool", "config", "show", "--config", "/tmp/a.toml"])
-            .expect("global flag parses");
-        assert_eq!(
-            cli.config.as_deref(),
-            Some(std::path::Path::new("/tmp/a.toml"))
-        );
-    }
-
-    #[test]
-    fn greet_takes_a_name_non_interactively() {
-        let cli = Cli::try_parse_from(["tool", "greet", "--name", "Ada"]).expect("a name parses");
+    fn checkout_takes_a_number_and_a_worktree_command() {
+        let cli = Cli::try_parse_from([
+            "jpr-review",
+            "checkout",
+            "--pr",
+            "7",
+            "--worktree-cmd",
+            "wt pr {n}",
+        ])
+        .unwrap();
         assert_eq!(
             cli.command,
-            Command::Greet {
-                name: Some("Ada".to_owned())
+            Command::Checkout {
+                pr: Some(7),
+                worktree_cmd: Some("wt pr {n}".into())
             }
         );
     }
 
     #[test]
-    fn greet_without_a_name_still_parses() {
-        let cli = Cli::try_parse_from(["tool", "greet"]).expect("an omitted name parses");
-        assert_eq!(cli.command, Command::Greet { name: None });
-    }
-
-    #[test]
-    fn config_set_takes_both_values_non_interactively() {
-        let cli = Cli::try_parse_from(["tool", "config", "set", "greeting", "Hi"])
-            .expect("a key and a value parse");
+    fn serve_polls_every_minute_by_default() {
+        let cli =
+            Cli::try_parse_from(["jpr-review", "serve", "--pr", "7", "--repo", "octo/widgets"])
+                .unwrap();
         assert_eq!(
             cli.command,
-            Command::Config {
-                action: ConfigAction::Set {
-                    key: Some("greeting".to_owned()),
-                    value: Some("Hi".to_owned()),
-                }
+            Command::Serve {
+                pr: 7,
+                repo: "octo/widgets".into(),
+                poll: 60
             }
         );
     }
 
     #[test]
-    fn config_set_without_arguments_still_parses() {
-        let cli = Cli::try_parse_from(["tool", "config", "set"]).expect("omitted values parse");
-        assert_eq!(
-            cli.command,
-            Command::Config {
-                action: ConfigAction::Set {
-                    key: None,
-                    value: None,
-                }
-            }
-        );
-    }
-
-    #[test]
-    fn an_unknown_subcommand_is_rejected() {
-        assert!(Cli::try_parse_from(["tool", "frobnicate"]).is_err());
+    fn serve_requires_the_repository() {
+        assert!(Cli::try_parse_from(["jpr-review", "serve", "--pr", "7"]).is_err());
     }
 }

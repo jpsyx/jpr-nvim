@@ -19,9 +19,16 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
-serde.workspace = true
-# Only the scaffold's example `config` command uses TOML; Task 12 removes both.
-toml = { version = "1", features = ["preserve_order"] }
+serde_json.workspace = true
+review-core.workspace = true
+review-model.workspace = true
+review-store-fs.workspace = true
+review-forge-github.workspace = true
+review-workspace-git.workspace = true
+review-rpc.workspace = true
+
+[dev-dependencies]
+review-core = { workspace = true, features = ["fakes"] }
 
 [lints]
 workspace = true
