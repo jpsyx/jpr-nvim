@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# Install or update jpr-nvim as a command on this machine.
+# Install or update jpr-review, the engine behind the jpr Neovim plugin.
 #
 # It has to work for a stranger who just cloned the repository: when something
 # is missing, or the result would not be runnable, say so and print the fix.
 set -euo pipefail
 
 usage() {
-  printf '%s\n' 'Install or update jpr-nvim as an executable command.
+  printf '%s\n' 'Install or update jpr-review as an executable command.
 
 Usage: ./install.sh [--name <command>] [-h|--help]
 
 Options:
-  --name <command>  Command filename (default: jpr-nvim).
+  --name <command>  Command filename (default: jpr-review).
   -h, --help        Show this help without installing anything.
 
 Environment:
@@ -19,10 +19,10 @@ Environment:
 
 Examples:
   ./install.sh
-  BIN_DIR="$HOME/bin" ./install.sh --name jpr-nvim-dev'
+  BIN_DIR="$HOME/bin" ./install.sh --name jpr-review-dev'
 }
 
-binary_name="jpr-nvim"
+binary_name="jpr-review"
 command_name="$binary_name"
 while (($#)); do
   case "$1" in
@@ -59,7 +59,7 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # This installs from source, so a Rust toolchain is the one prerequisite. Say
 # so plainly rather than letting the build die on "cargo: command not found".
 if ! command -v cargo >/dev/null 2>&1; then
-  echo "error: 'cargo' not found; jpr-nvim builds from source and needs a Rust toolchain." >&2
+  echo "error: 'cargo' not found; jpr-review builds from source and needs a Rust toolchain." >&2
   echo "       Install one from https://rustup.rs, then re-run this script." >&2
   exit 1
 fi
@@ -73,8 +73,8 @@ if [[ -d "$installed" ]]; then
   exit 1
 fi
 
-echo "Building jpr-nvim (release)..." >&2
-(cd "$script_dir" && cargo build --release) >&2
+echo "Building jpr-review (release)..." >&2
+(cd "$script_dir" && cargo build --release -p jpr-review) >&2
 
 built="$script_dir/target/release/$binary_name"
 if [[ ! -x "$built" ]]; then

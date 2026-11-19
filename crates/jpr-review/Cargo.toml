@@ -1,0 +1,27 @@
+[package]
+name = "jpr-review"
+description = "The review engine behind the jpr Neovim plugin."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+# The library half holds everything worth testing; the binary is a thin shell
+# around it. Tests and the binary both say `use app::...`.
+[lib]
+name = "app"
+path = "src/lib.rs"
+
+[[bin]]
+name = "jpr-review"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+serde.workspace = true
+# Only the scaffold's example `config` command uses TOML; Task 12 removes both.
+toml = { version = "1", features = ["preserve_order"] }
+
+[lints]
+workspace = true

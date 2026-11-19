@@ -10,34 +10,38 @@ set positional-arguments
 default:
     @just --list
 
-# Compile the debug binary.
+# Compile every crate (debug).
 build:
-    cargo build
+    cargo build --workspace
 
-# Run the CLI, for example: just run greet --name Ada
+# Run the engine binary, for example: just run state-path --pr 7 --repo octo/widgets
 run *args:
-    cargo run -- "$@"
+    cargo run -p jpr-review -- "$@"
 
-# Run every test: the inline unit tests and tests/.
+# Run every Rust test, including the shared fakes and port contracts.
 test:
-    cargo test
+    cargo test --workspace --all-features
+
+# Run every Lua spec in a clean headless Neovim.
+test-lua:
+    ./scripts/test-lua.sh
 
 # Lint with clippy (pedantic + nursery are on); any warning fails.
 lint:
-    cargo clippy --all-targets -- -D warnings
+    cargo clippy --workspace --all-targets --all-features -- -D warnings
 
 # Format the source.
 fmt:
-    cargo fmt
+    cargo fmt --all
 
 # Fail if anything is unformatted, without rewriting it.
 fmt-check:
-    cargo fmt --check
+    cargo fmt --all --check
 
 # Everything that has to pass before a change lands (reports only: `just fmt` fixes).
 check: fmt-check lint test
 
-# Build release and install the binary into $BIN_DIR (default ~/.local/bin).
+# Build release and install `jpr-review` into $BIN_DIR (default ~/.local/bin).
 install:
     ./install.sh
 

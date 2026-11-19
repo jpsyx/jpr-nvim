@@ -1,47 +1,37 @@
-[package]
-name = "jpr-nvim"
+# A workspace: generic review crates (`crates/review-*`) that any frontend can
+# reuse, and one binary (`crates/jpr-review`) that wires them together for the
+# Neovim plugin. The dependency rule is in docs/architecture.md.
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
-description = "jpr-nvim: a command-line tool."
 license = "MIT"
 
-# The library half holds everything worth testing; the binary is a thin shell
-# around it. Its name is fixed (the package name is not a valid identifier when
-# it is hyphenated), so tests and the binary both say `use app::...`.
-[lib]
-name = "app"
-path = "src/lib.rs"
-
-[[bin]]
-name = "jpr-nvim"
-path = "src/main.rs"
-
-[dependencies]
-# Error context a human can read: every failure carries the `.context(...)` of
-# what the tool was trying to do.
+[workspace.dependencies]
 anyhow = "1"
-# The command-line surface. `derive` keeps the flags next to the types they
-# fill; `env` lets any flag also come from the environment.
 clap = { version = "4", features = ["derive", "env"] }
-# The configuration struct is (de)serialized rather than parsed by hand, so a
-# new setting is one more field. `derive` is the whole reason it is here.
 serde = { version = "1", features = ["derive"] }
-# The configuration file format: a config a person edits by hand should look
-# like one. `preserve_order` keeps a table in the order it was read instead of
-# sorting it, so rewriting the file does not reshuffle what the user wrote.
-toml = { version = "1", features = ["preserve_order"] }
+serde_json = "1"
+tempfile = "3"
+review-model = { path = "crates/review-model" }
+review-core = { path = "crates/review-core" }
+review-store-fs = { path = "crates/review-store-fs" }
+review-forge-github = { path = "crates/review-forge-github" }
+review-workspace-git = { path = "crates/review-workspace-git" }
+review-rpc = { path = "crates/review-rpc" }
 
-[lints.rust]
+[workspace.lints.rust]
 unsafe_code = "forbid"
 
-[lints.clippy]
+[workspace.lints.clippy]
 pedantic = { level = "warn", priority = -1 }
 nursery = { level = "warn", priority = -1 }
 # Help and about strings would render literal backticks in a terminal.
 doc_markdown = "allow"
-# A tool binary, not a published library surface: the error and panic sections
-# would be ceremony no reader asked for.
 missing_errors_doc = "allow"
 missing_panics_doc = "allow"
 
