@@ -1,0 +1,20 @@
+[package]
+name = "review-rpc"
+description = "JSON-RPC access to a review session over any line-based transport."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+review-core.workspace = true
+review-model.workspace = true
+
+[dev-dependencies]
+review-core = { workspace = true, features = ["fakes"] }
+
+[lints]
+workspace = true

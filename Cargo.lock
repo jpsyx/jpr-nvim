@@ -275,6 +275,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "review-rpc"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "review-core",
+ "review-model",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "review-store-fs"
 version = "0.1.0"
 dependencies = [
