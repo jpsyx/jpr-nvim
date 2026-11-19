@@ -4,6 +4,7 @@
 
 pub mod ports;
 mod presenter;
+mod session;
 
 #[cfg(any(test, feature = "fakes"))]
 pub mod contract;
@@ -11,3 +12,4 @@ pub mod contract;
 pub mod fakes;
 
 pub use presenter::session_view;
+pub use session::ReviewSession;
