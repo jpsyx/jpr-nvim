@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, bail};
 
 /// How to create a pull request's worktree.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,7 +71,7 @@ pub fn main_repo_root(dir: &Path) -> Result<PathBuf> {
 /// Checks pull request `number` out into a worktree and returns its path.
 ///
 /// An existing default worktree is reused only when it is on the pull
-/// request's branch; a stale one is removed and checked out again.
+/// request's branch; anything else at that path is an error, never removed.
 pub fn checkout_pr(dir: &Path, number: u64, command: &WorktreeCommand) -> Result<PathBuf> {
     match command {
         WorktreeCommand::Custom(template) => checkout_custom(dir, &render_custom(template, number)),
@@ -101,12 +101,15 @@ fn checkout_custom(dir: &Path, command: &str) -> Result<PathBuf> {
 
 fn checkout_default(dir: &Path, number: u64) -> Result<PathBuf> {
     let main = main_repo_root(dir)?;
-    if let Some(path) = reusable_worktree(&main, number)? {
-        return Ok(path);
-    }
-    let path = default_worktree_path(&main, number);
+    reusable_worktree(&main, number)?.map_or_else(|| create_pr_worktree(&main, number), Ok)
+}
+
+/// Creates the default worktree for pull request `number`, which must not
+/// exist yet, and checks the pull request out in it.
+fn create_pr_worktree(main: &Path, number: u64) -> Result<PathBuf> {
+    let path = default_worktree_path(main, number);
     let path_text = path.to_string_lossy().into_owned();
-    run("git", &["worktree", "add", "--detach", &path_text], &main)
+    run("git", &["worktree", "add", "--detach", &path_text], main)
         .context("creating the worktree")?;
     let branch = pr_branch(number);
     if let Err(error) = run(
@@ -115,7 +118,8 @@ fn checkout_default(dir: &Path, number: u64) -> Result<PathBuf> {
         &path,
     ) {
         // Remove the empty worktree we just made, so a retry starts clean.
-        let context = match remove_worktree(&main, &path, true) {
+        // Forcing is safe only because this call created it moments ago.
+        let context = match force_remove_worktree(main, &path) {
             Ok(()) => format!("checking out pull request #{number}"),
             Err(cleanup) => format!(
                 "checking out pull request #{number} (removing the partial worktree also failed: {cleanup:#})"
@@ -132,12 +136,11 @@ fn pr_branch(number: u64) -> String {
 }
 
 /// The default worktree for pull request `number`, if it already exists and
-/// has the pull request's branch checked out.
+/// has the pull request's branch checked out, or `None` if nothing is there.
 ///
 /// Anything else at that path, such as a worktree left detached by an
-/// interrupted checkout, is removed so the checkout can start over, but only
-/// when nothing would be lost: a clean git worktree whose HEAD commit a branch
-/// or tag still holds. Anything else there is an error, never deleted.
+/// interrupted checkout, is an error and is never removed: it may hold work
+/// that git cannot see, such as ignored files, so only a person can decide.
 fn reusable_worktree(main: &Path, number: u64) -> Result<Option<PathBuf>> {
     let path = default_worktree_path(main, number);
     if !path.exists() {
@@ -146,32 +149,12 @@ fn reusable_worktree(main: &Path, number: u64) -> Result<Option<PathBuf>> {
     if is_pr_worktree(main, &path, number) {
         return Ok(Some(path));
     }
-    let removal = if is_head_unreferenced(&path) {
-        Err(anyhow!("its HEAD commit is on no branch or tag"))
-    } else {
-        // Without --force, git refuses a worktree with modified or untracked files.
-        remove_worktree(main, &path, false)
-    };
-    removal.with_context(|| {
-        format!(
-            "not removing the stale worktree at {}, which is not on branch {}: \
-             inspect it, remove it yourself, and try again",
-            path.display(),
-            pr_branch(number)
-        )
-    })?;
-    Ok(None)
-}
-
-/// Whether the commit checked out at `path` is reachable from no ref, so
-/// removing the worktree (and with it, its HEAD reflog) would orphan it.
-fn is_head_unreferenced(path: &Path) -> bool {
-    run(
-        "git",
-        &["for-each-ref", "--contains", "HEAD", "--count=1"],
-        path,
+    bail!(
+        "{} already exists but is not a worktree on branch {}: \
+         inspect it, remove it yourself, and try again",
+        path.display(),
+        pr_branch(number)
     )
-    .is_ok_and(|stdout| stdout.trim().is_empty())
 }
 
 /// Whether `path` is the top of a worktree of `main` with pull request
@@ -208,16 +191,10 @@ fn is_same_path(left: &Path, right: &Path) -> bool {
     )
 }
 
-/// Removes the worktree at `path`. Forced removal discards any changes in it;
-/// otherwise git refuses a worktree with modified or untracked files.
-fn remove_worktree(main: &Path, path: &Path, is_forced: bool) -> Result<()> {
+/// Removes the worktree at `path`, discarding everything in it.
+fn force_remove_worktree(main: &Path, path: &Path) -> Result<()> {
     let path_text = path.to_string_lossy().into_owned();
-    let mut args = vec!["worktree", "remove"];
-    if is_forced {
-        args.push("--force");
-    }
-    args.push(&path_text);
-    run("git", &args, main)
+    run("git", &["worktree", "remove", "--force", &path_text], main)
         .with_context(|| format!("removing the worktree at {}", path.display()))?;
     Ok(())
 }
@@ -399,7 +376,7 @@ mod tests {
     }
 
     #[test]
-    fn a_detached_leftover_worktree_is_removed_instead_of_reused() {
+    fn a_clean_detached_leftover_worktree_is_an_error_and_is_kept() {
         let dir = repo();
         let root = dir.path().join("widgets");
         let leftover = dir.path().join("widgets-worktrees").join("pr-5");
@@ -413,13 +390,11 @@ mod tests {
                 leftover.to_str().unwrap(),
             ],
         );
-        assert_eq!(reusable_worktree(&root, 5).unwrap(), None);
-        assert!(!leftover.exists());
-        assert!(!is_listed_worktree(&root, &leftover));
+        assert_kept_with_guidance(&root, &leftover);
     }
 
     #[test]
-    fn a_worktree_on_another_branch_is_removed_instead_of_reused() {
+    fn a_clean_worktree_on_another_branch_is_an_error_and_is_kept() {
         let dir = repo();
         let root = dir.path().join("widgets");
         let leftover = dir.path().join("widgets-worktrees").join("pr-5");
@@ -434,8 +409,33 @@ mod tests {
                 leftover.to_str().unwrap(),
             ],
         );
-        assert_eq!(reusable_worktree(&root, 5).unwrap(), None);
-        assert!(!leftover.exists());
+        assert_kept_with_guidance(&root, &leftover);
+    }
+
+    #[test]
+    fn a_worktree_holding_only_an_ignored_file_is_an_error_and_is_kept() {
+        let dir = repo();
+        let root = dir.path().join("widgets");
+        fs::write(root.join(".gitignore"), ".env\n").unwrap();
+        git(&root, &["add", ".gitignore"]);
+        git(&root, &["commit", "-q", "-m", "ignore .env"]);
+        let leftover = dir.path().join("widgets-worktrees").join("pr-5");
+        git(
+            &root,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "--detach",
+                leftover.to_str().unwrap(),
+            ],
+        );
+        fs::write(leftover.join(".env"), "SECRET=1\n").unwrap();
+        assert_kept_with_guidance(&root, &leftover);
+        assert_eq!(
+            fs::read_to_string(leftover.join(".env")).unwrap(),
+            "SECRET=1\n"
+        );
     }
 
     #[test]
@@ -447,13 +447,13 @@ mod tests {
         fs::write(stray.join("notes.txt"), "mine\n").unwrap();
         let error = checkout_pr(&root, 5, &WorktreeCommand::Default).unwrap_err();
         let message = format!("{error:#}");
-        assert!(message.contains("removing the stale worktree"), "{message}");
+        assert!(message.contains("inspect it"), "{message}");
         assert!(message.contains("pr-5"), "{message}");
         assert!(stray.join("notes.txt").exists());
     }
 
-    /// Asserts that `reusable_worktree` refused to remove `kept`, and said
-    /// which path to look at.
+    /// Asserts that `reusable_worktree` failed instead of reusing or removing
+    /// `kept`, and said which path to look at.
     fn assert_kept_with_guidance(root: &Path, kept: &Path) {
         let error = reusable_worktree(root, 5).unwrap_err();
         let message = format!("{error:#}");
