@@ -1,0 +1,20 @@
+[package]
+name = "review-core"
+description = "The frontend-neutral review engine: ports, the ReviewSession facade, and its rules."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[features]
+# In-memory fakes of every port and the shared port contract tests, for other
+# crates' tests. Never enabled by a binary.
+fakes = []
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+review-model.workspace = true
+
+[lints]
+workspace = true

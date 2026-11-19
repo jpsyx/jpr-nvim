@@ -185,6 +185,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "review-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "review-model",
+ "serde",
+]
+
+[[package]]
 name = "review-model"
 version = "0.1.0"
 dependencies = [
