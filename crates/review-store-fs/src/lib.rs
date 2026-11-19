@@ -1,42 +1,26 @@
 //! The file-backed review store: one directory per pull request and one JSON
-//! file per concern, each written atomically (temporary file, then rename) so
-//! a crash leaves either the old file or the new one, never half of either.
+//! file per concern. Each file is a versioned envelope (see the `format` module),
+//! written atomically: a temporary file unique to the write, then a rename and
+//! a directory flush. A crash leaves each file either old or new, never half
+//! of either, and concurrent writers never interleave inside one file.
+
+mod atomic;
+mod format;
+mod paths;
 
 use std::fs;
-use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use review_core::ports::{ReviewStore, SessionRecord, StoreSnapshot};
-use review_model::ChangedFile;
-use serde::Serialize;
-use serde::de::DeserializeOwned;
+use review_core::ports::{ReviewStore, StoreSnapshot};
+
+pub use format::{SESSION_VERSION, VIEWED_VERSION};
+pub use paths::state_dir;
 
 /// The daemon and what it last saw.
 pub const SESSION_FILE: &str = "session.json";
 /// The changed files and their viewed state.
 pub const VIEWED_FILE: &str = "viewed.json";
-
-/// Where a pull request's review state lives:
-/// `<state home>/<app>/<owner>/<repo>/pr-<number>`. The state home is
-/// `$XDG_STATE_HOME` when it is absolute (the XDG rule), else `~/.local/state`.
-#[must_use]
-pub fn state_dir(
-    xdg_state_home: Option<&Path>,
-    home: &Path,
-    app: &str,
-    owner: &str,
-    repo: &str,
-    number: u64,
-) -> PathBuf {
-    let base = xdg_state_home
-        .filter(|path| path.is_absolute())
-        .map_or_else(|| home.join(".local").join("state"), Path::to_path_buf);
-    base.join(app)
-        .join(owner)
-        .join(repo)
-        .join(format!("pr-{number}"))
-}
 
 /// A [`ReviewStore`] in one directory.
 #[derive(Debug, Clone)]
@@ -60,8 +44,8 @@ impl FsStore {
 
 impl ReviewStore for FsStore {
     fn load(&self) -> Result<StoreSnapshot> {
-        let session: Option<SessionRecord> = read_json(&self.dir.join(SESSION_FILE))?;
-        let files: Option<Vec<ChangedFile>> = read_json(&self.dir.join(VIEWED_FILE))?;
+        let session = load_file(&self.dir.join(SESSION_FILE), format::decode_session)?;
+        let files = load_file(&self.dir.join(VIEWED_FILE), format::decode_files)?;
         Ok(StoreSnapshot {
             session: session.unwrap_or_default(),
             files: files.unwrap_or_default(),
@@ -69,46 +53,71 @@ impl ReviewStore for FsStore {
     }
 
     fn save(&self, snapshot: &StoreSnapshot) -> Result<()> {
+        // Check both files before writing either, so a refusal changes nothing.
+        refuse_newer_file(&self.dir.join(SESSION_FILE), SESSION_VERSION)?;
+        refuse_newer_file(&self.dir.join(VIEWED_FILE), VIEWED_VERSION)?;
         fs::create_dir_all(&self.dir)
             .with_context(|| format!("creating {}", self.dir.display()))?;
-        write_json_atomic(&self.dir.join(SESSION_FILE), &snapshot.session)?;
-        write_json_atomic(&self.dir.join(VIEWED_FILE), &snapshot.files)
+        let session = format::encode_session(&snapshot.session)?;
+        atomic::write_atomic(&self.dir, SESSION_FILE, &session)?;
+        let files = format::encode_files(&snapshot.files)?;
+        atomic::write_atomic(&self.dir, VIEWED_FILE, &files)
     }
 }
 
-/// Reads `path` as JSON; a missing file is `None`, a corrupt one an error.
-fn read_json<T: DeserializeOwned>(path: &Path) -> Result<Option<T>> {
-    match fs::read(path) {
-        Ok(bytes) => serde_json::from_slice(&bytes)
-            .map(Some)
-            .with_context(|| format!("reading {} (fix or delete the file)", path.display())),
-        Err(error) if error.kind() == ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error).with_context(|| format!("reading {}", path.display())),
-    }
+/// Decodes `path` with `decode`; a missing file is `None`, a corrupt or
+/// newer one an error naming it.
+fn load_file<T>(path: &Path, decode: fn(&[u8]) -> Result<T>) -> Result<Option<T>> {
+    let Some(bytes) = atomic::read_bytes(path)? else {
+        return Ok(None);
+    };
+    decode(&bytes)
+        .map(Some)
+        .with_context(|| format!("reading {}", path.display()))
 }
 
-/// Writes `value` as pretty JSON to a temporary file beside `path`, then
-/// renames it over `path`.
-fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<()> {
-    let temporary = path.with_extension("json.tmp");
-    let mut bytes = serde_json::to_vec_pretty(value).context("encoding review state")?;
-    bytes.push(b'\n');
-    let mut file =
-        fs::File::create(&temporary).with_context(|| format!("writing {}", temporary.display()))?;
-    file.write_all(&bytes)
-        .with_context(|| format!("writing {}", temporary.display()))?;
-    file.sync_all()
-        .with_context(|| format!("flushing {}", temporary.display()))?;
-    fs::rename(&temporary, path).with_context(|| format!("replacing {}", path.display()))
+/// Fails when a newer build wrote `path`, so saving never drops what it added.
+/// A missing file, or one without a readable version, is left for the save to replace.
+fn refuse_newer_file(path: &Path, known: u32) -> Result<()> {
+    let Some(bytes) = atomic::read_bytes(path)? else {
+        return Ok(());
+    };
+    let Ok(found) = format::stored_version(&bytes) else {
+        return Ok(());
+    };
+    format::refuse_newer(found, known).with_context(|| format!("saving {}", path.display()))
 }
 
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::thread;
 
     use review_core::contract::check_review_store;
+    use review_core::fakes::changed_file;
+    use review_model::ViewedState;
 
     use super::*;
+
+    fn file_names(dir: &Path) -> Vec<String> {
+        let mut names: Vec<String> = fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        names
+    }
+
+    /// A snapshot whose size varies with `round`, so a torn file cannot parse.
+    fn snapshot_for_round(round: usize) -> StoreSnapshot {
+        let mut snapshot = StoreSnapshot::default();
+        snapshot.session.worktree = Some("w".repeat(round % 13));
+        snapshot.files = (0..round % 7)
+            .map(|index| changed_file(&format!("src/{index}.rs"), ViewedState::Viewed))
+            .collect();
+        snapshot
+    }
 
     #[test]
     fn passes_the_review_store_contract() {
@@ -138,12 +147,7 @@ mod tests {
         FsStore::new(dir.path())
             .save(&StoreSnapshot::default())
             .unwrap();
-        let mut names: Vec<String> = fs::read_dir(dir.path())
-            .unwrap()
-            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
-            .collect();
-        names.sort();
-        assert_eq!(names, ["session.json", "viewed.json"]);
+        assert_eq!(file_names(dir.path()), ["session.json", "viewed.json"]);
     }
 
     #[test]
@@ -157,40 +161,81 @@ mod tests {
     }
 
     #[test]
-    fn state_dir_prefers_an_absolute_xdg_state_home() {
-        assert_eq!(
-            state_dir(
-                Some(Path::new("/x/state")),
-                Path::new("/home/u"),
-                "jpr",
-                "octo",
-                "widgets",
-                7
-            ),
-            PathBuf::from("/x/state/jpr/octo/widgets/pr-7")
+    fn loading_a_newer_file_names_it_and_both_versions() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(
+            dir.path().join(VIEWED_FILE),
+            r#"{"version": 9, "files": []}"#,
+        )
+        .unwrap();
+        let message = format!("{:#}", FsStore::new(dir.path()).load().unwrap_err());
+        assert!(message.contains("viewed.json"), "{message}");
+        assert!(
+            message.contains("version 9") && message.contains("version 1"),
+            "{message}"
         );
     }
 
     #[test]
-    fn state_dir_ignores_a_relative_xdg_state_home() {
+    fn save_never_overwrites_a_newer_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let newer = r#"{"version": 9, "agentSession": "kept"}"#;
+        fs::write(dir.path().join(SESSION_FILE), newer).unwrap();
+        let error = FsStore::new(dir.path())
+            .save(&StoreSnapshot::default())
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("version 9"), "{error:#}");
         assert_eq!(
-            state_dir(
-                Some(Path::new("rel")),
-                Path::new("/home/u"),
-                "jpr",
-                "octo",
-                "widgets",
-                7
-            ),
-            PathBuf::from("/home/u/.local/state/jpr/octo/widgets/pr-7")
+            fs::read_to_string(dir.path().join(SESSION_FILE)).unwrap(),
+            newer
         );
+        assert!(!dir.path().join(VIEWED_FILE).exists());
     }
 
     #[test]
-    fn state_dir_defaults_under_home() {
-        assert_eq!(
-            state_dir(None, Path::new("/home/u"), "jpr", "octo", "widgets", 7),
-            PathBuf::from("/home/u/.local/state/jpr/octo/widgets/pr-7")
+    fn concurrent_saves_never_tear_a_file_or_leave_temporaries() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = FsStore::new(dir.path());
+        store.save(&snapshot_for_round(0)).unwrap();
+        let is_writing_done = AtomicBool::new(false);
+        let (save_errors, load_errors) = thread::scope(|scope| {
+            let save_rounds = |offset: usize| {
+                let store = &store;
+                move || {
+                    (0..100)
+                        .filter_map(|round| store.save(&snapshot_for_round(round + offset)).err())
+                        .map(|error| format!("{error:#}"))
+                        .collect::<Vec<_>>()
+                }
+            };
+            let first_writer = scope.spawn(save_rounds(0));
+            let second_writer = scope.spawn(save_rounds(1));
+            let reader = scope.spawn(|| {
+                let mut errors = Vec::new();
+                while !is_writing_done.load(Ordering::Relaxed) {
+                    if let Err(error) = store.load() {
+                        errors.push(format!("{error:#}"));
+                    }
+                }
+                errors
+            });
+            let mut save_errors = first_writer.join().unwrap();
+            save_errors.extend(second_writer.join().unwrap());
+            is_writing_done.store(true, Ordering::Relaxed);
+            (save_errors, reader.join().unwrap())
+        });
+        assert!(
+            save_errors.is_empty(),
+            "{} failed saves: {:?}",
+            save_errors.len(),
+            save_errors.first()
         );
+        assert!(
+            load_errors.is_empty(),
+            "{} failed loads: {:?}",
+            load_errors.len(),
+            load_errors.first()
+        );
+        assert_eq!(file_names(dir.path()), ["session.json", "viewed.json"]);
     }
 }
