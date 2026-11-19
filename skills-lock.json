@@ -1,0 +1,215 @@
+{
+  "version": 2,
+  "skills": {
+    "avandar-code-review": {
+      "source": "AvandarLabs/avandar",
+      "commit": "6a08fc815ba62ceae41ef6864dc695bbd3960d94",
+      "sourceType": "github",
+      "skillPath": "agent-skills/public-skills/skills/avandar-code-review/SKILL.md",
+      "computedHash": "145e17ba92686b9b9f2044ad7e0d4d14b8fb44085bbbb01033e649b491e6a861"
+    },
+    "brainstorming": {
+      "source": "obra/superpowers",
+      "commit": "22f0b463e7a5e579904dd6211a520321035526f7",
+      "sourceType": "github",
+      "skillPath": "skills/brainstorming/SKILL.md",
+      "computedHash": "a7424777b7f81e3eb9b4556d29fe233553736d8255780d3e1feea190fef61fef"
+    },
+    "coding-guidelines": {
+      "source": "actionbook/rust-skills",
+      "commit": "5c40d3ad785193231b7d0dbfb8e1eb447e5edd94",
+      "sourceType": "github",
+      "skillPath": "skills/coding-guidelines/SKILL.md",
+      "computedHash": "ba0a5f9bf6b89da76fee85bcc92d6dbd34c5e92098d0d8b6fd732ee198b09068"
+    },
+    "diff-review": {
+      "source": "AvandarLabs/avandar",
+      "commit": "6a08fc815ba62ceae41ef6864dc695bbd3960d94",
+      "sourceType": "github",
+      "skillPath": "agent-skills/public-skills/skills/diff-review/SKILL.md",
+      "computedHash": "f0f4e5258379f93d2c120c94455b0302f98f182e0f724730c65b9bc71ebd6c14"
+    },
+    "dispatching-parallel-agents": {
+      "source": "obra/superpowers",
+      "commit": "22f0b463e7a5e579904dd6211a520321035526f7",
+      "sourceType": "github",
+      "skillPath": "skills/dispatching-parallel-agents/SKILL.md",
+      "computedHash": "d799e464fdfb0edc80b3b7ad7cce03e64ee07fc5db231c988688a81438503659"
+    },
+    "documentation": {
+      "source": "mcollina/skills",
+      "commit": "c75d70dbfbe991d8cec42aeda0b64ff14fbb9ac7",
+      "sourceType": "github",
+      "skillPath": "skills/documentation/SKILL.md",
+      "computedHash": "094a77781b4f2fbd8c8ba82c7d67b80820657b5600a00c7dd5c90b462b226b3d"
+    },
+    "domain-cli": {
+      "source": "actionbook/rust-skills",
+      "commit": "5c40d3ad785193231b7d0dbfb8e1eb447e5edd94",
+      "sourceType": "github",
+      "skillPath": "skills/domain-cli/SKILL.md",
+      "computedHash": "4fab5f15aca943d231bc76827e5525edb48bddca3a1583737e22bccbe9ad4613"
+    },
+    "executing-plans": {
+      "source": "obra/superpowers",
+      "commit": "22f0b463e7a5e579904dd6211a520321035526f7",
+      "sourceType": "github",
+      "skillPath": "skills/executing-plans/SKILL.md",
+      "computedHash": "58b364f6e3f64602c7cfd0b34ceaad9de95d41fe7e4b46b274843ba19fc01ccc"
+    },
+    "finishing-a-development-branch": {
+      "source": "obra/superpowers",
+      "commit": "22f0b463e7a5e579904dd6211a520321035526f7",
+      "sourceType": "github",
+      "skillPath": "skills/finishing-a-development-branch/SKILL.md",
+      "computedHash": "7e24d821d45b8f10773edd9f1a4be2fac90eedae4f8fc8e70e34e27e44d3f3c0"
+    },
+    "receiving-code-review": {
+      "source": "obra/superpowers",
+      "commit": "22f0b463e7a5e579904dd6211a520321035526f7",
+      "sourceType": "github",
+      "skillPath": "skills/receiving-code-review/SKILL.md",
+      "computedHash": "528d336858d6f7d22cfcb887a249409ce682cb7d37a939cb15a82f2576a35876"
+    },
+    "repo-product-manager": {
+      "source": "jpsyx/agent-skills",
+      "commit": "eb5533b9b2a73343c669652ba6d2639446c4aac3",
+      "sourceType": "github",
+      "skillPath": "skills/repo-product-manager/SKILL.md",
+      "computedHash": "7519adaddbbaac21506a528898d9abc46fedf02b092c5d7700f8c6106d834772"
+    },
+    "requesting-code-review": {
+      "source": "obra/superpowers",
+      "commit": "22f0b463e7a5e579904dd6211a520321035526f7",
+      "sourceType": "github",
+      "skillPath": "skills/requesting-code-review/SKILL.md",
+      "computedHash": "32bcc25e8c3315d0150f646ee0067c9d4bfbc7719c34012db9c202e17cce8a14"
+    },
+    "rust-call-graph": {
+      "source": "actionbook/rust-skills",
+      "commit": "5c40d3ad785193231b7d0dbfb8e1eb447e5edd94",
+      "sourceType": "github",
+      "skillPath": "skills/rust-call-graph/SKILL.md",
+      "computedHash": "2b03ff07f54181ad56bbfd3539bc31029e22ed5e8bfd93f7804fec4eba119622"
+    },
+    "rust-code-navigator": {
+      "source": "actionbook/rust-skills",
+      "commit": "5c40d3ad785193231b7d0dbfb8e1eb447e5edd94",
+      "sourceType": "github",
+      "skillPath": "skills/rust-code-navigator/SKILL.md",
+      "computedHash": "33542fcf1b663ed01839d8333d0683cbe3518f896ab73203e78383e4f5d4c4e7"
+    },
+    "rust-deps-visualizer": {
+      "source": "actionbook/rust-skills",
+      "commit": "5c40d3ad785193231b7d0dbfb8e1eb447e5edd94",
+      "sourceType": "github",
+      "skillPath": "skills/rust-deps-visualizer/SKILL.md",
+      "computedHash": "779778c9133c1ea0d4c2ee582512baf045073ced8a5631b78d4f413e48691e49"
+    },
+    "rust-learner": {
+      "source": "actionbook/rust-skills",
+      "commit": "5c40d3ad785193231b7d0dbfb8e1eb447e5edd94",
+      "sourceType": "github",
+      "skillPath": "skills/rust-learner/SKILL.md",
+      "computedHash": "ee848925d5faa52857e7e9ca3429d5937cf4814285940b0802cea27758ef1144"
+    },
+    "rust-refactor-helper": {
+      "source": "actionbook/rust-skills",
+      "commit": "5c40d3ad785193231b7d0dbfb8e1eb447e5edd94",
+      "sourceType": "github",
+      "skillPath": "skills/rust-refactor-helper/SKILL.md",
+      "computedHash": "d8617e08e5be6363b5164d4dc22509372ca0cb0716a164af5b14bf730dba32e8"
+    },
+    "rust-router": {
+      "source": "actionbook/rust-skills",
+      "commit": "5c40d3ad785193231b7d0dbfb8e1eb447e5edd94",
+      "sourceType": "github",
+      "skillPath": "skills/rust-router/SKILL.md",
+      "computedHash": "07a2d91775024525160057f9065a8fc0ec26453f0f3be06f38963cc374c9d8d4"
+    },
+    "rust-skills": {
+      "source": "leonardomso/rust-skills",
+      "commit": "fd2a861ab0406a4ac536a55274d14ea6fd1ca9c9",
+      "sourceType": "github",
+      "skillPath": "SKILL.md",
+      "computedHash": "94e92a36737ebd97af3c79710bf413609fd161cbdf02ce3fac5d9d5b5966697b"
+    },
+    "rust-symbol-analyzer": {
+      "source": "actionbook/rust-skills",
+      "commit": "5c40d3ad785193231b7d0dbfb8e1eb447e5edd94",
+      "sourceType": "github",
+      "skillPath": "skills/rust-symbol-analyzer/SKILL.md",
+      "computedHash": "7d14f09bb5a8d0e6465e99472f4e344d1fd0c326b50153a27ec82cacd2c80fd3"
+    },
+    "rust-trait-explorer": {
+      "source": "actionbook/rust-skills",
+      "commit": "5c40d3ad785193231b7d0dbfb8e1eb447e5edd94",
+      "sourceType": "github",
+      "skillPath": "skills/rust-trait-explorer/SKILL.md",
+      "computedHash": "3a5f06e1aa2bfd9b21469996720fa202ca7ed5e675704be21c7a234630bb143e"
+    },
+    "subagent-driven-development": {
+      "source": "obra/superpowers",
+      "commit": "22f0b463e7a5e579904dd6211a520321035526f7",
+      "sourceType": "github",
+      "skillPath": "skills/subagent-driven-development/SKILL.md",
+      "computedHash": "da0ad5e635b6ff70c2b6dbf25e51ae6ca1cad6beebfc61a791195675468c492e"
+    },
+    "systematic-debugging": {
+      "source": "obra/superpowers",
+      "commit": "22f0b463e7a5e579904dd6211a520321035526f7",
+      "sourceType": "github",
+      "skillPath": "skills/systematic-debugging/SKILL.md",
+      "computedHash": "79ff0583175346e39431b0dc713b223edd1bd7a7ea2b6c8b78b2fb9a3fed6782"
+    },
+    "test-driven-development": {
+      "source": "obra/superpowers",
+      "commit": "22f0b463e7a5e579904dd6211a520321035526f7",
+      "sourceType": "github",
+      "skillPath": "skills/test-driven-development/SKILL.md",
+      "computedHash": "2782702b2cf69ace085ed30d067b6f8bfd2d777ad51770fc5bdae9cb5c1b5c04"
+    },
+    "unsafe-checker": {
+      "source": "actionbook/rust-skills",
+      "commit": "5c40d3ad785193231b7d0dbfb8e1eb447e5edd94",
+      "sourceType": "github",
+      "skillPath": "skills/unsafe-checker/SKILL.md",
+      "computedHash": "7a474d999350c2eb6ff0420502e4b78e0ac26b87b5328b4b1ff0824edd89cfcf"
+    },
+    "using-git-worktrees": {
+      "source": "obra/superpowers",
+      "commit": "22f0b463e7a5e579904dd6211a520321035526f7",
+      "sourceType": "github",
+      "skillPath": "skills/using-git-worktrees/SKILL.md",
+      "computedHash": "b69324cb5e5ba5b846fc2ae2811616008dc6f19858245100e472713190d4c9e4"
+    },
+    "using-superpowers": {
+      "source": "obra/superpowers",
+      "commit": "22f0b463e7a5e579904dd6211a520321035526f7",
+      "sourceType": "github",
+      "skillPath": "skills/using-superpowers/SKILL.md",
+      "computedHash": "6a9104fac7e16c3cec2bc118943aefd331cac35b4cfabd427cea4dc16337c6a5"
+    },
+    "verification-before-completion": {
+      "source": "obra/superpowers",
+      "commit": "22f0b463e7a5e579904dd6211a520321035526f7",
+      "sourceType": "github",
+      "skillPath": "skills/verification-before-completion/SKILL.md",
+      "computedHash": "09b0e3a4689c1c38a3b8fc6ef57a1d4165aa33c0013d546dbde9dd348941a319"
+    },
+    "writing-plans": {
+      "source": "obra/superpowers",
+      "commit": "22f0b463e7a5e579904dd6211a520321035526f7",
+      "sourceType": "github",
+      "skillPath": "skills/writing-plans/SKILL.md",
+      "computedHash": "ef082ddb5354d736059397133b3682e8a0c85c57906affe47c9da354cbb7c91e"
+    },
+    "writing-skills": {
+      "source": "obra/superpowers",
+      "commit": "22f0b463e7a5e579904dd6211a520321035526f7",
+      "sourceType": "github",
+      "skillPath": "skills/writing-skills/SKILL.md",
+      "computedHash": "50d87a4c2c6a9d60156ccfdbe844e0a11678968157e494a8a8c02377c273483a"
+    }
+  }
+}
