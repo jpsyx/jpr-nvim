@@ -161,9 +161,8 @@ The rules for this project's language and frameworks live in `docs/rules/`:
 
 ## Agent skills
 
-- This project's agent skills are installed by two tools and neither should be
-  driven by hand: `npx skills` for everything in `skills-lock.json`, and
-  `npx impeccable` for the `impeccable` skill, which ships its own installer.
+- This project's agent skills are installed by `npx skills` from
+  `skills-lock.json`; never install or copy skills by hand.
 - **Never create or edit anything under `.agents/`, `.claude/skills/`,
   `.cursor/skills/`, or `.opencode/`.** Those directories are generated, and
   they are gitignored: `skills-lock.json` is the only skills file in git.
@@ -171,10 +170,8 @@ The rules for this project's language and frameworks live in `docs/rules/`:
   `npx skills list` lists what is installed,
   `just skills-install` is the same step run on demand, and
   `just skills-update` upgrades everything to the latest.
-- `just skills-update` runs `scripts/skills/update-skills.sh`, which
-  updates both managers: `npx skills` for the lock, and each self-installing
-  skill (the list at the top of the script) through its own CLI. Update skills
-  there, never by calling one manager by hand.
+- `just skills-update` runs `scripts/skills/update-skills.sh`, which updates
+  everything in the lock.
 - To add or remove a skill, use `npx skills add` / `npx skills remove` and
   commit the resulting `skills-lock.json` change in the same commit.
 - The wrapper lives in `scripts/skills`. See [`docs/skills.md`](docs/skills.md)
