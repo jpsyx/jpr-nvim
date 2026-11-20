@@ -13,7 +13,7 @@ the Neovim plugin is a thin Lua frontend over its JSON-RPC protocol. See
 
 - A Rust toolchain ([rustup.rs](https://rustup.rs)) to build the engine.
 - The GitHub CLI (`gh`), logged in.
-- git and Neovim 0.11 or newer.
+- git and Neovim 0.11 or later.
 
 ## Install
 
