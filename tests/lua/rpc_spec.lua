@@ -64,4 +64,7 @@ client:request("snapshot", nil, function(err)
 end)
 assert(late and late.message:find("not running", 1, true), "requests after exit fail at once")
 
+local missing, missing_err = rpc.start({ root .. "/tests/lua/fixtures/missing-engine" }, {})
+assert(missing == nil and missing_err:find("could not start", 1, true), "a binary that is not executable is an error, not a raise")
+
 print("rpc_spec: ok")

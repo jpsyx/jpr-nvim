@@ -67,35 +67,43 @@ function M.open(number)
     end))
 end
 
---- Opens a tab for a checked-out PR and starts its engine.
---- info: { worktree, repo = "owner/name", number }.
-function M.start(info)
-    jpr().define_highlights()
-    vim.cmd("tabnew")
-    vim.cmd.tcd(info.worktree)
-    local tab = vim.api.nvim_get_current_tabpage()
-    local session = { number = info.number, repo = info.repo, worktree = info.worktree, tab = tab, view = {} }
-    M.by_tab[tab] = session
-    panel.open(session)
-
-    local client, err = rpc.start({ jpr().config.binary, "serve", "--pr", tostring(info.number), "--repo", info.repo }, {
-        cwd = info.worktree,
-        on_notification = function(method, params)
-            M.on_notification(session, method, params)
-        end,
-        on_exit = function(code, stderr)
-            M.on_exit(session, code, stderr)
-        end,
-    })
-    if not client then
-        return jpr().error(err)
+--- Drops `session` from its tab, so `:Jpr open` starts a fresh engine.
+local function unregister(session)
+    if M.by_tab[session.tab] == session then
+        M.by_tab[session.tab] = nil
     end
-    session.client = client
+end
+
+--- Shuts down `session`'s engine on purpose, so its exit is not reported.
+local function stop_engine(session)
+    session.closing = true
+    if session.client then
+        session.client:request("shutdown", nil, function() end)
+        session.client:stop()
+    end
+end
+
+--- Stops the engines of sessions whose tab was closed, e.g. by `:tabclose`.
+function M.forget_closed_tabs()
+    for tab, session in pairs(M.by_tab) do
+        if not vim.api.nvim_tabpage_is_valid(tab) then
+            stop_engine(session)
+            M.by_tab[tab] = nil
+        end
+    end
+end
+
+--- Checks the engine speaks our protocol, then loads and syncs the view. A
+--- failed handshake stops the engine and forgets the session.
+local function handshake(session, client)
     client:request("initialize", { protocolVersion = rpc.PROTOCOL_VERSION, client = "jpr.nvim" }, function(init_err, result)
         if init_err then
+            unregister(session)
+            client:stop()
             return jpr().error("could not start the review engine: " .. init_err.message)
         end
         if result.protocolVersion ~= rpc.PROTOCOL_VERSION then
+            unregister(session)
             client:stop()
             return jpr().error(
                 ("protocol mismatch: the plugin speaks %d and %s speaks %d; install both from the same checkout"):format(
@@ -114,6 +122,38 @@ function M.start(info)
     end)
 end
 
+--- Opens a tab for a checked-out PR and starts its engine.
+--- info: { worktree, repo = "owner/name", number }.
+function M.start(info)
+    jpr().define_highlights()
+    vim.api.nvim_create_autocmd("TabClosed", {
+        group = vim.api.nvim_create_augroup("jpr-session", { clear = true }),
+        callback = M.forget_closed_tabs,
+    })
+    vim.cmd("tabnew")
+    vim.cmd.tcd(info.worktree)
+    local tab = vim.api.nvim_get_current_tabpage()
+    local session = { number = info.number, repo = info.repo, worktree = info.worktree, tab = tab, view = {} }
+    M.by_tab[tab] = session
+    panel.open(session)
+
+    local client, err = rpc.start({ jpr().config.binary, "serve", "--pr", tostring(info.number), "--repo", info.repo }, {
+        cwd = info.worktree,
+        on_notification = function(method, params)
+            M.on_notification(session, method, params)
+        end,
+        on_exit = function(code, stderr)
+            M.on_exit(session, code, stderr)
+        end,
+    })
+    if not client then
+        unregister(session)
+        return jpr().error(err)
+    end
+    session.client = client
+    handshake(session, client)
+end
+
 function M.show(session, view)
     session.view = view
     panel.render(session, view)
@@ -121,7 +161,9 @@ end
 
 function M.sync(session)
     if not session.client then
-        return jpr().error("the review engine is not running; reopen the pull request")
+        return jpr().error(
+            ("the review engine for PR #%d is not running; run :Jpr open %d"):format(session.number, session.number)
+        )
     end
     session.client:request("sync", nil, function(err, view)
         if err then
@@ -144,6 +186,7 @@ end
 
 function M.on_exit(session, code, stderr)
     session.client = nil
+    unregister(session)
     if session.closing then
         return
     end
@@ -164,11 +207,7 @@ function M.close_current()
     if not session then
         return jpr().error("no pull request is open in this tab")
     end
-    session.closing = true
-    if session.client then
-        session.client:request("shutdown", nil, function() end)
-        session.client:stop()
-    end
+    stop_engine(session)
     M.by_tab[session.tab] = nil
     if vim.api.nvim_tabpage_is_valid(session.tab) and #vim.api.nvim_list_tabpages() > 1 then
         vim.api.nvim_set_current_tabpage(session.tab)

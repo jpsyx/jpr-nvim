@@ -32,7 +32,8 @@ Client.__index = Client
 --- opts: cwd, on_notification(method, params), on_exit(code, stderr).
 function M.start(cmd, opts)
     local self = setmetatable({ next_id = 1, callbacks = {}, pending = "", stderr = {}, opts = opts or {} }, Client)
-    self.job = vim.fn.jobstart(cmd, {
+    -- jobstart raises, rather than returning -1, when cmd[1] is not executable.
+    local ok, job = pcall(vim.fn.jobstart, cmd, {
         cwd = self.opts.cwd,
         on_stdout = function(_, data)
             self:_on_stdout(data)
@@ -48,9 +49,10 @@ function M.start(cmd, opts)
             self:_on_exit(code)
         end,
     })
-    if self.job <= 0 then
+    if not ok or job <= 0 then
         return nil, "could not start " .. cmd[1]
     end
+    self.job = job
     return self
 end
 
