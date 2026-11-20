@@ -29,6 +29,14 @@ function M.open(session)
     M.render(session, session.view or {})
 end
 
+--- Wipes the panel buffer, which also closes its window.
+function M.close(session)
+    local panel = session.panel
+    if panel and vim.api.nvim_buf_is_valid(panel.buf) then
+        vim.api.nvim_buf_delete(panel.buf, { force = true })
+    end
+end
+
 --- Redraws the panel from `view`.
 function M.render(session, view)
     local panel = session.panel

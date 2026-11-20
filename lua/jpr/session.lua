@@ -67,10 +67,12 @@ function M.open(number)
     end))
 end
 
---- Drops `session` from its tab, so `:Jpr open` starts a fresh engine.
+--- Drops `session` from its tab and wipes its panel, so `:Jpr open` starts a
+--- fresh engine and can name a new panel after the same pull request.
 local function unregister(session)
     if M.by_tab[session.tab] == session then
         M.by_tab[session.tab] = nil
+        panel.close(session)
     end
 end
 
@@ -99,12 +101,16 @@ local function handshake(session, client)
     client:request("initialize", { protocolVersion = rpc.PROTOCOL_VERSION, client = "jpr.nvim" }, function(init_err, result)
         if init_err then
             unregister(session)
-            client:stop()
+            -- An engine that died is reported by on_exit, with its stderr.
+            if client.exited then
+                return
+            end
+            stop_engine(session)
             return jpr().error("could not start the review engine: " .. init_err.message)
         end
         if result.protocolVersion ~= rpc.PROTOCOL_VERSION then
             unregister(session)
-            client:stop()
+            stop_engine(session)
             return jpr().error(
                 ("protocol mismatch: the plugin speaks %d and %s speaks %d; install both from the same checkout"):format(
                     rpc.PROTOCOL_VERSION,
@@ -134,8 +140,12 @@ function M.start(info)
     vim.cmd.tcd(info.worktree)
     local tab = vim.api.nvim_get_current_tabpage()
     local session = { number = info.number, repo = info.repo, worktree = info.worktree, tab = tab, view = {} }
-    M.by_tab[tab] = session
-    panel.open(session)
+    -- Registered only once the panel and the engine are up, so a failure here
+    -- never leaves a half-built session for `:Jpr open` to refocus.
+    local opened, open_err = pcall(panel.open, session)
+    if not opened then
+        return jpr().error("could not open the panel: " .. open_err)
+    end
 
     local client, err = rpc.start({ jpr().config.binary, "serve", "--pr", tostring(info.number), "--repo", info.repo }, {
         cwd = info.worktree,
@@ -147,10 +157,11 @@ function M.start(info)
         end,
     })
     if not client then
-        unregister(session)
+        panel.close(session)
         return jpr().error(err)
     end
     session.client = client
+    M.by_tab[tab] = session
     handshake(session, client)
 end
 
