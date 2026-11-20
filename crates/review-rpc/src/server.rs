@@ -5,11 +5,12 @@
 use std::io::{BufRead, Write};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::thread;
+use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 use review_core::ReviewSession;
+use review_model::Event;
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -53,18 +54,52 @@ pub fn handle(
 
 /// Serves requests read from `reader` until it ends or a `shutdown` request
 /// arrives, writing responses and `event` notifications to `writer`.
+///
+/// Every event is written before the response to the request that caused it,
+/// and before the `shutdown` response.
 pub fn serve<R: BufRead, W: Write + Send + 'static>(
     reader: R,
     writer: &Arc<Mutex<W>>,
     session: &Arc<Mutex<ReviewSession>>,
     options: &ServeOptions,
 ) -> Result<()> {
-    forward_events(session, Arc::clone(writer))?;
-    // Dropping `stop`, on any return, ends the poller.
+    let events = Arc::new(Mutex::new(
+        session
+            .lock()
+            .map_err(|_| anyhow!("the review session lock is poisoned"))?
+            .subscribe(),
+    ));
     let (stop, stopped) = mpsc::channel::<()>();
-    if let Some(every) = options.poll_every {
-        spawn_poller(Arc::clone(session), stopped, every);
+    let poller = options.poll_every.map(|every| {
+        let shared = (Arc::clone(session), Arc::clone(&events), Arc::clone(writer));
+        spawn_poller(shared, stopped, every)
+    });
+    let answered = answer_requests(reader, writer, session, &events, options);
+    // The poller stops before the last drain, so no sync can announce
+    // anything after it, and a closed output ends the poller instead of
+    // blocking this join.
+    drop(stop);
+    if let Some(poller) = poller {
+        // A poller that panicked has nothing left to stop.
+        let _ = poller.join();
     }
+    let shutdown = answered?;
+    write_events(&events, writer)?;
+    if let Some(reply) = shutdown {
+        write_line(writer, &reply)?;
+    }
+    Ok(())
+}
+
+/// Answers requests until `reader` ends or a `shutdown` request arrives,
+/// returning the `shutdown` response unwritten so events can go first.
+fn answer_requests<R: BufRead, W: Write>(
+    reader: R,
+    writer: &Mutex<W>,
+    session: &Mutex<ReviewSession>,
+    events: &Mutex<Receiver<Event>>,
+    options: &ServeOptions,
+) -> Result<Option<Value>> {
     for line in reader.lines() {
         let line = line.context("reading a request")?;
         if line.trim().is_empty() {
@@ -80,17 +115,30 @@ pub fn serve<R: BufRead, W: Write + Send + 'static>(
             }
             Err((id, error)) => (failure(&id, &error), false),
         };
-        write_line(writer, &reply)?;
         if done {
-            break;
+            return Ok(Some(reply));
         }
+        write_events(events, writer)?;
+        write_line(writer, &reply)?;
     }
-    drop(stop);
-    Ok(())
+    Ok(None)
 }
 
-/// Syncs `session` every `every` until `stopped` fires or disconnects.
-fn spawn_poller(session: Arc<Mutex<ReviewSession>>, stopped: Receiver<()>, every: Duration) {
+/// What the poller shares with the server: the session, its events and the
+/// output.
+type Shared<W> = (
+    Arc<Mutex<ReviewSession>>,
+    Arc<Mutex<Receiver<Event>>>,
+    Arc<Mutex<W>>,
+);
+
+/// Syncs every `every` and writes what the sync announced, until `stopped`
+/// fires or disconnects, or the output closes.
+fn spawn_poller<W: Write + Send + 'static>(
+    (session, events, writer): Shared<W>,
+    stopped: Receiver<()>,
+    every: Duration,
+) -> JoinHandle<()> {
     thread::spawn(move || {
         // A message or a disconnect both mean stop.
         while stopped.recv_timeout(every) == Err(RecvTimeoutError::Timeout) {
@@ -98,29 +146,28 @@ fn spawn_poller(session: Arc<Mutex<ReviewSession>>, stopped: Receiver<()>, every
             if let Ok(mut session) = session.lock() {
                 let _ = session.sync();
             }
-        }
-    });
-}
-
-/// Writes every session event to `writer` as an `event` notification.
-fn forward_events<W: Write + Send + 'static>(
-    session: &Mutex<ReviewSession>,
-    writer: Arc<Mutex<W>>,
-) -> Result<()> {
-    let events = session
-        .lock()
-        .map_err(|_| anyhow!("the review session lock is poisoned"))?
-        .subscribe();
-    thread::spawn(move || {
-        for event in events {
-            let Ok(params) = serde_json::to_value(&event) else {
-                continue;
-            };
-            if write_line(&writer, &notification("event", params)).is_err() {
+            if write_events(&events, &writer).is_err() {
                 break;
             }
         }
-    });
+    })
+}
+
+/// Writes every event announced so far to `writer` as an `event`
+/// notification, in the order they were announced.
+fn write_events<W: Write>(events: &Mutex<Receiver<Event>>, writer: &Mutex<W>) -> Result<()> {
+    // Holding the events lock while writing keeps two drains from
+    // interleaving their events.
+    let pending = events
+        .lock()
+        .map_err(|_| anyhow!("the event lock is poisoned"))?;
+    for event in pending.try_iter() {
+        let Ok(params) = serde_json::to_value(&event) else {
+            continue;
+        };
+        write_line(writer, &notification("event", params))?;
+    }
+    drop(pending);
     Ok(())
 }
 

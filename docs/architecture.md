@@ -69,9 +69,11 @@ handshake it asks for a `snapshot` (what was saved last) and then a `sync`.
 
 The server reads requests on stdin, writes responses and notifications on
 stdout, and syncs with GitHub in the background every 60 seconds (`--poll`).
-A sync failure keeps the last view and is announced as an event. Threads run
-the poller and the event forwarder around one `Mutex<ReviewSession>`; there is
-no async runtime.
+A sync failure keeps the last view and is announced as an event. The reader
+loop and a poller thread share one `Mutex<ReviewSession>`, and whichever one
+syncs writes the events it caused before doing anything else; there is no
+async runtime. On `shutdown` or end of input the server stops and joins the
+poller, writes any event still pending, and only then answers `shutdown`.
 
 ### Checkout
 

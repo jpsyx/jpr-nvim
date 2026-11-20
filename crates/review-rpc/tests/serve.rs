@@ -195,3 +195,57 @@ fn the_poller_syncs_in_the_background() {
     .unwrap();
     assert!(forge.fetches() >= 2, "fetched {} times", forge.fetches());
 }
+
+#[test]
+fn shutdown_waits_for_every_event_to_be_written() {
+    let input = format!(
+        "{}{}{}",
+        request(1, "initialize"),
+        request(2, "sync"),
+        request(3, "shutdown")
+    );
+    for attempt in 0..200 {
+        let output = Arc::new(Mutex::new(Vec::<u8>::new()));
+        serve(
+            Cursor::new(input.clone()),
+            &output,
+            &session(&forge()),
+            &options(None),
+        )
+        .unwrap();
+        let written = messages(&output);
+        let synced = written
+            .iter()
+            .position(|message| message["params"]["type"] == "synced");
+        let shutdown = written.iter().position(|message| message["id"] == 3);
+        assert!(
+            matches!((synced, shutdown), (Some(event), Some(answer)) if event < answer),
+            "attempt {attempt}: {written:?}"
+        );
+    }
+}
+
+/// A writer whose reader has gone away.
+struct Closed;
+
+impl std::io::Write for Closed {
+    fn write(&mut self, _buffer: &[u8]) -> std::io::Result<usize> {
+        Err(std::io::ErrorKind::BrokenPipe.into())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn a_closed_output_ends_serving_with_an_error() {
+    let input = format!("{}{}", request(1, "sync"), request(2, "shutdown"));
+    let result = serve(
+        Cursor::new(input),
+        &Arc::new(Mutex::new(Closed)),
+        &session(&forge()),
+        &options(Some(Duration::from_millis(1))),
+    );
+    assert!(result.is_err());
+}

@@ -40,7 +40,8 @@ in version 1, so `null`, `{}` or a missing `params` all work.
 ```
 
 Every sync announces one of these, whether a `sync` request or the background
-poller started it.
+poller started it. An event is written before the response to the request
+that caused it, and every event is written before the `shutdown` response.
 
 ## Types
 

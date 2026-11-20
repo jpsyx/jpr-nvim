@@ -129,8 +129,10 @@ frontend; merge it then.
 
 ## Threads and channels, not an async runtime
 
-**Decision.** The server uses a reader loop, a poller thread and an
-event-forwarding thread around one `Mutex<ReviewSession>`.
+**Decision.** The server uses a reader loop and a poller thread around one
+`Mutex<ReviewSession>`. Each writes the events its own sync caused; there is
+no separate event-forwarding thread, because a detached forwarder could lose
+the last events when the server exited.
 
 **Why.** Every outside call is a short blocking `gh` or file operation, which
 is also how dif works. An async runtime would add weight without a need.
