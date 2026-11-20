@@ -16,9 +16,16 @@ use crate::theme::Theme;
 /// Runs the command the arguments selected.
 pub fn run(cli: &Cli, theme: Theme) -> Result<()> {
     match &cli.command {
-        Command::Checkout { pr, worktree_cmd } => {
-            checkout::run(pr_number(*pr, theme)?, worktree_cmd.as_deref(), theme)
-        }
+        Command::Checkout {
+            pr,
+            repo,
+            worktree_cmd,
+        } => checkout::run(
+            pr_number(*pr, theme)?,
+            repo.as_deref(),
+            worktree_cmd.as_deref(),
+            theme,
+        ),
         Command::Serve { pr, repo, poll } => serve::run(*pr, repo, *poll),
         Command::StatePath { pr, repo } => {
             let number = pr_number(*pr, theme)?;

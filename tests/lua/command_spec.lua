@@ -7,6 +7,9 @@ assert(jpr.parse_pr_arg("123") == 123, "a bare number")
 assert(jpr.parse_pr_arg("#45") == 45, "a hash number")
 assert(jpr.parse_pr_arg("https://github.com/octo/widgets/pull/678") == 678, "a pull request URL")
 assert(jpr.parse_pr_arg("https://github.com/octo/widgets/pull/678/files") == 678, "a files URL")
+assert(select(2, jpr.parse_pr_arg("123")) == nil, "a bare number names no repository")
+local url_number, url_repo = jpr.parse_pr_arg("https://github.com/octo/gadgets/pull/12/files")
+assert(url_number == 12 and url_repo == "octo/gadgets", "a URL names its repository: " .. tostring(url_repo))
 assert(jpr.parse_pr_arg("abc") == nil, "not a number")
 assert(jpr.parse_pr_arg(nil) == nil, "missing")
 
@@ -30,5 +33,15 @@ assert(messages[1].level == vim.log.levels.ERROR, "an unknown subcommand is an e
 assert(messages[1].msg:find("unknown subcommand", 1, true), messages[1].msg)
 jpr.command({ "open", "abc" })
 assert(messages[2].msg:find("usage", 1, true), "open without a number shows the usage")
+
+local opened = {}
+package.loaded["jpr.session"] = {
+    open = function(number, repo)
+        opened = { number = number, repo = repo }
+    end,
+}
+jpr.command({ "open", "https://github.com/octo/gadgets/pull/12" })
+assert(opened.number == 12 and opened.repo == "octo/gadgets", ":Jpr open passes the URL's repository on: " .. vim.inspect(opened))
+package.loaded["jpr.session"] = nil
 
 print("command_spec: ok")

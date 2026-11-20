@@ -42,7 +42,7 @@ from one commit. With lazy.nvim:
 
 | Command | What it does |
 | --- | --- |
-| `:Jpr open <n \| #n \| URL>` | Check the pull request out and open its review tab |
+| `:Jpr open <n \| #n \| URL>` | Check the pull request out and open its review tab. A URL must be for the repository Neovim's directory is a checkout of |
 | `:Jpr sync` | Sync with GitHub now (it also syncs every minute) |
 | `:Jpr close` | Stop the engine and close the tab |
 

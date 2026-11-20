@@ -15,10 +15,14 @@ function M.current()
     return M.by_tab[vim.api.nvim_get_current_tabpage()]
 end
 
---- The `jpr-review checkout` command for PR `number`.
-function M.checkout_args(number)
+--- The `jpr-review checkout` command for PR `number`. With `repo`
+--- (owner/name), checkout refuses a PR from any other repository.
+function M.checkout_args(number, repo)
     local config = jpr().config
     local args = { config.binary, "checkout", "--pr", tostring(number) }
+    if repo then
+        vim.list_extend(args, { "--repo", repo })
+    end
     if config.worktree_cmd then
         vim.list_extend(args, { "--worktree-cmd", config.worktree_cmd })
     end
@@ -44,9 +48,11 @@ function M.parse_checkout(stdout)
 end
 
 --- `:Jpr open <number>`: reuse its tab, or check it out and start a session.
-function M.open(number)
+--- `repo` (owner/name, from a URL) must match too, when given.
+function M.open(number, repo)
     for tab, existing in pairs(M.by_tab) do
-        if existing.number == number and vim.api.nvim_tabpage_is_valid(tab) then
+        local same_repo = not repo or existing.repo:lower() == repo:lower()
+        if existing.number == number and same_repo and vim.api.nvim_tabpage_is_valid(tab) then
             return vim.api.nvim_set_current_tabpage(tab)
         end
     end
@@ -54,7 +60,7 @@ function M.open(number)
         return jpr().error(("%s is not installed or not on PATH"):format(jpr().config.binary))
     end
     jpr().info(("checking out PR #%d…"):format(number))
-    vim.system(M.checkout_args(number), { cwd = vim.fn.getcwd(), text = true }, vim.schedule_wrap(function(result)
+    vim.system(M.checkout_args(number, repo), { cwd = vim.fn.getcwd(), text = true }, vim.schedule_wrap(function(result)
         if result.code ~= 0 then
             local stderr = vim.trim(result.stderr or "")
             return jpr().error(stderr ~= "" and stderr or "checkout failed")

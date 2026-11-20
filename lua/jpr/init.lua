@@ -35,13 +35,15 @@ function M.setup(opts)
     M.define_highlights()
 end
 
---- The PR number in a `:Jpr open` argument: `123`, `#123`, or a pull request URL.
+--- The PR number in a `:Jpr open` argument: `123`, `#123`, or a pull request
+--- URL. A URL also gives its repository as a second value, `owner/name`.
 function M.parse_pr_arg(arg)
     if type(arg) ~= "string" then
         return nil
     end
-    local number = arg:match("^#?(%d+)$") or arg:match("/pull/(%d+)")
-    return number and tonumber(number) or nil
+    local repo, url_number = arg:match("^%a+://[^/]+/([^/]+/[^/]+)/pull/(%d+)")
+    local number = url_number or arg:match("^#?(%d+)$") or arg:match("/pull/(%d+)")
+    return number and tonumber(number) or nil, repo
 end
 
 --- Completes `:Jpr <subcommand>`; arguments after it have no completion.
@@ -67,11 +69,11 @@ end
 function M.command(fargs)
     local sub = fargs[1]
     if sub == "open" then
-        local number = M.parse_pr_arg(fargs[2])
+        local number, repo = M.parse_pr_arg(fargs[2])
         if not number then
             return M.error("usage: :Jpr open <number | #number | pull request URL>")
         end
-        require("jpr.session").open(number)
+        require("jpr.session").open(number, repo)
     elseif sub == "sync" then
         require("jpr.session").sync_current()
     elseif sub == "close" then

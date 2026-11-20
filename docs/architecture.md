@@ -59,7 +59,10 @@ read models the engine returns.
 ## Process model
 
 `:Jpr open <n>` runs `jpr-review checkout --pr <n>` in Neovim's current
-directory, which prints the worktree as JSON. The plugin then opens a tab whose
+directory, which prints the worktree as JSON. A pull request URL adds
+`--repo <owner/name>`: `checkout` resolves the number in the current
+directory's repository, so it refuses, before creating any worktree, a pull
+request from a different repository than the URL names. The plugin then opens a tab whose
 directory is the worktree, opens the panel, and starts
 `jpr-review serve --pr <n> --repo <owner/name>` there. After the `initialize`
 handshake it asks for a `snapshot` (what was saved last) and then a `sync`.
@@ -84,7 +87,7 @@ replaces all of this: it must print an existing directory as its last line.
 ### Session lifecycle in the plugin
 
 Each tab holds at most one session, and `:Jpr open` on a PR that already has
-a tab switches to it. Every way a session ends (`:Jpr close`,
+a tab switches to it (for a URL, only when the repository matches too). Every way a session ends (`:Jpr close`,
 `:tabclose`, the engine exiting, a failed start or handshake) goes through one
 `forget` path: it sends `shutdown`, stops the engine, wipes the panel and
 unregisters the session, so a later `:Jpr open` starts fresh. A session is

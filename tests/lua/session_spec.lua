@@ -13,6 +13,13 @@ assert(
     vim.deep_equal(session.checkout_args(7), { fixture, "checkout", "--pr", "7", "--worktree-cmd", "wt pr {n}" }),
     "checkout args with a worktree command"
 )
+assert(
+    vim.deep_equal(
+        session.checkout_args(7, "octo/gadgets"),
+        { fixture, "checkout", "--pr", "7", "--repo", "octo/gadgets", "--worktree-cmd", "wt pr {n}" }
+    ),
+    "checkout args with the repository a URL named"
+)
 
 local info = session.parse_checkout('Checking out...\n{"worktree":"/tmp/w","repo":"octo/widgets","number":7,"title":"T"}\n')
 assert(info.worktree == "/tmp/w" and info.repo == "octo/widgets" and info.number == 7, vim.inspect(info))
@@ -41,6 +48,25 @@ vim.api.nvim_win_set_cursor(s.panel.win, { 5, 0 })
 panel_view.open_file_under_cursor(s)
 assert(vim.api.nvim_get_current_win() ~= s.panel.win, "the file opens beside the panel")
 assert(vim.fn.resolve(vim.api.nvim_buf_get_name(0)) == vim.fn.resolve(worktree .. "/README.md"), "the worktree file opens")
+
+-- :Jpr open refocuses the tab only for the same repository.
+local review_tab = vim.api.nvim_get_current_tabpage()
+jpr.setup({ binary = worktree .. "/missing-engine" })
+local notified = {}
+vim.notify = function(message)
+    notified[#notified + 1] = message
+end
+vim.cmd("tabfirst")
+local first_tab = vim.api.nvim_get_current_tabpage()
+session.open(7, "octo/gadgets")
+assert(vim.api.nvim_get_current_tabpage() == first_tab, "another repository's PR 7 does not refocus octo/widgets#7")
+assert(#notified == 1, "it goes on to check the PR out instead: " .. vim.inspect(notified))
+session.open(7, "Octo/Widgets")
+assert(vim.api.nvim_get_current_tabpage() == review_tab, "the same repository, in any case, refocuses")
+vim.cmd("tabfirst")
+session.open(7)
+assert(vim.api.nvim_get_current_tabpage() == review_tab, "a bare number refocuses")
+jpr.setup({ binary = fixture })
 
 local tabs = #vim.api.nvim_list_tabpages()
 session.close_current()

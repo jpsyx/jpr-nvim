@@ -23,6 +23,10 @@ pub enum Command {
         /// The pull request number. Left out on a terminal, you are asked.
         #[arg(long)]
         pr: Option<u64>,
+        /// The repository the pull request must belong to, as owner/name. Left
+        /// out, it is whichever repository the current directory resolves to.
+        #[arg(long, value_name = "OWNER/NAME")]
+        repo: Option<String>,
         /// A shell command that creates the worktree and prints its path; `{n}` is the number.
         #[arg(long, value_name = "COMMAND", env = "JPR_WORKTREE_CMD")]
         worktree_cmd: Option<String>,
@@ -84,7 +88,29 @@ mod tests {
             cli.command,
             Command::Checkout {
                 pr: Some(7),
+                repo: None,
                 worktree_cmd: Some("wt pr {n}".into())
+            }
+        );
+    }
+
+    #[test]
+    fn checkout_takes_the_repository_it_expects() {
+        let cli = Cli::try_parse_from([
+            "jpr-review",
+            "checkout",
+            "--pr",
+            "12",
+            "--repo",
+            "octo/gadgets",
+        ])
+        .unwrap();
+        assert_eq!(
+            cli.command,
+            Command::Checkout {
+                pr: Some(12),
+                repo: Some("octo/gadgets".into()),
+                worktree_cmd: None
             }
         );
     }
