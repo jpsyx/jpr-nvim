@@ -45,7 +45,7 @@
 
 ### Task 0: Worktree
 
-- [ ] **Step 1: Create the worktree for `feat/core`**
+- [x] **Step 1: Create the worktree for `feat/core`**
 
 Follow the user's worktree conventions (their global rules name the tool and the skill to load first). From the main checkout:
 
@@ -56,7 +56,7 @@ git branch --show-current
 
 Expected: `feat/core`.
 
-- [ ] **Step 2: Restore the agent skills**
+- [x] **Step 2: Restore the agent skills**
 
 ```bash
 just skills-install
@@ -75,7 +75,7 @@ Mechanical. Removes the `impeccable` UI-design agents, skill and hooks that the 
 - Delete (untracked, local only): impeccable skill copies and hook files
 - Modify: `scripts/skills/update-skills.sh`, `docs/skills.md`, `AGENTS.md`
 
-- [ ] **Step 1: Delete the tracked and local impeccable files**
+- [x] **Step 1: Delete the tracked and local impeccable files**
 
 ```bash
 git rm -q .claude/agents/impeccable-asset-producer.md .claude/agents/impeccable-documenter.md \
@@ -86,7 +86,7 @@ rm -rf .agents/skills/impeccable .claude/skills/impeccable .cursor/skills/impecc
 rm -f .cursor/agents/impeccable-*.md .cursor/hooks.json .codex/hooks.json
 ```
 
-- [ ] **Step 2: Make the update script lock-only**
+- [x] **Step 2: Make the update script lock-only**
 
 Replace everything in `scripts/skills/update-skills.sh` from the line `# Space separated npm package names, written by the scaffolder.` to the end of the file with:
 
@@ -106,7 +106,7 @@ Then replace the header comment block (the lines between `# Updates every agent 
 Run: `bash -n scripts/skills/update-skills.sh`
 Expected: no output (valid syntax).
 
-- [ ] **Step 3: Rewrite `docs/skills.md`**
+- [x] **Step 3: Rewrite `docs/skills.md`**
 
 Replace the whole file with:
 
@@ -154,7 +154,7 @@ npx skills remove <name>
 Both commands update `skills-lock.json`. Commit that change.
 ````
 
-- [ ] **Step 4: Fix the Agent skills section of `AGENTS.md`**
+- [x] **Step 4: Fix the Agent skills section of `AGENTS.md`**
 
 Replace:
 
@@ -187,12 +187,12 @@ with:
   everything in the lock.
 ```
 
-- [ ] **Step 5: Verify nothing references impeccable**
+- [x] **Step 5: Verify nothing references impeccable**
 
 Run: `git grep -n -i impeccable -- . ':!docs/superpowers'`
 Expected: no output.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add -A scripts/skills/update-skills.sh docs/skills.md AGENTS.md .claude/agents
@@ -211,7 +211,7 @@ Moves the scaffold binary into `crates/jpr-review` unchanged (its example comman
 - Replace: `Cargo.toml`, `justfile`
 - Modify: `install.sh`
 
-- [ ] **Step 1: Move the scaffold**
+- [x] **Step 1: Move the scaffold**
 
 ```bash
 mkdir -p crates/jpr-review
@@ -219,7 +219,7 @@ git mv src crates/jpr-review/src
 git mv tests crates/jpr-review/tests
 ```
 
-- [ ] **Step 2: Replace the root `Cargo.toml`**
+- [x] **Step 2: Replace the root `Cargo.toml`**
 
 ```toml
 # A workspace: generic review crates (`crates/review-*`) that any frontend can
@@ -265,7 +265,7 @@ codegen-units = 1
 strip = true
 ```
 
-- [ ] **Step 3: Create `crates/jpr-review/Cargo.toml`**
+- [x] **Step 3: Create `crates/jpr-review/Cargo.toml`**
 
 ```toml
 [package]
@@ -297,12 +297,12 @@ toml = { version = "1", features = ["preserve_order"] }
 workspace = true
 ```
 
-- [ ] **Step 4: Run the moved tests**
+- [x] **Step 4: Run the moved tests**
 
 Run: `cargo test --workspace`
 Expected: PASS (the scaffold's existing tests, now in `jpr-review`).
 
-- [ ] **Step 5: Point `install.sh` at `jpr-review`**
+- [x] **Step 5: Point `install.sh` at `jpr-review`**
 
 In `install.sh`, make exactly these replacements:
 
@@ -317,7 +317,7 @@ In `install.sh`, make exactly these replacements:
 | `echo "Building jpr-nvim (release)..." >&2` | `echo "Building jpr-review (release)..." >&2` |
 | `(cd "$script_dir" && cargo build --release) >&2` | `(cd "$script_dir" && cargo build --release -p jpr-review) >&2` |
 
-- [ ] **Step 6: Verify the installer contract**
+- [x] **Step 6: Verify the installer contract**
 
 ```bash
 tmp="$(mktemp -d)"
@@ -333,7 +333,7 @@ rm -rf "$tmp"
 
 Expected: `help exit=0`, `bogus exit=2`, an empty listing after the bogus run, then `jpr-review` and `jpr-review-dev` in the listing, and `jpr-review 0.1.0`.
 
-- [ ] **Step 7: Replace the `justfile`**
+- [x] **Step 7: Replace the `justfile`**
 
 ```just
 # Task entry points for jpr-nvim.
@@ -394,7 +394,7 @@ skills-update:
 
 Task 13 adds `test-lua` to `check` once `scripts/test-lua.sh` exists.
 
-- [ ] **Step 8: Run the gate and commit**
+- [x] **Step 8: Run the gate and commit**
 
 Run: `just check`
 Expected: PASS.
@@ -411,7 +411,7 @@ git commit -m "build: make the repo a workspace and install the jpr-review binar
 **Files:**
 - Create: `crates/review-model/Cargo.toml`, `crates/review-model/src/{lib,pr,thread,view}.rs`
 
-- [ ] **Step 1: Create the crate manifest**
+- [x] **Step 1: Create the crate manifest**
 
 `crates/review-model/Cargo.toml`:
 
@@ -434,7 +434,7 @@ serde_json.workspace = true
 workspace = true
 ```
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 `crates/review-model/src/lib.rs`:
 
@@ -596,12 +596,12 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Run the tests to see them fail**
+- [x] **Step 3: Run the tests to see them fail**
 
 Run: `cargo test -p review-model`
 Expected: FAIL to compile (`cannot find type PullRequest`, `ViewedState`, `Thread`, ...).
 
-- [ ] **Step 4: Implement `pr.rs`**
+- [x] **Step 4: Implement `pr.rs`**
 
 Insert above the `#[cfg(test)]` line in `crates/review-model/src/pr.rs`:
 
@@ -665,7 +665,7 @@ pub struct ChangedFile {
 }
 ```
 
-- [ ] **Step 5: Implement `thread.rs`**
+- [x] **Step 5: Implement `thread.rs`**
 
 Insert above the `#[cfg(test)]` line in `crates/review-model/src/thread.rs`:
 
@@ -786,7 +786,7 @@ pub struct Thread {
 }
 ```
 
-- [ ] **Step 6: Implement `view.rs`**
+- [x] **Step 6: Implement `view.rs`**
 
 Insert above the `#[cfg(test)]` line in `crates/review-model/src/view.rs`:
 
@@ -841,12 +841,12 @@ pub enum Event {
 }
 ```
 
-- [ ] **Step 7: Run the tests**
+- [x] **Step 7: Run the tests**
 
 Run: `cargo test -p review-model`
 Expected: PASS (7 tests).
 
-- [ ] **Step 8: Gate and commit**
+- [x] **Step 8: Gate and commit**
 
 Run: `just check`
 Expected: PASS.
@@ -863,7 +863,7 @@ git commit -m "feat(model): add the review domain types and read models"
 **Files:**
 - Create: `crates/review-core/Cargo.toml`, `crates/review-core/src/{lib,ports,presenter,fakes,contract}.rs`
 
-- [ ] **Step 1: Create the crate manifest**
+- [x] **Step 1: Create the crate manifest**
 
 `crates/review-core/Cargo.toml`:
 
@@ -890,7 +890,7 @@ review-model.workspace = true
 workspace = true
 ```
 
-- [ ] **Step 2: Write the ports, fakes and contract (no tests of their own yet)**
+- [x] **Step 2: Write the ports, fakes and contract (no tests of their own yet)**
 
 `crates/review-core/src/lib.rs`:
 
@@ -1233,7 +1233,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Write the failing presenter tests**
+- [x] **Step 3: Write the failing presenter tests**
 
 `crates/review-core/src/presenter.rs` (tests only for now):
 
@@ -1277,12 +1277,12 @@ mod tests {
 }
 ```
 
-- [ ] **Step 4: Run the tests to see them fail**
+- [x] **Step 4: Run the tests to see them fail**
 
 Run: `cargo test -p review-core`
 Expected: FAIL to compile (`cannot find function session_view`).
 
-- [ ] **Step 5: Implement the presenter**
+- [x] **Step 5: Implement the presenter**
 
 Insert above the `#[cfg(test)]` line in `crates/review-core/src/presenter.rs`:
 
@@ -1323,12 +1323,12 @@ pub fn session_view(
 }
 ```
 
-- [ ] **Step 6: Run the tests**
+- [x] **Step 6: Run the tests**
 
 Run: `cargo test -p review-core --all-features`
 Expected: PASS (3 tests).
 
-- [ ] **Step 7: Gate and commit**
+- [x] **Step 7: Gate and commit**
 
 Run: `just check`
 Expected: PASS.
@@ -1346,7 +1346,7 @@ git commit -m "feat(core): add the ports, presenter, fakes and store contract"
 - Create: `crates/review-core/src/session.rs`
 - Modify: `crates/review-core/src/lib.rs`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `crates/review-core/src/session.rs` (tests only for now):
 
@@ -1480,12 +1480,12 @@ and after `pub use presenter::session_view;`:
 pub use session::ReviewSession;
 ```
 
-- [ ] **Step 2: Run the tests to see them fail**
+- [x] **Step 2: Run the tests to see them fail**
 
 Run: `cargo test -p review-core --all-features`
 Expected: FAIL to compile (`cannot find type ReviewSession`).
 
-- [ ] **Step 3: Implement the session**
+- [x] **Step 3: Implement the session**
 
 Insert above the `#[cfg(test)]` line in `crates/review-core/src/session.rs`:
 
@@ -1602,12 +1602,12 @@ impl ReviewSession {
 }
 ```
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `cargo test -p review-core --all-features`
 Expected: PASS (10 tests).
 
-- [ ] **Step 5: Gate and commit**
+- [x] **Step 5: Gate and commit**
 
 Run: `just check`
 Expected: PASS.
@@ -1624,7 +1624,7 @@ git commit -m "feat(core): add the ReviewSession facade with sync and events"
 **Files:**
 - Create: `crates/review-store-fs/Cargo.toml`, `crates/review-store-fs/src/lib.rs`
 
-- [ ] **Step 1: Create the crate manifest**
+- [x] **Step 1: Create the crate manifest**
 
 `crates/review-store-fs/Cargo.toml`:
 
@@ -1652,7 +1652,7 @@ tempfile.workspace = true
 workspace = true
 ```
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 `crates/review-store-fs/src/lib.rs` (tests only for now):
 
@@ -1739,12 +1739,12 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Run the tests to see them fail**
+- [x] **Step 3: Run the tests to see them fail**
 
 Run: `cargo test -p review-store-fs`
 Expected: FAIL to compile (`cannot find type FsStore`).
 
-- [ ] **Step 4: Implement the store**
+- [x] **Step 4: Implement the store**
 
 Insert above the `#[cfg(test)]` line in `crates/review-store-fs/src/lib.rs`:
 
@@ -1850,12 +1850,12 @@ fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<()> {
 }
 ```
 
-- [ ] **Step 5: Run the tests**
+- [x] **Step 5: Run the tests**
 
 Run: `cargo test -p review-store-fs`
 Expected: PASS (8 tests).
 
-- [ ] **Step 6: Gate and commit**
+- [x] **Step 6: Gate and commit**
 
 Run: `just check`
 Expected: PASS.
@@ -1874,7 +1874,7 @@ Copied from dif's `github/client.rs` with one fix: dif reported "reading GitHub'
 **Files:**
 - Create: `crates/review-forge-github/Cargo.toml`, `crates/review-forge-github/src/{lib,gh,pr,graphql}.rs`
 
-- [ ] **Step 1: Create the crate manifest and module skeleton**
+- [x] **Step 1: Create the crate manifest and module skeleton**
 
 `crates/review-forge-github/Cargo.toml`:
 
@@ -1942,7 +1942,7 @@ pub fn error_message(stdout: &str) -> Option<String> {
 }
 ```
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 `crates/review-forge-github/src/gh.rs` (tests only for now):
 
@@ -2029,12 +2029,12 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Run the tests to see them fail**
+- [x] **Step 3: Run the tests to see them fail**
 
 Run: `cargo test -p review-forge-github`
 Expected: FAIL to compile (`cannot find function wait_with_timeout`, `parse_pr`).
 
-- [ ] **Step 4: Implement `gh.rs`**
+- [x] **Step 4: Implement `gh.rs`**
 
 Insert above the `#[cfg(test)]` line in `crates/review-forge-github/src/gh.rs`:
 
@@ -2135,7 +2135,7 @@ fn read_in_background(mut pipe: impl Read + Send + 'static) -> JoinHandle<Vec<u8
 }
 ```
 
-- [ ] **Step 5: Implement `pr.rs`**
+- [x] **Step 5: Implement `pr.rs`**
 
 Insert above the `#[cfg(test)]` line in `crates/review-forge-github/src/pr.rs`:
 
@@ -2195,12 +2195,12 @@ pub fn parse_pr(stdout: &str) -> Result<PullRequest> {
 }
 ```
 
-- [ ] **Step 6: Run the tests**
+- [x] **Step 6: Run the tests**
 
 Run: `cargo test -p review-forge-github`
 Expected: PASS (5 tests).
 
-- [ ] **Step 7: Gate and commit**
+- [x] **Step 7: Gate and commit**
 
 Run: `just check`
 Expected: PASS.
@@ -2219,7 +2219,7 @@ dif's queries plus `isOutdated`, `subjectType` (file-level threads), and `additi
 **Files:**
 - Modify: `crates/review-forge-github/src/graphql.rs`, `crates/review-forge-github/src/lib.rs`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `crates/review-forge-github/src/graphql.rs`:
 
@@ -2332,12 +2332,12 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run the tests to see them fail**
+- [x] **Step 2: Run the tests to see them fail**
 
 Run: `cargo test -p review-forge-github`
 Expected: FAIL to compile (`cannot find function parse_threads_page`, `GhForge`).
 
-- [ ] **Step 3: Implement the queries and parsers**
+- [x] **Step 3: Implement the queries and parsers**
 
 In `crates/review-forge-github/src/graphql.rs`, replace the import lines with:
 
@@ -2534,7 +2534,7 @@ fn next_cursor(connection: &Value) -> Option<String> {
 }
 ```
 
-- [ ] **Step 4: Implement `GhForge`**
+- [x] **Step 4: Implement `GhForge`**
 
 Replace the body of `crates/review-forge-github/src/lib.rs` above the `#[cfg(test)]` line with:
 
@@ -2649,12 +2649,12 @@ impl Forge for GhForge {
 }
 ```
 
-- [ ] **Step 5: Run the tests**
+- [x] **Step 5: Run the tests**
 
 Run: `cargo test -p review-forge-github`
 Expected: PASS (10 tests).
 
-- [ ] **Step 6: Gate and commit**
+- [x] **Step 6: Gate and commit**
 
 Run: `just check`
 Expected: PASS.
@@ -2673,7 +2673,7 @@ git commit -m "feat(forge): pull threads, files and viewed state through GraphQL
 **Files:**
 - Create: `crates/review-workspace-git/Cargo.toml`, `crates/review-workspace-git/src/lib.rs`
 
-- [ ] **Step 1: Create the crate manifest**
+- [x] **Step 1: Create the crate manifest**
 
 `crates/review-workspace-git/Cargo.toml`:
 
@@ -2696,7 +2696,7 @@ tempfile.workspace = true
 workspace = true
 ```
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 `crates/review-workspace-git/src/lib.rs` (tests only for now):
 
@@ -2806,12 +2806,12 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Run the tests to see them fail**
+- [x] **Step 3: Run the tests to see them fail**
 
 Run: `cargo test -p review-workspace-git`
 Expected: FAIL to compile (`cannot find function render_custom`, ...).
 
-- [ ] **Step 4: Implement the checkout**
+- [x] **Step 4: Implement the checkout**
 
 Insert above the `#[cfg(test)]` line in `crates/review-workspace-git/src/lib.rs`:
 
@@ -2947,12 +2947,12 @@ fn run(program: &str, args: &[&str], dir: &Path) -> Result<String> {
 }
 ```
 
-- [ ] **Step 5: Run the tests**
+- [x] **Step 5: Run the tests**
 
 Run: `cargo test -p review-workspace-git`
 Expected: PASS (9 tests).
 
-- [ ] **Step 6: Gate and commit**
+- [x] **Step 6: Gate and commit**
 
 Run: `just check`
 Expected: PASS.
@@ -2969,7 +2969,7 @@ git commit -m "feat(workspace): check pull requests out into worktrees"
 **Files:**
 - Create: `crates/review-rpc/Cargo.toml`, `crates/review-rpc/src/{lib,protocol}.rs`
 
-- [ ] **Step 1: Create the crate manifest and root**
+- [x] **Step 1: Create the crate manifest and root**
 
 `crates/review-rpc/Cargo.toml`:
 
@@ -3007,7 +3007,7 @@ pub mod protocol;
 pub use protocol::{PROTOCOL_VERSION, Request, RpcError};
 ```
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 `crates/review-rpc/src/protocol.rs` (tests only for now):
 
@@ -3056,12 +3056,12 @@ mod tests {
 }
 ```
 
-- [ ] **Step 3: Run the tests to see them fail**
+- [x] **Step 3: Run the tests to see them fail**
 
 Run: `cargo test -p review-rpc`
 Expected: FAIL to compile (`cannot find function parse_request`).
 
-- [ ] **Step 4: Implement the protocol**
+- [x] **Step 4: Implement the protocol**
 
 Insert above the `#[cfg(test)]` line in `crates/review-rpc/src/protocol.rs`:
 
@@ -3152,12 +3152,12 @@ pub fn notification(method: &str, params: Value) -> Value {
 }
 ```
 
-- [ ] **Step 5: Run the tests**
+- [x] **Step 5: Run the tests**
 
 Run: `cargo test -p review-rpc`
 Expected: PASS (4 tests).
 
-- [ ] **Step 6: Gate and commit**
+- [x] **Step 6: Gate and commit**
 
 Run: `just check`
 Expected: PASS.
@@ -3175,7 +3175,7 @@ git commit -m "feat(rpc): add the JSON-RPC wire format"
 - Create: `crates/review-rpc/src/server.rs`, `crates/review-rpc/tests/serve.rs`
 - Modify: `crates/review-rpc/src/lib.rs`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `crates/review-rpc/tests/serve.rs`:
 
@@ -3355,12 +3355,12 @@ and after the `pub use protocol::...` line:
 pub use server::{ServeOptions, handle, serve};
 ```
 
-- [ ] **Step 2: Run the tests to see them fail**
+- [x] **Step 2: Run the tests to see them fail**
 
 Run: `cargo test -p review-rpc`
 Expected: FAIL to compile (file `src/server.rs` not found).
 
-- [ ] **Step 3: Implement the server**
+- [x] **Step 3: Implement the server**
 
 `crates/review-rpc/src/server.rs`:
 
@@ -3510,12 +3510,12 @@ fn to_value<T: Serialize>(value: &T) -> Result<Value, RpcError> {
 }
 ```
 
-- [ ] **Step 4: Run the tests**
+- [x] **Step 4: Run the tests**
 
 Run: `cargo test -p review-rpc`
 Expected: PASS (4 unit tests, 7 integration tests).
 
-- [ ] **Step 5: Gate and commit**
+- [x] **Step 5: Gate and commit**
 
 Run: `just check`
 Expected: PASS.
@@ -3536,7 +3536,7 @@ Replaces the scaffold's example commands (`greet`, `info`, `config`) with `check
 - Replace: `crates/jpr-review/Cargo.toml`, `crates/jpr-review/src/{lib,cli}.rs`, `crates/jpr-review/src/commands/mod.rs`
 - Create: `crates/jpr-review/src/commands/{checkout,serve,state_path}.rs`, `crates/jpr-review/tests/dependency_rule.rs`
 
-- [ ] **Step 1: Remove the example commands**
+- [x] **Step 1: Remove the example commands**
 
 ```bash
 git rm -q -r crates/jpr-review/src/config.rs crates/jpr-review/src/commands/greet.rs \
@@ -3544,7 +3544,7 @@ git rm -q -r crates/jpr-review/src/config.rs crates/jpr-review/src/commands/gree
   crates/jpr-review/tests/public_api.rs
 ```
 
-- [ ] **Step 2: Replace `crates/jpr-review/Cargo.toml`**
+- [x] **Step 2: Replace `crates/jpr-review/Cargo.toml`**
 
 ```toml
 [package]
@@ -3583,7 +3583,7 @@ review-core = { workspace = true, features = ["fakes"] }
 workspace = true
 ```
 
-- [ ] **Step 3: Write the dependency-rule test (it fails to build until the crate compiles)**
+- [x] **Step 3: Write the dependency-rule test (it fails to build until the crate compiles)**
 
 `crates/jpr-review/tests/dependency_rule.rs`:
 
@@ -3731,7 +3731,7 @@ fn dev_dependencies_are_exempt() {
 }
 ```
 
-- [ ] **Step 4: Replace `crates/jpr-review/src/lib.rs`**
+- [x] **Step 4: Replace `crates/jpr-review/src/lib.rs`**
 
 ```rust
 //! jpr-review: the composition root. It wires the generic review crates
@@ -3750,7 +3750,7 @@ pub const APP_NAME: &str = "jpr-review";
 pub const STATE_APP: &str = "jpr";
 ```
 
-- [ ] **Step 5: Replace `crates/jpr-review/src/cli.rs`**
+- [x] **Step 5: Replace `crates/jpr-review/src/cli.rs`**
 
 ```rust
 //! The command-line surface. The Neovim plugin drives these commands with
@@ -3838,7 +3838,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 6: Replace `crates/jpr-review/src/commands/mod.rs`**
+- [x] **Step 6: Replace `crates/jpr-review/src/commands/mod.rs`**
 
 ```rust
 //! Subcommand dispatch and the helpers commands share.
@@ -3950,7 +3950,7 @@ mod tests {
 }
 ```
 
-- [ ] **Step 7: Create the three commands**
+- [x] **Step 7: Create the three commands**
 
 `crates/jpr-review/src/commands/checkout.rs`:
 
@@ -4086,12 +4086,12 @@ pub fn run(number: u64, repo: &str) -> Result<()> {
 
 `crates/jpr-review/src/main.rs` stays as it is (it calls `app::commands::run(&cli, theme)`).
 
-- [ ] **Step 8: Run the tests**
+- [x] **Step 8: Run the tests**
 
 Run: `cargo test -p jpr-review`
 Expected: PASS (the cli, commands, checkout, serve, prompt and theme unit tests, plus 3 dependency-rule tests).
 
-- [ ] **Step 9: Check the binary by hand**
+- [x] **Step 9: Check the binary by hand**
 
 ```bash
 cargo run -q -p jpr-review -- state-path --pr 7 --repo octo/widgets
@@ -4107,7 +4107,7 @@ Expected:
 - three JSON responses: `protocolVersion` 1, a view with `"sync":{"state":"never"}`, then `null`
 - an error naming `--pr <NUMBER>` and `exit=1`
 
-- [ ] **Step 10: Gate and commit**
+- [x] **Step 10: Gate and commit**
 
 Run: `just check`
 Expected: PASS.
@@ -4125,7 +4125,7 @@ git commit -m "feat(cli): add checkout, serve and state-path, and enforce the de
 - Create: `plugin/jpr.lua`, `lua/jpr/init.lua`, `scripts/test-lua.sh`, `tests/lua/command_spec.lua`
 - Modify: `justfile`
 
-- [ ] **Step 1: Create the test runner**
+- [x] **Step 1: Create the test runner**
 
 `scripts/test-lua.sh`:
 
@@ -4155,7 +4155,7 @@ In `justfile`, change the `check` recipe to:
 check: fmt-check lint test test-lua
 ```
 
-- [ ] **Step 2: Write the failing spec**
+- [x] **Step 2: Write the failing spec**
 
 `tests/lua/command_spec.lua`:
 
@@ -4196,12 +4196,12 @@ assert(messages[2].msg:find("usage", 1, true), "open without a number shows the 
 print("command_spec: ok")
 ```
 
-- [ ] **Step 3: Run it to see it fail**
+- [x] **Step 3: Run it to see it fail**
 
 Run: `nvim --headless -u NONE -i NONE -l tests/lua/command_spec.lua`
 Expected: FAIL with `module 'jpr' not found`.
 
-- [ ] **Step 4: Implement the entry points**
+- [x] **Step 4: Implement the entry points**
 
 `lua/jpr/init.lua`:
 
@@ -4312,12 +4312,12 @@ end, {
 })
 ```
 
-- [ ] **Step 5: Run the spec**
+- [x] **Step 5: Run the spec**
 
 Run: `nvim --headless -u NONE -i NONE -l tests/lua/command_spec.lua`
 Expected: prints `command_spec: ok`, exit 0. The `open abc` branch never reaches `jpr.session`, so the missing module is not an error yet.
 
-- [ ] **Step 6: Gate and commit**
+- [x] **Step 6: Gate and commit**
 
 Run: `just check`
 Expected: PASS.
@@ -4334,7 +4334,7 @@ git commit -m "feat(nvim): add :Jpr, its argument parsing, and the Lua spec runn
 **Files:**
 - Create: `lua/jpr/rpc.lua`, `tests/lua/fixtures/fake_engine.sh`, `tests/lua/rpc_spec.lua`
 
-- [ ] **Step 1: Create the fake engine**
+- [x] **Step 1: Create the fake engine**
 
 `tests/lua/fixtures/fake_engine.sh`:
 
@@ -4367,7 +4367,7 @@ done
 chmod +x tests/lua/fixtures/fake_engine.sh
 ```
 
-- [ ] **Step 2: Write the failing spec**
+- [x] **Step 2: Write the failing spec**
 
 `tests/lua/rpc_spec.lua`:
 
@@ -4441,12 +4441,12 @@ assert(late and late.message:find("not running", 1, true), "requests after exit 
 print("rpc_spec: ok")
 ```
 
-- [ ] **Step 3: Run it to see it fail**
+- [x] **Step 3: Run it to see it fail**
 
 Run: `nvim --headless -u NONE -i NONE -l tests/lua/rpc_spec.lua`
 Expected: FAIL with `module 'jpr.rpc' not found`.
 
-- [ ] **Step 4: Implement the client**
+- [x] **Step 4: Implement the client**
 
 `lua/jpr/rpc.lua`:
 
@@ -4572,12 +4572,12 @@ end
 return M
 ```
 
-- [ ] **Step 5: Run the spec**
+- [x] **Step 5: Run the spec**
 
 Run: `nvim --headless -u NONE -i NONE -l tests/lua/rpc_spec.lua`
 Expected: prints `rpc_spec: ok`, exit 0.
 
-- [ ] **Step 6: Gate and commit**
+- [x] **Step 6: Gate and commit**
 
 Run: `just check`
 Expected: PASS.
@@ -4594,7 +4594,7 @@ git commit -m "feat(nvim): add the JSON-RPC client"
 **Files:**
 - Create: `lua/jpr/render/panel.lua`, `lua/jpr/views/panel.lua`, `lua/jpr/session.lua`, `tests/lua/panel_render_spec.lua`, `tests/lua/session_spec.lua`
 
-- [ ] **Step 1: Write the failing render spec**
+- [x] **Step 1: Write the failing render spec**
 
 `tests/lua/panel_render_spec.lua`:
 
@@ -4653,12 +4653,12 @@ assert(panel.build({}, 0).lines[3] == "not synced yet", "a fresh view")
 print("panel_render_spec: ok")
 ```
 
-- [ ] **Step 2: Run it to see it fail**
+- [x] **Step 2: Run it to see it fail**
 
 Run: `nvim --headless -u NONE -i NONE -l tests/lua/panel_render_spec.lua`
 Expected: FAIL with `module 'jpr.render.panel' not found`.
 
-- [ ] **Step 3: Implement the renderer**
+- [x] **Step 3: Implement the renderer**
 
 `lua/jpr/render/panel.lua`:
 
@@ -4736,7 +4736,7 @@ return M
 Run: `nvim --headless -u NONE -i NONE -l tests/lua/panel_render_spec.lua`
 Expected: prints `panel_render_spec: ok`.
 
-- [ ] **Step 4: Write the failing session spec**
+- [x] **Step 4: Write the failing session spec**
 
 `tests/lua/session_spec.lua`:
 
@@ -4796,7 +4796,7 @@ print("session_spec: ok")
 Run: `nvim --headless -u NONE -i NONE -l tests/lua/session_spec.lua`
 Expected: FAIL with `module 'jpr.session' not found`.
 
-- [ ] **Step 5: Implement the panel window**
+- [x] **Step 5: Implement the panel window**
 
 `lua/jpr/views/panel.lua`:
 
@@ -4875,7 +4875,7 @@ end
 return M
 ```
 
-- [ ] **Step 6: Implement the session**
+- [x] **Step 6: Implement the session**
 
 `lua/jpr/session.lua`:
 
@@ -5061,12 +5061,12 @@ end
 return M
 ```
 
-- [ ] **Step 7: Run every Lua spec**
+- [x] **Step 7: Run every Lua spec**
 
 Run: `just test-lua`
 Expected: `command_spec: ok`, `rpc_spec: ok`, `panel_render_spec: ok`, `session_spec: ok`, exit 0.
 
-- [ ] **Step 8: Gate and commit**
+- [x] **Step 8: Gate and commit**
 
 Run: `just check`
 Expected: PASS.
@@ -5085,7 +5085,7 @@ git commit -m "feat(nvim): open a PR tab with a live panel driven by the engine"
 - Create: `docs/protocol.md`
 - Modify: `docs/decisions.md`, `AGENTS.md`, `docs/rules/cli-rust.md`
 
-- [ ] **Step 1: Replace `docs/architecture.md`**
+- [x] **Step 1: Replace `docs/architecture.md`**
 
 ````markdown
 # Architecture
@@ -5190,7 +5190,7 @@ stdin is the protocol.
 - `just check` runs both plus formatting and clippy.
 ````
 
-- [ ] **Step 2: Create `docs/protocol.md`**
+- [x] **Step 2: Create `docs/protocol.md`**
 
 ````markdown
 # Engine protocol (version 1)
@@ -5267,7 +5267,7 @@ Change `PROTOCOL_VERSION` in `crates/review-rpc/src/protocol.rs` and
 result or an event changes shape, and update this document in the same commit.
 ````
 
-- [ ] **Step 3: Append to `docs/decisions.md`**
+- [x] **Step 3: Append to `docs/decisions.md`**
 
 ```markdown
 ## A workspace of generic crates and one composition root
@@ -5319,7 +5319,7 @@ uses for its state directory, and the state directory must be known even when
 GitHub is unreachable later.
 ```
 
-- [ ] **Step 4: Update `AGENTS.md`**
+- [x] **Step 4: Update `AGENTS.md`**
 
 Replace the whole `## Stack` section (from `## Stack` up to, not including, `## Documentation`) with:
 
@@ -5359,7 +5359,7 @@ with:
   `crates/jpr-review/src/theme.rs` for color.
 ```
 
-- [ ] **Step 5: Update the paths in `docs/rules/cli-rust.md`**
+- [x] **Step 5: Update the paths in `docs/rules/cli-rust.md`**
 
 ```bash
 sed -i.bak 's#`src/#`crates/jpr-review/src/#g' docs/rules/cli-rust.md && rm docs/rules/cli-rust.md.bak
@@ -5368,7 +5368,7 @@ git diff --stat docs/rules/cli-rust.md
 
 Expected: one file changed, five paths updated.
 
-- [ ] **Step 6: Replace `README.md`**
+- [x] **Step 6: Replace `README.md`**
 
 ````markdown
 # jpr-nvim
@@ -5436,7 +5436,7 @@ Agent skills are not tracked in git, but `skills-lock.json` is.
 `just skills-install` restores them after a clone.
 ````
 
-- [ ] **Step 7: Gate and commit**
+- [x] **Step 7: Gate and commit**
 
 Run: `just check`
 Expected: PASS.
