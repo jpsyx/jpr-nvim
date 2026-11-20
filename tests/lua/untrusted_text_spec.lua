@@ -26,22 +26,22 @@ for _, name in ipairs(hostile) do
 end
 
 session.start({ worktree = worktree, repo = "octo/widgets", number = 21 })
-local s = assert(session.current(), "the session starts in a worktree whose path holds % and #")
+local review = assert(session.current(), "the session starts in a worktree whose path holds % and #")
 assert(vim.fn.resolve(vim.fn.getcwd(-1, 0)) == vim.fn.resolve(worktree), ":tcd reaches the worktree: " .. vim.fn.getcwd(-1, 0))
 assert(vim.wait(3000, function()
-    return s.view.pr ~= nil
+    return review.view.pr ~= nil
 end), "the engine synced")
 
 local files = {}
 for _, name in ipairs(hostile) do
     files[#files + 1] = { path = name, additions = 1, deletions = 0, viewed = "UNVIEWED", threads = 0 }
 end
-session.show(s, { pr = { number = 21, title = "Hostile" }, files = files, viewedCount = 0, threadCount = 0 })
+session.show(review, { pr = { number = 21, title = "Hostile" }, files = files, viewedCount = 0, threadCount = 0 })
 
 for index, name in ipairs(hostile) do
-    vim.api.nvim_set_current_win(s.panel.win)
-    vim.api.nvim_win_set_cursor(s.panel.win, { 4 + index, 0 })
-    panel_view.open_file_under_cursor(s)
+    vim.api.nvim_set_current_win(review.panel.win)
+    vim.api.nvim_win_set_cursor(review.panel.win, { 4 + index, 0 })
+    panel_view.open_file_under_cursor(review)
     local opened = vim.api.nvim_buf_get_name(0)
     assert(vim.g.pwned == nil, "opening " .. name .. " ran code")
     assert(vim.fn.resolve(opened) == vim.fn.resolve(worktree .. "/" .. name), ("%q opens itself, not %q"):format(name, opened))
@@ -50,22 +50,22 @@ end
 
 -- A multi-line error or name is drawn on one line instead of raising.
 local multi_line = "error connecting to api.github.com\ncheck your internet connection or https://githubstatus.com\n"
-session.on_notification(s, "event", { type = "syncFailed", message = multi_line })
-local lines = vim.api.nvim_buf_get_lines(s.panel.buf, 0, -1, false)
+session.on_notification(review, "event", { type = "syncFailed", message = multi_line })
+local lines = vim.api.nvim_buf_get_lines(review.panel.buf, 0, -1, false)
 assert(
     lines[3] == "sync failed: error connecting to api.github.com check your internet connection or https://githubstatus.com",
     vim.inspect(lines)
 )
 
-session.show(s, {
+session.show(review, {
     pr = { number = 21, title = "Two\nlines" },
     files = { { path = "new\nline.md", additions = 1, deletions = 0, viewed = "UNVIEWED", threads = 0 } },
     viewedCount = 0,
     threadCount = 0,
 })
-lines = vim.api.nvim_buf_get_lines(s.panel.buf, 0, -1, false)
+lines = vim.api.nvim_buf_get_lines(review.panel.buf, 0, -1, false)
 assert(lines[1] == "#21 Two lines" and lines[5] == "  new line.md  +1 -0", vim.inspect(lines))
-assert(s.panel.paths[5] == "new\nline.md", "the real path is kept for opening")
+assert(review.panel.paths[5] == "new\nline.md", "the real path is kept for opening")
 
 session.close_current()
 print("untrusted_text_spec: ok")

@@ -25,14 +25,14 @@ dofile(root .. "/plugin/jpr.lua")
 assert(vim.api.nvim_get_commands({})["Jpr"] ~= nil, ":Jpr exists")
 
 local messages = {}
-vim.notify = function(msg, level)
-    messages[#messages + 1] = { msg = msg, level = level }
+vim.notify = function(message, level)
+    messages[#messages + 1] = { text = message, level = level }
 end
 jpr.command({ "frobnicate" })
 assert(messages[1].level == vim.log.levels.ERROR, "an unknown subcommand is an error")
-assert(messages[1].msg:find("unknown subcommand", 1, true), messages[1].msg)
+assert(messages[1].text:find("unknown subcommand", 1, true), messages[1].text)
 jpr.command({ "open", "abc" })
-assert(messages[2].msg:find("usage", 1, true), "open without a number shows the usage")
+assert(messages[2].text:find("usage", 1, true), "open without a number shows the usage")
 
 local opened = {}
 package.loaded["jpr.session"] = {

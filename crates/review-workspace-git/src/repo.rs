@@ -6,22 +6,22 @@ use crate::process::run;
 
 /// The main checkout's root, even when `dir` is inside a linked worktree.
 pub fn main_repo_root(dir: &Path) -> Result<PathBuf> {
-    let common = run(
+    let stdout = run(
         "git",
         &["rev-parse", "--path-format=absolute", "--git-common-dir"],
         dir,
     )
     .context("finding the repository (is this a git checkout?)")?;
-    let common = PathBuf::from(common.trim());
-    if common.file_name().is_some_and(|name| name == ".git") {
-        return common
+    let common_dir = PathBuf::from(stdout.trim());
+    if common_dir.file_name().is_some_and(|name| name == ".git") {
+        return common_dir
             .parent()
             .map(Path::to_path_buf)
             .context("the git directory has no parent");
     }
     bail!(
         "{} is a bare repository; open the pull request from a checkout",
-        common.display()
+        common_dir.display()
     )
 }
 

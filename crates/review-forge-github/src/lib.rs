@@ -67,13 +67,13 @@ impl GhForge {
         mut page: impl FnMut(&Value) -> Result<(Vec<T>, Option<String>)>,
     ) -> Result<Vec<T>> {
         let mut items = Vec::new();
-        let mut after: Option<String> = None;
+        let mut after_cursor: Option<String> = None;
         loop {
-            let data = self.graphql(query, &json!({ "pr": pr.node_id, "after": after }))?;
-            let (batch, next) = page(&data)?;
-            items.extend(batch);
-            match next {
-                Some(cursor) => after = Some(cursor),
+            let data = self.graphql(query, &json!({ "pr": pr.node_id, "after": after_cursor }))?;
+            let (page_items, next_cursor) = page(&data)?;
+            items.extend(page_items);
+            match next_cursor {
+                Some(cursor) => after_cursor = Some(cursor),
                 None => return Ok(items),
             }
         }
@@ -90,19 +90,19 @@ impl Forge for GhForge {
     fn fetch(&self, pr: &PullRequest) -> Result<ForgeSnapshot> {
         let mut head_sha = pr.head_sha.clone();
         let threads = self.paged(graphql::THREADS, pr, |data| {
-            let (head, threads, next) = graphql::parse_threads_page(data)?;
-            if !head.is_empty() {
-                head_sha = head;
+            let (page_head_sha, threads, next_cursor) = graphql::parse_threads_page(data)?;
+            if !page_head_sha.is_empty() {
+                head_sha = page_head_sha;
             }
-            Ok((threads, next))
+            Ok((threads, next_cursor))
         })?;
         let files = self.paged(graphql::FILES, pr, graphql::parse_files_page)?;
-        let pending = graphql::parse_pending_review(
+        let pending_review = graphql::parse_pending_review(
             &self.graphql(graphql::PENDING_REVIEW, &json!({ "pr": pr.node_id }))?,
         );
         Ok(ForgeSnapshot {
             head_sha,
-            has_pending_review: pending.is_some(),
+            has_pending_review: pending_review.is_some(),
             threads,
             files,
         })

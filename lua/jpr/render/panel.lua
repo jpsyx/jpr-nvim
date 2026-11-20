@@ -4,6 +4,8 @@ local M = {}
 
 local VIEWED_MARK = { VIEWED = "✓", DISMISSED = "●", UNVIEWED = " " }
 
+--- How long ago `seconds` was, in the largest whole unit up to hours, for
+--- example `2m ago`, for the panel's sync line.
 function M.age(seconds)
     if seconds < 60 then
         return ("%ds ago"):format(seconds)
@@ -31,11 +33,14 @@ function M.sync_text(sync, now)
     return "sync failed: " .. M.one_line(sync.message or "unknown error"), "JprError"
 end
 
+--- The panel's contents for `view` at time `now` (Unix seconds): its lines,
+--- their highlights, and which file each line shows, for the panel window to
+--- draw and to open files from.
 --- @return table { lines: string[], highlights: { line, col_start, col_end, group }[], paths: table<integer, string> }
 --- `line` is 0-based and columns are byte offsets; `paths` is keyed by 1-based line number.
 function M.build(view, now)
     local lines, highlights, paths = {}, {}, {}
-    local function add(text, group)
+    local function add_line(text, group)
         lines[#lines + 1] = text
         if group then
             highlights[#highlights + 1] = { line = #lines - 1, col_start = 0, col_end = #text, group = group }
@@ -43,11 +48,11 @@ function M.build(view, now)
     end
 
     local pr = view.pr
-    add(pr and ("#%d %s"):format(pr.number, M.one_line(pr.title)) or "Loading pull request…", "JprTitle")
+    add_line(pr and ("#%d %s"):format(pr.number, M.one_line(pr.title)) or "Loading pull request…", "JprTitle")
     local files = view.files or {}
-    add(("viewed %d/%d · threads %d"):format(view.viewedCount or 0, #files, view.threadCount or 0), "JprMuted")
-    add(M.sync_text(view.sync, now))
-    add("")
+    add_line(("viewed %d/%d · threads %d"):format(view.viewedCount or 0, #files, view.threadCount or 0), "JprMuted")
+    add_line(M.sync_text(view.sync, now))
+    add_line("")
 
     for _, file in ipairs(files) do
         local mark = VIEWED_MARK[file.viewed] or " "
@@ -55,7 +60,7 @@ function M.build(view, now)
         local stats = ("%s -%d"):format(plus, file.deletions)
         local threads = file.threads > 0 and (" [%d]"):format(file.threads) or ""
         local shown_path = M.one_line(file.path)
-        add(("%s %s  %s%s"):format(mark, shown_path, stats, threads))
+        add_line(("%s %s  %s%s"):format(mark, shown_path, stats, threads))
         local line = #lines - 1
         paths[#lines] = file.path
         if file.viewed == "VIEWED" then

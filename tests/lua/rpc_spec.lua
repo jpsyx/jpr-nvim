@@ -21,14 +21,14 @@ local client = assert(rpc.start({ root .. "/tests/lua/fixtures/fake_engine.sh" }
     end,
 }))
 
-local init
+local initialize_answer
 client:request("initialize", { protocolVersion = rpc.PROTOCOL_VERSION }, function(err, result)
-    init = { err = err, result = result }
+    initialize_answer = { err = err, result = result }
 end)
 assert(vim.wait(2000, function()
-    return init ~= nil
+    return initialize_answer ~= nil
 end), "initialize is answered")
-assert(init.err == nil and init.result.protocolVersion == 1, vim.inspect(init))
+assert(initialize_answer.err == nil and initialize_answer.result.protocolVersion == 1, vim.inspect(initialize_answer))
 
 local synced
 client:request("sync", nil, function(err, result)
@@ -58,11 +58,11 @@ assert(vim.wait(2000, function()
     return stopped and exited ~= nil
 end), "shutdown ends the process")
 
-local late
+local late_error
 client:request("snapshot", nil, function(err)
-    late = err
+    late_error = err
 end)
-assert(late and late.message:find("not running", 1, true), "requests after exit fail at once")
+assert(late_error and late_error.message:find("not running", 1, true), "requests after exit fail at once")
 
 local missing, missing_err = rpc.start({ root .. "/tests/lua/fixtures/missing-engine" }, {})
 assert(missing == nil and missing_err:find("could not start", 1, true), "a binary that is not executable is an error, not a raise")

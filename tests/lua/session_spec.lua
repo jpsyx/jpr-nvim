@@ -33,20 +33,20 @@ vim.fn.mkdir(worktree, "p")
 vim.fn.writefile({ "hello" }, worktree .. "/README.md")
 
 session.start({ worktree = worktree, repo = "octo/widgets", number = 7 })
-local s = session.current()
-assert(s and s.number == 7, "the tab has a session")
+local review = session.current()
+assert(review and review.number == 7, "the tab has a session")
 assert(vim.fn.resolve(vim.fn.getcwd(-1, 0)) == vim.fn.resolve(worktree), "the tab's directory is the worktree")
 
 assert(vim.wait(3000, function()
-    return vim.api.nvim_buf_get_lines(s.panel.buf, 0, 1, false)[1] == "#7 Fix the widget"
+    return vim.api.nvim_buf_get_lines(review.panel.buf, 0, 1, false)[1] == "#7 Fix the widget"
 end), "the panel shows the synced pull request")
-local lines = vim.api.nvim_buf_get_lines(s.panel.buf, 0, -1, false)
+local lines = vim.api.nvim_buf_get_lines(review.panel.buf, 0, -1, false)
 assert(lines[5] == "✓ README.md  +2 -1 [1]", vim.inspect(lines))
 
-vim.api.nvim_set_current_win(s.panel.win)
-vim.api.nvim_win_set_cursor(s.panel.win, { 5, 0 })
-panel_view.open_file_under_cursor(s)
-assert(vim.api.nvim_get_current_win() ~= s.panel.win, "the file opens beside the panel")
+vim.api.nvim_set_current_win(review.panel.win)
+vim.api.nvim_win_set_cursor(review.panel.win, { 5, 0 })
+panel_view.open_file_under_cursor(review)
+assert(vim.api.nvim_get_current_win() ~= review.panel.win, "the file opens beside the panel")
 assert(vim.fn.resolve(vim.api.nvim_buf_get_name(0)) == vim.fn.resolve(worktree .. "/README.md"), "the worktree file opens")
 
 -- :Jpr open refocuses the tab only for the same repository.

@@ -101,11 +101,13 @@ fn is_pr_worktree(main: &Path, path: &Path, number: u64) -> bool {
         return false;
     };
     let mut lines = stdout.lines();
-    let (Some(top), Some(common), Some(branch)) = (lines.next(), lines.next(), lines.next()) else {
+    let (Some(toplevel), Some(common_dir), Some(branch)) =
+        (lines.next(), lines.next(), lines.next())
+    else {
         return false;
     };
-    is_same_path(Path::new(top), path)
-        && is_same_path(Path::new(common), &main.join(".git"))
+    is_same_path(Path::new(toplevel), path)
+        && is_same_path(Path::new(common_dir), &main.join(".git"))
         && branch == pr_branch(number)
 }
 

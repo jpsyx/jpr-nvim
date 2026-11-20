@@ -1,6 +1,7 @@
 -- jpr: review GitHub pull requests in Neovim, backed by the jpr-review engine.
 local M = {}
 
+--- The options `setup` starts from; a user's options override any of them.
 M.defaults = {
     -- The engine binary.
     binary = "jpr-review",
@@ -11,10 +12,16 @@ M.defaults = {
     panel_width = 44,
 }
 
+--- The options in effect: the defaults merged with what `setup` was given.
+--- Every module reads its settings from here.
 M.config = vim.deepcopy(M.defaults)
 
+--- The `:Jpr` subcommands, in the order completion offers them.
 M.subcommands = { "open", "sync", "close" }
 
+--- Links the panel's highlight groups to the colorscheme's, without
+--- replacing any link the user set. Runs at `setup` and again when a review
+--- starts, so the groups exist even without a `setup` call.
 function M.define_highlights()
     local links = {
         JprTitle = "Title",
@@ -30,6 +37,8 @@ function M.define_highlights()
     end
 end
 
+--- Configures the plugin from a user's `opts` (see `defaults`), for example
+--- from `require("jpr").setup({ worktree_cmd = "wt pr {n}" })`.
 function M.setup(opts)
     M.config = vim.tbl_deep_extend("force", vim.deepcopy(M.defaults), opts or {})
     M.define_highlights()
@@ -57,29 +66,31 @@ function M.complete(arglead, cmdline)
     end, M.subcommands)
 end
 
+--- Tells the user something failed, as a `jpr:` error notification.
 function M.error(message)
     vim.notify("jpr: " .. message, vim.log.levels.ERROR)
 end
 
+--- Tells the user what the plugin is doing, as a `jpr:` notification.
 function M.info(message)
     vim.notify("jpr: " .. message, vim.log.levels.INFO)
 end
 
 --- Runs `:Jpr <fargs>`.
 function M.command(fargs)
-    local sub = fargs[1]
-    if sub == "open" then
+    local subcommand = fargs[1]
+    if subcommand == "open" then
         local number, repo = M.parse_pr_arg(fargs[2])
         if not number then
             return M.error("usage: :Jpr open <number | #number | pull request URL>")
         end
         require("jpr.session").open(number, repo)
-    elseif sub == "sync" then
+    elseif subcommand == "sync" then
         require("jpr.session").sync_current()
-    elseif sub == "close" then
+    elseif subcommand == "close" then
         require("jpr.session").close_current()
     else
-        M.error(("unknown subcommand %q; expected one of: %s"):format(tostring(sub), table.concat(M.subcommands, ", ")))
+        M.error(("unknown subcommand %q; expected one of: %s"):format(tostring(subcommand), table.concat(M.subcommands, ", ")))
     end
 end
 

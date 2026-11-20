@@ -29,13 +29,13 @@ assert(vim.deep_equal(built.lines, {
 assert(built.paths[5] == "src/a.rs" and built.paths[7] == "docs/x.md" and built.paths[4] == nil, vim.inspect(built.paths))
 
 local function highlighted(result, group)
-    local out = {}
-    for _, hl in ipairs(result.highlights) do
-        if hl.group == group then
-            out[#out + 1] = result.lines[hl.line + 1]:sub(hl.col_start + 1, hl.col_end)
+    local texts = {}
+    for _, highlight in ipairs(result.highlights) do
+        if highlight.group == group then
+            texts[#texts + 1] = result.lines[highlight.line + 1]:sub(highlight.col_start + 1, highlight.col_end)
         end
     end
-    return out
+    return texts
 end
 assert(vim.deep_equal(highlighted(built, "JprAdded"), { "+12", "+1", "+4" }), vim.inspect(highlighted(built, "JprAdded")))
 assert(vim.deep_equal(highlighted(built, "JprRemoved"), { "-3", "-0", "-4" }), vim.inspect(highlighted(built, "JprRemoved")))

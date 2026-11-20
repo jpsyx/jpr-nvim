@@ -1,6 +1,8 @@
 -- Newline-delimited JSON-RPC client for the jpr-review engine (docs/protocol.md).
 local M = {}
 
+--- The protocol version this client speaks. `initialize` must report the same
+--- one, or the session refuses the engine.
 M.PROTOCOL_VERSION = 1
 
 --- Splits job output into complete lines. `data` follows jobstart's on_stdout
@@ -9,9 +11,9 @@ M.PROTOCOL_VERSION = 1
 function M.split_chunks(pending, data)
     local lines = {}
     local current = pending .. (data[1] or "")
-    for i = 2, #data do
+    for index = 2, #data do
         lines[#lines + 1] = current
-        current = data[i]
+        current = data[index]
     end
     return lines, current
 end
@@ -123,6 +125,8 @@ function Client:request(method, params, callback)
     end
 end
 
+--- Stops the engine process, unless it already exited. Its `on_exit` still
+--- runs.
 function Client:stop()
     if not self.exited then
         vim.fn.jobstop(self.job)

@@ -3,7 +3,7 @@ local render = require("jpr.render.panel")
 
 local M = {}
 
-local ns = vim.api.nvim_create_namespace("jpr-panel")
+local namespace = vim.api.nvim_create_namespace("jpr-panel")
 
 --- Opens the panel on the left of the current tab for `session`.
 function M.open(session)
@@ -52,9 +52,15 @@ function M.render(session, view)
     vim.bo[panel.buf].modifiable = true
     vim.api.nvim_buf_set_lines(panel.buf, 0, -1, false, built.lines)
     vim.bo[panel.buf].modifiable = false
-    vim.api.nvim_buf_clear_namespace(panel.buf, ns, 0, -1)
-    for _, hl in ipairs(built.highlights) do
-        vim.api.nvim_buf_set_extmark(panel.buf, ns, hl.line, hl.col_start, { end_col = hl.col_end, hl_group = hl.group })
+    vim.api.nvim_buf_clear_namespace(panel.buf, namespace, 0, -1)
+    for _, highlight in ipairs(built.highlights) do
+        vim.api.nvim_buf_set_extmark(
+            panel.buf,
+            namespace,
+            highlight.line,
+            highlight.col_start,
+            { end_col = highlight.col_end, hl_group = highlight.group }
+        )
     end
 end
 

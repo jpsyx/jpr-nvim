@@ -5,12 +5,16 @@ local panel = require("jpr.views.panel")
 
 local M = {}
 
+--- The open sessions, keyed by tab page handle. A session is registered only
+--- once its panel and engine are up.
 M.by_tab = {}
 
 local function jpr()
     return require("jpr")
 end
 
+--- The session open in the current tab, or nil, for the commands that act on
+--- the current review.
 function M.current()
     return M.by_tab[vim.api.nvim_get_current_tabpage()]
 end
@@ -31,18 +35,18 @@ end
 
 --- The JSON object on the last non-empty line of `checkout`'s stdout.
 function M.parse_checkout(stdout)
-    local last
+    local last_line
     for line in (stdout or ""):gmatch("[^\n]+") do
         if vim.trim(line) ~= "" then
-            last = line
+            last_line = line
         end
     end
-    if not last then
+    if not last_line then
         return nil, "jpr-review checkout printed nothing"
     end
-    local ok, info = pcall(vim.json.decode, last)
+    local ok, info = pcall(vim.json.decode, last_line)
     if not ok or type(info) ~= "table" or not info.worktree or not info.repo then
-        return nil, "unexpected checkout output: " .. last
+        return nil, "unexpected checkout output: " .. last_line
     end
     return info
 end
@@ -191,11 +195,15 @@ function M.start(info)
     handshake(session, client)
 end
 
+--- Keeps `view` as the session's latest and redraws its panel from it, for
+--- every view the engine answers with or announces.
 function M.show(session, view)
     session.view = view
     panel.render(session, view)
 end
 
+--- Asks the engine to sync `session` with GitHub now; the panel redraws from
+--- the answer, and a failure is reported to the user.
 function M.sync(session)
     if not session.client then
         return jpr().error(
@@ -210,6 +218,8 @@ function M.sync(session)
     end)
 end
 
+--- Handles a notification from `session`'s engine: a sync event redraws the
+--- panel, and a protocol error is reported to the user.
 function M.on_notification(session, method, params)
     if method == "event" and params and params.type == "synced" then
         M.show(session, params.view)
@@ -221,6 +231,8 @@ function M.on_notification(session, method, params)
     end
 end
 
+--- Handles `session`'s engine exiting. An exit the session did not ask for
+--- forgets the session and reports the exit code and the engine's stderr.
 function M.on_exit(session, code, stderr)
     session.client = nil
     if session.closing then
@@ -231,6 +243,7 @@ function M.on_exit(session, code, stderr)
     jpr().error(("the review engine for PR #%d stopped (exit %d)%s"):format(session.number, code, detail))
 end
 
+--- `:Jpr sync`: syncs the current tab's session now.
 function M.sync_current()
     local session = M.current()
     if not session then
@@ -239,6 +252,8 @@ function M.sync_current()
     M.sync(session)
 end
 
+--- `:Jpr close`: stops the current tab's engine, closes the tab and forgets
+--- the session.
 function M.close_current()
     local session = M.current()
     if not session then
