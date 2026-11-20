@@ -89,7 +89,7 @@ assert(sessions_for(8) == 0, "a failed spawn registers nothing")
 assert(tab_count() == tabs_before, "a failed spawn leaves no stray tab")
 
 -- A protocol mismatch stops the engine and forgets its session.
-vim.env.FAKE_ENGINE_PROTOCOL = "2"
+vim.env.FAKE_ENGINE_PROTOCOL = "99"
 jpr.setup({ binary = fake_engine })
 messages = {}
 tabs_before = tab_count()

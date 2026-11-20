@@ -15,6 +15,7 @@ fakes = []
 anyhow.workspace = true
 serde.workspace = true
 review-model.workspace = true
+review-diff.workspace = true
 
 [lints]
 workspace = true

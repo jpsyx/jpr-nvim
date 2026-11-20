@@ -1,8 +1,9 @@
 //! The file-backed review store: one directory per pull request and one JSON
-//! file per concern. Each file is a versioned envelope (see the `format` module),
-//! written atomically: a temporary file unique to the write, then a rename and
-//! a directory flush. A crash leaves each file either old or new, never half
-//! of either, and concurrent writers never interleave inside one file.
+//! file per concern (`session.json`, `viewed.json`, `github.json`). Each file
+//! is a versioned envelope (see the `format` module), written atomically: a
+//! temporary file unique to the write, then a rename and a directory flush. A
+//! crash leaves each file either old or new, never half of either, and
+//! concurrent writers never interleave inside one file.
 
 mod atomic;
 mod format;
@@ -14,7 +15,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use review_core::ports::{ReviewStore, StoreSnapshot};
 
-pub use format::{SESSION_VERSION, VIEWED_VERSION};
+pub use format::{GITHUB_VERSION, OLDEST_SESSION_VERSION, SESSION_VERSION, VIEWED_VERSION};
 pub use paths::state_dir;
 
 /// The file, in a pull request's state directory, that holds the daemon and
@@ -23,6 +24,9 @@ pub const SESSION_FILE: &str = "session.json";
 /// The file, in a pull request's state directory, that holds the changed files
 /// and their viewed state.
 pub const VIEWED_FILE: &str = "viewed.json";
+/// The file, in a pull request's state directory, that holds what the engine
+/// still owes GitHub, such as viewed marks it could not send.
+pub const GITHUB_FILE: &str = "github.json";
 
 /// A [`ReviewStore`] in one directory.
 #[derive(Debug, Clone)]
@@ -48,23 +52,41 @@ impl ReviewStore for FsStore {
     fn load(&self) -> Result<StoreSnapshot> {
         let session = load_file(&self.dir.join(SESSION_FILE), format::decode_session)?;
         let files = load_file(&self.dir.join(VIEWED_FILE), format::decode_files)?;
+        let registry = load_file(&self.dir.join(GITHUB_FILE), format::decode_registry)?;
         Ok(StoreSnapshot {
             session: session.unwrap_or_default(),
             files: files.unwrap_or_default(),
+            registry: registry.unwrap_or_default(),
         })
     }
 
     fn save(&self, snapshot: &StoreSnapshot) -> Result<()> {
-        // Check both files before writing either, so a refusal changes nothing.
+        // Check every file before writing any, so a refusal changes nothing.
         refuse_newer_file(&self.dir.join(SESSION_FILE), SESSION_VERSION)?;
         refuse_newer_file(&self.dir.join(VIEWED_FILE), VIEWED_VERSION)?;
+        refuse_newer_file(&self.dir.join(GITHUB_FILE), GITHUB_VERSION)?;
+        let encoded = snapshot_to_encoded_files(snapshot)?;
         fs::create_dir_all(&self.dir)
             .with_context(|| format!("creating {}", self.dir.display()))?;
-        let session = format::encode_session(&snapshot.session)?;
-        atomic::write_atomic(&self.dir, SESSION_FILE, &session)?;
-        let files = format::encode_files(&snapshot.files)?;
-        atomic::write_atomic(&self.dir, VIEWED_FILE, &files)
+        for (name, bytes) in &encoded {
+            atomic::write_atomic(&self.dir, name, bytes)?;
+        }
+        Ok(())
     }
+}
+
+/// Every file of `snapshot`, encoded before any is written, in the order
+/// `save` writes them.
+///
+/// `github.json` goes first. The queue only shrinks after GitHub accepts a
+/// mark and only grows for a mark held locally, so a crash between files can
+/// resend a mark but never lose a refused one or revive one the reviewer undid.
+fn snapshot_to_encoded_files(snapshot: &StoreSnapshot) -> Result<[(&'static str, Vec<u8>); 3]> {
+    Ok([
+        (GITHUB_FILE, format::encode_registry(&snapshot.registry)?),
+        (SESSION_FILE, format::encode_session(&snapshot.session)?),
+        (VIEWED_FILE, format::encode_files(&snapshot.files)?),
+    ])
 }
 
 /// Decodes `path` with `decode`; a missing file is `None`, a corrupt or
@@ -118,7 +140,20 @@ mod tests {
         snapshot.files = (0..round % 7)
             .map(|index| changed_file(&format!("src/{index}.rs"), ViewedState::Viewed))
             .collect();
+        snapshot.registry.queued_viewed = (0..round % 5)
+            .map(|index| (format!("src/{index}.rs"), index % 2 == 0))
+            .collect();
         snapshot
+    }
+
+    #[test]
+    fn the_queue_is_written_before_the_files_it_corrects() {
+        let encoded = snapshot_to_encoded_files(&StoreSnapshot::default()).unwrap();
+        let names = encoded.map(|(name, _)| name);
+        assert_eq!(names[0], GITHUB_FILE);
+        let mut sorted = names;
+        sorted.sort_unstable();
+        assert_eq!(sorted, [GITHUB_FILE, SESSION_FILE, VIEWED_FILE]);
     }
 
     #[test]
@@ -149,7 +184,10 @@ mod tests {
         FsStore::new(dir.path())
             .save(&StoreSnapshot::default())
             .unwrap();
-        assert_eq!(file_names(dir.path()), ["session.json", "viewed.json"]);
+        assert_eq!(
+            file_names(dir.path()),
+            ["github.json", "session.json", "viewed.json"]
+        );
     }
 
     #[test]
@@ -192,6 +230,39 @@ mod tests {
             newer
         );
         assert!(!dir.path().join(VIEWED_FILE).exists());
+        assert!(!dir.path().join(GITHUB_FILE).exists());
+    }
+
+    #[test]
+    fn a_newer_github_file_blocks_every_write() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join(GITHUB_FILE), r#"{"version": 9}"#).unwrap();
+        let error = FsStore::new(dir.path())
+            .save(&StoreSnapshot::default())
+            .unwrap_err();
+        assert!(format!("{error:#}").contains("github.json"), "{error:#}");
+        assert!(!dir.path().join(SESSION_FILE).exists());
+    }
+
+    /// Saves 100 rounds' snapshots, starting at round `offset`, and returns
+    /// the errors of the saves that failed.
+    fn save_rounds(store: &FsStore, offset: usize) -> Vec<String> {
+        (0..100)
+            .filter_map(|round| store.save(&snapshot_for_round(round + offset)).err())
+            .map(|error| format!("{error:#}"))
+            .collect()
+    }
+
+    /// Loads again and again until `is_writing_done` holds, and returns the
+    /// errors of the loads that failed.
+    fn load_until_done(store: &FsStore, is_writing_done: &AtomicBool) -> Vec<String> {
+        let mut errors = Vec::new();
+        while !is_writing_done.load(Ordering::Relaxed) {
+            if let Err(error) = store.load() {
+                errors.push(format!("{error:#}"));
+            }
+        }
+        errors
     }
 
     #[test]
@@ -201,26 +272,9 @@ mod tests {
         store.save(&snapshot_for_round(0)).unwrap();
         let is_writing_done = AtomicBool::new(false);
         let (save_errors, load_errors) = thread::scope(|scope| {
-            let save_rounds = |offset: usize| {
-                let store = &store;
-                move || {
-                    (0..100)
-                        .filter_map(|round| store.save(&snapshot_for_round(round + offset)).err())
-                        .map(|error| format!("{error:#}"))
-                        .collect::<Vec<_>>()
-                }
-            };
-            let first_writer = scope.spawn(save_rounds(0));
-            let second_writer = scope.spawn(save_rounds(1));
-            let reader = scope.spawn(|| {
-                let mut errors = Vec::new();
-                while !is_writing_done.load(Ordering::Relaxed) {
-                    if let Err(error) = store.load() {
-                        errors.push(format!("{error:#}"));
-                    }
-                }
-                errors
-            });
+            let first_writer = scope.spawn(|| save_rounds(&store, 0));
+            let second_writer = scope.spawn(|| save_rounds(&store, 1));
+            let reader = scope.spawn(|| load_until_done(&store, &is_writing_done));
             let mut save_errors = first_writer.join().unwrap();
             save_errors.extend(second_writer.join().unwrap());
             is_writing_done.store(true, Ordering::Relaxed);
@@ -238,6 +292,9 @@ mod tests {
             load_errors.len(),
             load_errors.first()
         );
-        assert_eq!(file_names(dir.path()), ["session.json", "viewed.json"]);
+        assert_eq!(
+            file_names(dir.path()),
+            ["github.json", "session.json", "viewed.json"]
+        );
     }
 }

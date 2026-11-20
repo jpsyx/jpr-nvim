@@ -1,9 +1,25 @@
--- The PR panel window: draws render.panel output and opens files on <CR>.
+-- The PR panel window: draws render.panel output, opens files on <CR> and
+-- toggles viewed on v.
 local render = require("jpr.render.panel")
 
 local M = {}
 
 local namespace = vim.api.nvim_create_namespace("jpr-panel")
+
+--- The panel's look in `win`, local to the window: `vim.wo` would also set
+--- the window's global values, which a window split from the panel (the main
+--- window, when there is none) would inherit for the files it opens.
+local function style_window(win)
+    local function set(name, value)
+        vim.api.nvim_set_option_value(name, value, { win = win, scope = "local" })
+    end
+    set("number", false)
+    set("relativenumber", false)
+    set("signcolumn", "no")
+    set("winfixwidth", true)
+    set("cursorline", true)
+    set("wrap", false)
+end
 
 --- Opens the panel on the left of the current tab for `session`.
 function M.open(session)
@@ -20,16 +36,14 @@ function M.open(session)
     local win = vim.api.nvim_get_current_win()
     vim.api.nvim_win_set_buf(win, buf)
     vim.api.nvim_win_set_width(win, require("jpr").config.panel_width)
-    vim.wo[win].number = false
-    vim.wo[win].relativenumber = false
-    vim.wo[win].signcolumn = "no"
-    vim.wo[win].winfixwidth = true
-    vim.wo[win].cursorline = true
-    vim.wo[win].wrap = false
+    style_window(win)
     session.panel = { buf = buf, win = win, paths = {} }
     vim.keymap.set("n", "<CR>", function()
         M.open_file_under_cursor(session)
     end, { buffer = buf, desc = "Open the file under the cursor" })
+    vim.keymap.set("n", "v", function()
+        M.toggle_viewed_under_cursor(session)
+    end, { buffer = buf, desc = "Toggle viewed for the file under the cursor" })
     M.render(session, session.view or {})
 end
 
@@ -64,29 +78,31 @@ function M.render(session, view)
     end
 end
 
---- Opens the file on the cursor line in the window beside the panel.
+--- Opens the file on the cursor line in the main window beside the panel.
 function M.open_file_under_cursor(session)
     local panel = session.panel
     local path = panel.paths[vim.api.nvim_win_get_cursor(panel.win)[1]]
     if not path then
         return
     end
-    local target
-    for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
-        if win ~= panel.win then
-            target = win
-            break
+    local main_window = require("jpr.views.main_window")
+    main_window.edit(session, main_window.find(session), path)
+end
+
+--- Marks the file on the cursor line viewed, or unviewed when it is.
+function M.toggle_viewed_under_cursor(session)
+    local panel = session.panel
+    local path = panel.paths[vim.api.nvim_win_get_cursor(panel.win)[1]]
+    if not path then
+        return
+    end
+    local viewed
+    for _, file in ipairs((session.view and session.view.files) or {}) do
+        if file.path == path then
+            viewed = file.viewed
         end
     end
-    if not target then
-        vim.cmd("rightbelow vsplit")
-        target = vim.api.nvim_get_current_win()
-    end
-    vim.api.nvim_set_current_win(target)
-    -- The path comes from the pull request, so it is untrusted: anchored in the
-    -- worktree, so a leading `+cmd`, `~` or `-` is not special, and escaped, so
-    -- `%`, `#` and spaces are taken literally.
-    vim.cmd.edit(vim.fn.fnameescape(session.worktree .. "/" .. path))
+    require("jpr.session").request(session, "setViewed", { path = path, viewed = viewed ~= "VIEWED" }, function() end)
 end
 
 return M

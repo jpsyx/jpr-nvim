@@ -1,10 +1,12 @@
 //! Contract tests every adapter of a port must pass. Call them from the
 //! adapter's own tests with a fresh, empty instance.
 
+use std::collections::BTreeMap;
+
 use review_model::ViewedState;
 
 use crate::fakes::{changed_file, sample_pr};
-use crate::ports::{ReviewStore, SessionRecord, StoreSnapshot};
+use crate::ports::{ReviewStore, SessionRecord, StoreSnapshot, SyncRegistry};
 
 /// Checks a [`ReviewStore`] that starts empty.
 ///
@@ -28,6 +30,9 @@ pub fn check_review_store(store: &dyn ReviewStore) {
             changed_file("src/a.rs", ViewedState::Viewed),
             changed_file("src/b.rs", ViewedState::Dismissed),
         ],
+        registry: SyncRegistry {
+            queued_viewed: BTreeMap::from([("src/b.rs".to_owned(), true)]),
+        },
     };
     store.save(&first).expect("saving works");
     assert_eq!(
@@ -37,6 +42,7 @@ pub fn check_review_store(store: &dyn ReviewStore) {
     );
     let second = StoreSnapshot {
         files: vec![changed_file("src/c.rs", ViewedState::Unviewed)],
+        registry: SyncRegistry::default(),
         ..first
     };
     store.save(&second).expect("saving again works");

@@ -164,15 +164,318 @@ GitHub is unreachable later.
 
 ## The state files are versioned envelopes
 
-**Decision.** `session.json` and `viewed.json` each carry a top-level
-`"version"`. A file without one is corrupt, and a file with a newer version is
-refused and never overwritten.
+**Decision.** `session.json`, `viewed.json` and `github.json` each carry a
+top-level `"version"`. A file without one is corrupt, and a file with a newer
+version is refused and never overwritten.
 
 **Why.** The state outlives any one build, and later milestones add fields. An
 older build that rewrote a newer file would silently drop what it did not
 understand.
 
 **Consequences.** Changing a file's shape means bumping its version in
-`review-store-fs` and reading the old one. The two files are still written one
-after the other, not as a pair, and the state directory ignores the forge host
-and letter case; both are known limits for a later milestone.
+`review-store-fs` and reading the old one. The files are still written one
+after the other, not as a set, and the state directory ignores the forge host
+and letter case; both are known limits for a later milestone. `github.json` is
+written first: the queue only shrinks after GitHub accepts a mark and only
+grows for a mark held locally, so a crash between files can resend a mark but
+never lose a refused one or revive one the reviewer undid. A crash can leave
+`viewed.json` behind the queue, so opening a session applies the queued marks
+to the saved files.
+
+## Queued viewed marks are sent in order, stopping at the first refusal
+
+**Decision.** A viewed mark GitHub refuses stands locally and is queued in
+`github.json`. Every sync, and the retry between syncs, sends the queue in
+path order and stops at the first refusal. Every pull then drops the queued
+marks for files the pull request no longer changes, and lets the rest win
+over the viewed state it pulled.
+
+**Why.** A refusal is almost always GitHub being unreachable, and each send
+waits up to 30 seconds, so carrying on past a failure would only multiply the
+wait. A mark for a file a force-push or rename took out of the pull request
+is refused every time; dropping it on the next pull keeps it from holding up
+the marks queued after it.
+
+**Consequences.** A mark for a file that leaves the pull request is lost,
+which is harmless because GitHub has nothing to mark. A stale mark still
+holds up the queue until the next successful pull. A mark GitHub refuses
+every time for a file that is still changed would hold up the queue for
+good.
+
+**Revisit when.** GitHub refuses a mark for a reason other than being
+unreachable: tell the two apart and skip a mark refused for its own sake.
+
+## Paths and commits a pull request names are untrusted
+
+**Decision.** `GitWorkspace` reads a path only when it is written the way git
+names a file: relative, with no empty, `.` or `..` segment, and no `.git`
+segment in any letter case, which would reach the repository's own files
+(`.github/x` and `.gitignore` are fine, `./a`, `a/./b`, `a//b` and
+`.git/config` are not). The same rule applies on disk and
+at a commit, so both sides always read the same file. On disk, a path whose
+directories resolve out of the worktree is refused, a symlink reads as its
+target's path, the way git stores it, and is never followed, and anything
+else that is not a file, such as a directory or a named pipe, reads as
+nothing. A commit must be a full id, exactly 40 or 64 hex digits. File
+contents at a commit come from `git cat-file --batch`, which takes
+`commit:path` on stdin, and a path holding a newline, a carriage return or a
+NUL byte is refused because git would read a different file. Every git call
+clears `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_OBJECT_DIRECTORY`,
+`GIT_ALTERNATE_OBJECT_DIRECTORIES`, `GIT_COMMON_DIR`, `GIT_SHALLOW_FILE` and
+`GIT_PREFIX` (each one `git rev-parse --local-env-vars` lists), and renames come from the plumbing `git diff-index`,
+which never writes the reviewer's index.
+
+**Why.** Paths and commit ids come from GitHub, so anyone who opens a pull
+request chooses them. Without these checks a pull request could show the
+reviewer a file from outside the worktree, pass an option such as `--output`
+to git, or, with a short id, have git read a branch the pull request named
+instead of the commit. The repository variables would point git somewhere
+else when Neovim was started by `git commit`, which sets them for its editor.
+
+**Consequences.** No path ever reaches git as an argument or a pathspec, so
+none can be read as an option. Fetching a missing base commit runs with git's
+terminal prompts off and a deadline (`FETCH_TIMEOUT`, 90 seconds). Its
+output is read for at most a second after git exits or is killed, since a
+helper can hold the pipes open, and a timeout reports whatever git printed
+on stderr by then. `GIT_TERMINAL_PROMPT=0` does not stop an ssh passphrase
+or host key prompt, so where it goes depends on whether the engine has a
+terminal (`/dev/tty` opens):
+
+- With a terminal (run from a shell), the fetch gets its own process group.
+  A prompt in it cannot read the terminal's keystrokes, and the deadline
+  kills the whole group, ssh included, through the `kill` command. Where
+  `kill` cannot be run, only git is killed and the error says so.
+- Without one (Neovim's `jobstart`), nothing can prompt, and the fetch stays
+  in the engine's process group so Neovim's `jobstop` stops it, ssh
+  included, with the engine. The deadline then kills only git; an ssh it
+  started ends when the engine's group does.
+
+The fetch does not force ssh into batch mode, because that would override
+the reviewer's own ssh command.
+
+**Revisit when.** A real pull request needs a path with a line break in it.
+`git cat-file --batch -z` (git 2.38 and later) takes NUL-terminated requests
+and could read such a path instead of refusing it.
+
+## Diffs stop at a size and a time limit
+
+**Decision.** Each side of a diff holds at most 4 MiB (`MAX_DIFF_BYTES` in
+`review-core`'s `session/diffs.rs`). A file with a bigger side is not diffed:
+`fileDiff` fails with "too large to show", and the stream shows the file's
+header with a note saying the same. One file's line diff searches for at most
+2 seconds (`DIFF_DEADLINE` in `review-diff`) before it settles for a good
+answer rather than the best one. Line endings and the final newline are not
+diffed, so an added empty file, a change to the final newline only and a
+CRLF-only change show "no changes against the base".
+
+**Why.** Pull requests name the files, and a generated bundle or a file
+stored with Git LFS can be hundreds of megabytes: a 267 MB blob took 3
+seconds and 336 MB of memory to read, and the base cache keeps every base
+text it reads. Nobody reviews such a file line by line.
+
+**Consequences.** The size is checked after the `Workspace` port returns the
+bytes, so a big file is still read once in full and then dropped at once. A
+base found too large is remembered for its base commit and not read again;
+the file on disk is read on every request. Base texts under the limit stay
+cached with no total budget. The deadline restarts for every file, so a
+stream of N pathological files can take up to 2N seconds.
+
+**Revisit when.** Reading a big file once costs too much (ask git for the
+size first, with `git cat-file --batch-check`), a stream stalls on many slow
+files (pass one deadline down through the stream), or a reviewer needs a
+line ending change shown.
+
+## The stream's known limits
+
+**Decision.** The stream ships with four known limits. Folds are rebuilt on
+every draw, so a viewed file opened with `zo` closes again after `v`, a save
+or a sync. Folds are not mirrored between the split halves. Two reviews of
+the same pull request number in different repositories can clash on the
+`jpr://stream/<n>` buffer name (the name is only for display, so the second
+buffer stays unnamed). `<CR>` on a deleted file's row opens an empty buffer
+at that path, as the panel does.
+
+**Why.** Each needs state the stream does not keep yet (open folds per file,
+fold events from the other half, the repository in the name), and none loses
+or corrupts anything.
+
+**Revisit when.** Reviewers open viewed files in the stream often, or a
+second repository's review is open at the same time.
+
+## Line and word diffs come from `similar`
+
+**Decision.** `review-diff` uses `similar` 3 (slice API only, default features
+off but `std`): Histogram for line diffs, as git uses for code, and Myers over
+word tokens for the changed words inside a pair of lines.
+
+**Why.** A diff algorithm with deadlines and grouping into hunks is a lot of
+careful code to own; `similar` is small, has no required dependencies, and is
+the common choice in Rust.
+
+**Consequences.** The line diff's deadline is the one in "Diffs stop at a size
+and a time limit". Two paired lines get word highlights only when at least
+half their tokens match; otherwise the whole line counts as replaced, because
+marking nearly every word says less than marking none.
+
+**Revisit when.** Diffs need to match GitHub's line for line, or `similar`
+stops being maintained.
+
+## The engine computes every diff except the split view's
+
+**Decision.** The unified overlay and the stream are drawn from the engine's
+`FileDiffView` and `StreamView`. The split view of a single file uses
+Neovim's own `diff` mode on the engine's base text.
+
+**Why.** The spec chose native diff mode for split view: it scrolls, folds and
+edits like any Neovim diff, and the reviewer edits the real file in it. The
+other views are read models a terminal UI would draw too, so they belong in
+the engine.
+
+**Consequences.** In split view the line pairing is Neovim's, which can
+differ from the engine's in a few edge cases, and edits show before they
+are saved. The engine compares against the file on disk, so a save refreshes the
+overlay and the stream; edits not yet saved are not in them.
+
+## The view mode is a frontend preference
+
+**Decision.** Unified or split is remembered by the plugin in
+`stdpath("state")/jpr/view-mode`, not by the engine. The engine is told the
+mode on each `stream` request.
+
+**Why.** The choice is global across pull requests and is about how one
+frontend draws, which is not review state.
+
+## The base cache follows the base commit only
+
+**Decision.** The session keeps the merge base, the renames since it and the
+base texts it has read until the pull request's `baseSha` changes. It does not
+look at the worktree's checked-out `HEAD`.
+
+**Why.** The worktree only moves when the reviewer moves it, and finding the
+merge base and the renames on every request would cost three git calls each
+time (`cat-file -e` to check the base commit is there, `merge-base` and
+`diff-index`), plus a fetch when the base commit is missing.
+
+**Consequences.** A rebase, or a `git mv`, in the worktree under the same
+base commit keeps the old merge base and rename map until the base commit
+changes or the engine restarts, so diffs can compare against the wrong base
+text or miss a rename.
+
+**Revisit when.** The worktree fast-forward lands: moving `HEAD` then becomes
+the engine's own doing, and the cache should be keyed on `HEAD` too.
+
+## Base texts are read with one git process per file
+
+**Decision.** `GitWorkspace::file_at` starts one `git cat-file --batch`
+process per file. The first stream after a base commit is known reads every
+changed file's base this way; later requests hit the cache.
+
+**Why.** The `Workspace` port reads one file at a time, which keeps the port
+and its fake simple.
+
+**Consequences.** A pull request with hundreds of files starts hundreds of
+short git processes for its first stream.
+
+**Revisit when.** That first stream is slow enough to notice: a batched port
+method that sends every `commit:path` to one `git cat-file --batch` would fix
+it.
+
+## The poller wakes on a 20 second tick
+
+**Decision.** While it polls, the server's poller wakes every 20 seconds (or
+every `--poll` seconds when that is shorter) and syncs once a whole `--poll`
+interval has passed since the last sync.
+
+**Why.** One loop serves both the syncs and the retries of refused viewed
+marks, with the decision in the pure `get_poll_step_from_elapsed`.
+
+**Consequences.** A `--poll` above 20 seconds rounds up to a multiple of 20
+(`--poll 30` syncs every 40 seconds). The tick starts after the work of the
+last wake-up ends, so every interval also grows by the time spent in retries:
+offline, each retry can wait 30 seconds for `gh`.
+
+**Revisit when.** Someone needs syncs on an exact schedule.
+
+## The session lock is held during `gh` calls
+
+**Decision.** `setViewed` and the poller's retries call `gh` while they hold
+the one `Mutex<ReviewSession>`, as syncs do (see "Threads and channels, not an
+async runtime").
+
+**Why.** The mark, the queue and the saved state change together, and one
+lock keeps them consistent without an async runtime.
+
+**Consequences.** Offline, each retry holds the lock for up to 30 seconds and
+the next one starts 20 seconds after it ends, so requests that need no
+network, such as `fileDiff`, `stream` or `snapshot`, can queue behind a retry
+for up to 30 seconds.
+
+**Revisit when.** Diffs need to stay responsive offline: send to the forge
+outside the lock and apply the answer under it.
+
+## Some changed files show "no changes against the base"
+
+**Decision.** Line endings and the final newline are not diffed (see "Diffs
+stop at a size and a time limit"), so an added or deleted empty file, a
+change to the final newline only and a CRLF-only change have no hunks. The
+stream shows the note "no changes against the base" for them, and the
+unified overlay draws nothing, although GitHub lists the file as changed.
+
+**Why.** Buffer lines carry no line endings, so the overlay could not draw
+such a change on the file anyway.
+
+**Revisit when.** A reviewer needs to see these changes, for example as a
+note that names what changed.
+
+## The plugin's view-mode file is best effort
+
+**Decision.** `jpr.view_mode` creates `stdpath("state")/jpr` with
+`vim.fn.mkdir`, writes the mode with `writefile` inside a `pcall`, and takes
+`setup({ view = ... })` as given.
+
+**Why.** The mode is a convenience: a session works without it being
+remembered.
+
+**Consequences.** A state directory that cannot be created raises a Lua error
+out of `:Jpr toggle` (the mode has flipped in memory, but the views are not
+redrawn). A failed write is silent, so the mode is forgotten at the next
+start. An invalid `view` is not checked: files open as split diffs and the
+engine refuses the `stream` request as invalid params.
+
+**Revisit when.** Reviewers hit any of these: validate `view` in `setup`, and
+report a failed save once.
+
+## The panel's tree sorts names by their bytes
+
+**Decision.** `tree.rs` sorts each directory's directories and files by the
+bytes of their names, so the order is case-sensitive (`Zeta` before `alpha`).
+The stream keeps the order of GitHub's file list.
+
+**Why.** A byte order is simple, stable and the same on every platform.
+
+**Consequences.** The panel's order differs from GitHub's file tree, and the
+stream's order can differ from the panel's.
+
+**Revisit when.** Reviewers find files in the wrong place: sort the way
+GitHub's file tree does, and lay the stream out in the panel's order.
+
+## A failed save after queued marks landed is silent in serve mode
+
+**Decision.** When the poller's retry, or a sync whose pull failed, gets
+queued marks through but then cannot save, the error is dropped. A sync whose
+pull succeeded but whose save failed is dropped the same way by the poller.
+
+**Why.** No event carries a store error, and the poller has no request to
+answer. A sync whose pull failed reports the pull's error, the one that
+matters more, so a `sync` request in that case answers with the pull's error
+and the save's is lost. A `setViewed` request, and a `sync` request whose
+pull succeeded, still get the save error as their response.
+
+**Consequences.** The marks are on GitHub and the queue in memory has
+already shrunk, so the next save that succeeds writes the shorter queue.
+Until then no `viewedChanged` is sent (a failed pull still sends
+`syncFailed`), so the panel's waiting count can be stale, and a crash would
+resend marks that already landed, which is harmless.
+
+**Revisit when.** A store error needs to reach the reviewer: add an event for
+it.

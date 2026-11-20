@@ -13,8 +13,8 @@ assert(url_number == 12 and url_repo == "octo/gadgets", "a URL names its reposit
 assert(jpr.parse_pr_arg("abc") == nil, "not a number")
 assert(jpr.parse_pr_arg(nil) == nil, "missing")
 
-assert(vim.deep_equal(jpr.complete("", "Jpr "), { "open", "sync", "close" }), "all subcommands")
-assert(vim.deep_equal(jpr.complete("s", "Jpr s"), { "sync" }), "filtered subcommands")
+assert(vim.deep_equal(jpr.complete("", "Jpr "), { "open", "sync", "toggle", "stream", "close" }), "all subcommands")
+assert(vim.deep_equal(jpr.complete("s", "Jpr s"), { "sync", "stream" }), "filtered subcommands")
 assert(vim.deep_equal(jpr.complete("", "Jpr open "), {}), "nothing after the subcommand")
 
 jpr.setup({ worktree_cmd = "wt pr {n}" })
@@ -42,6 +42,16 @@ package.loaded["jpr.session"] = {
 }
 jpr.command({ "open", "https://github.com/octo/gadgets/pull/12" })
 assert(opened.number == 12 and opened.repo == "octo/gadgets", ":Jpr open passes the URL's repository on: " .. vim.inspect(opened))
+package.loaded["jpr.session"] = nil
+
+local toggled = false
+package.loaded["jpr.session"] = {
+    toggle_view = function()
+        toggled = true
+    end,
+}
+jpr.command({ "toggle" })
+assert(toggled, ":Jpr toggle flips the view")
 package.loaded["jpr.session"] = nil
 
 print("command_spec: ok")

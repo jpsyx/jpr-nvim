@@ -1,8 +1,9 @@
 # jpr-nvim
 
 Review GitHub pull requests in Neovim. `:Jpr open <number>` checks the pull
-request out into its own worktree and opens a tab with a panel of its changed
-files, viewed state and review threads, kept in sync with GitHub.
+request out into its own worktree and opens a tab with a file tree of its
+changes and a stream of every diff, kept in sync with GitHub. Every changed
+file opens as a diff, unified or split.
 
 The review engine (`jpr-review`) is a Rust workspace of frontend-neutral crates;
 the Neovim plugin is a thin Lua frontend over its JSON-RPC protocol. See
@@ -33,6 +34,9 @@ from one commit. With lazy.nvim:
     require("jpr").setup({
       -- Optional: a command that creates the worktree and prints its path.
       -- worktree_cmd = "my-worktree-tool pr {n}",
+      -- Optional: the diff view until you first run :Jpr toggle,
+      -- "unified" (the default) or "split".
+      -- view = "split",
     })
   end,
 }
@@ -44,9 +48,22 @@ from one commit. With lazy.nvim:
 | --- | --- |
 | `:Jpr open <n \| #n \| URL>` | Check the pull request out and open its review tab. A URL must be for the repository Neovim's directory is a checkout of |
 | `:Jpr sync` | Sync with GitHub now (it also syncs every minute) |
+| `:Jpr toggle` | Flip every diff between unified and split; the choice is remembered |
+| `:Jpr stream` | Show the stream of every change beside the panel |
 | `:Jpr close` | Stop the engine and close the tab |
 
-In the panel, `<CR>` opens the file under the cursor from the worktree.
+In the panel, `<CR>` opens the file under the cursor from the worktree and `v`
+toggles it viewed. In the stream:
+
+| Key | What it does |
+| --- | --- |
+| `<CR>` | Open the file at that line |
+| `v` | Toggle viewed and move to the next unviewed file |
+| `]f` / `[f` | Next / previous file |
+| `]h` / `[h` | Next / previous hunk |
+
+Viewed files are folded (`zo` opens one). `setup({ view = "split" })` picks
+the view until you first toggle it.
 
 ## Develop
 

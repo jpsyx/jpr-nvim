@@ -1,6 +1,6 @@
 [package]
 name = "review-workspace-git"
-description = "Checks a pull request out into its own git worktree."
+description = "Checks a pull request out into its own worktree, and reads its files and history."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -8,6 +8,7 @@ license.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+review-core.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

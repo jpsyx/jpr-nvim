@@ -5,7 +5,8 @@ use review_model::PullRequest;
 use serde_json::Value;
 
 /// The fields `gh pr view --json` must report.
-pub const PR_FIELDS: &str = "number,title,url,id,headRefName,headRefOid,state,baseRefName,author";
+pub const PR_FIELDS: &str =
+    "number,title,url,id,headRefName,headRefOid,state,baseRefName,baseRefOid,author";
 
 /// The owner and repository in a pull request URL such as
 /// `https://github.com/octo/widgets/pull/7`.
@@ -53,6 +54,7 @@ pub fn parse_pr(stdout: &str) -> Result<PullRequest> {
         head_ref: text("/headRefName")?,
         head_sha: text("/headRefOid")?,
         base_ref: text("/baseRefName")?,
+        base_sha: text("/baseRefOid")?,
     })
 }
 
@@ -62,7 +64,7 @@ mod tests {
 
     const OPEN: &str = r#"{"number":7,"title":"Fix the widget","url":"https://github.com/octo/widgets/pull/7",
         "id":"PR_7","headRefName":"fix/widget","headRefOid":"abc123","state":"OPEN",
-        "baseRefName":"main","author":{"login":"alice"}}"#;
+        "baseRefName":"main","baseRefOid":"base000","author":{"login":"alice"}}"#;
 
     #[test]
     fn parses_an_open_pull_request() {
@@ -82,6 +84,7 @@ mod tests {
             ),
             ("fix/widget", "abc123", "main")
         );
+        assert_eq!(pr.base_sha, "base000");
     }
 
     #[test]

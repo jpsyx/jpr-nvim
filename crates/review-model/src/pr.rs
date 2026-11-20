@@ -26,6 +26,11 @@ pub struct PullRequest {
     pub head_sha: String,
     /// The branch it merges into, e.g. `main`.
     pub base_ref: String,
+    /// The base branch's commit the pull request is compared against, for
+    /// finding where its changes start. Empty when unknown, as in state an
+    /// older build saved.
+    #[serde(default)]
+    pub base_sha: String,
 }
 
 /// Whether the reviewer has viewed a file, as the forge tracks it. The file
@@ -86,6 +91,7 @@ mod tests {
             head_ref: "fix/widget".into(),
             head_sha: "abc123".into(),
             base_ref: "main".into(),
+            base_sha: "base000".into(),
         }
     }
 
@@ -115,5 +121,6 @@ mod tests {
         assert_eq!(json["headSha"], "abc123");
         assert_eq!(json["headRef"], "fix/widget");
         assert_eq!(json["baseRef"], "main");
+        assert_eq!(json["baseSha"], "base000");
     }
 }

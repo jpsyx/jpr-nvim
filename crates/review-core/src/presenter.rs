@@ -4,14 +4,18 @@ use review_model::{
     ChangedFile, FileRow, PullRequest, SessionView, SyncState, Thread, ViewedState,
 };
 
+use crate::tree::create_file_tree_from_paths;
+
 /// The session's status view: the pull request, its files with viewed state
-/// and thread counts, and how the last sync went.
+/// and thread counts, how many viewed marks wait for the forge, and how the
+/// last sync went.
 #[must_use]
 pub fn session_view(
     pr: Option<&PullRequest>,
     files: &[ChangedFile],
     threads: &[Thread],
     sync: &SyncState,
+    queued_count: usize,
 ) -> SessionView {
     let rows = files
         .iter()
@@ -29,11 +33,13 @@ pub fn session_view(
     SessionView {
         pr: pr.cloned(),
         files: rows,
+        tree: create_file_tree_from_paths(files.iter().map(|file| file.path.as_str())),
         viewed_count: files
             .iter()
             .filter(|file| file.viewed == ViewedState::Viewed)
             .count(),
         thread_count: threads.len(),
+        queued_count,
         sync: sync.clone(),
     }
 }
@@ -60,6 +66,7 @@ mod tests {
             &files,
             &threads,
             &SyncState::Synced { at: 5 },
+            0,
         );
         let counts: Vec<(&str, usize)> = view
             .files
@@ -79,7 +86,7 @@ mod tests {
             changed_file("z.rs", ViewedState::Unviewed),
             changed_file("a.rs", ViewedState::Unviewed),
         ];
-        let view = session_view(None, &files, &[], &SyncState::Never);
+        let view = session_view(None, &files, &[], &SyncState::Never, 0);
         let paths: Vec<&str> = view.files.iter().map(|row| row.path.as_str()).collect();
         assert_eq!(paths, ["z.rs", "a.rs"]);
         assert!(view.pr.is_none());

@@ -2,6 +2,7 @@
 //! (GitHub, the file store, the system clock) implement them, and tests use
 //! the in-memory fakes.
 
+use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
@@ -32,6 +33,26 @@ pub trait Forge: Send {
     /// The pull request's threads, changed files and viewed state, in one
     /// snapshot.
     fn fetch(&self, pr: &PullRequest) -> Result<ForgeSnapshot>;
+    /// Marks `path` viewed (`true`) or unviewed (`false`) for the reviewer on
+    /// the forge, at once.
+    fn set_viewed(&self, pr: &PullRequest, path: &str, viewed: bool) -> Result<()>;
+}
+
+/// The reviewer's checkout of the pull request.
+///
+/// It holds the checkout's git history and the files on disk. The session
+/// reads the two sides of every diff through it, so a test can use an
+/// in-memory fake instead of a repository.
+pub trait Workspace: Send {
+    /// The commit the pull request's changes are measured from: where the
+    /// checked-out head and `base_sha` diverge.
+    fn merge_base(&self, base_sha: &str) -> Result<String>;
+    /// `path` as it is in `commit`, or `None` when it does not exist there.
+    fn file_at(&self, commit: &str, path: &str) -> Result<Option<Vec<u8>>>;
+    /// `path` as it is on disk in the checkout, or `None` when it is not there.
+    fn file_on_disk(&self, path: &str) -> Result<Option<Vec<u8>>>;
+    /// The files renamed between `commit` and the checkout, as `(old, new)` paths.
+    fn renames(&self, commit: &str) -> Result<Vec<(String, String)>>;
 }
 
 /// The running daemon and what it last saw, persisted between runs.
@@ -51,6 +72,16 @@ pub struct SessionRecord {
     pub last_synced_at: Option<u64>,
 }
 
+/// What the engine still owes the forge: changes made while the forge could
+/// not be reached, sent again on the next try. Saved with everything else,
+/// so a restarted engine still delivers them.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SyncRegistry {
+    /// Viewed marks the forge has not accepted yet, by path: `true` for
+    /// viewed, `false` for unviewed.
+    pub queued_viewed: BTreeMap<String, bool>,
+}
+
 /// Everything the engine persists for one pull request.
 ///
 /// A [`ReviewStore`] saves and loads it whole, and the session reopens from
@@ -62,6 +93,8 @@ pub struct StoreSnapshot {
     pub session: SessionRecord,
     /// The changed files and their viewed state as last synced.
     pub files: Vec<ChangedFile>,
+    /// What the engine still owes the forge.
+    pub registry: SyncRegistry,
 }
 
 /// Durable storage for one pull request's review state.
@@ -93,4 +126,17 @@ impl Clock for SystemClock {
             .duration_since(UNIX_EPOCH)
             .map_or(0, |elapsed| elapsed.as_secs())
     }
+}
+
+/// The adapters a session runs on, one per port. Only a composition root,
+/// or a test, builds one.
+pub struct Ports {
+    /// The forge that hosts the pull request.
+    pub forge: Box<dyn Forge>,
+    /// Where the session's state is saved.
+    pub store: Box<dyn ReviewStore>,
+    /// The checkout the diffs are read from.
+    pub workspace: Box<dyn Workspace>,
+    /// The time.
+    pub clock: Box<dyn Clock>,
 }

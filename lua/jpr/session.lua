@@ -19,6 +19,33 @@ function M.current()
     return M.by_tab[vim.api.nvim_get_current_tabpage()]
 end
 
+--- Sends `method` with `params` to `session`'s engine. `on_result(result)`
+--- runs on success; a failure is passed to `on_error`, when given, and
+--- reported to the user unless the session is closing (a request still in
+--- flight then fails because the engine was stopped on purpose).
+function M.request(session, method, params, on_result, on_error)
+    if not session.client then
+        if on_error then
+            on_error()
+        end
+        return jpr().error(
+            ("the review engine for PR #%d is not running; run :Jpr open %d"):format(session.number, session.number)
+        )
+    end
+    session.client:request(method, params, function(request_error, result)
+        if request_error then
+            if on_error then
+                on_error(request_error)
+            end
+            if session.closing then
+                return
+            end
+            return jpr().error(("%s failed: %s"):format(method, request_error.message))
+        end
+        on_result(result)
+    end)
+end
+
 --- The `jpr-review checkout` command for PR `number`. With `repo`
 --- (owner/name), checkout refuses a PR from any other repository.
 function M.checkout_args(number, repo)
@@ -106,6 +133,8 @@ local function forget(session, close_tab)
     if M.by_tab[session.tab] == session then
         M.by_tab[session.tab] = nil
     end
+    require("jpr.views.stream").close(session)
+    require("jpr.views.diff").detach(session)
     panel.close(session)
     local tab = session.tab
     if (close_tab or not session.ready) and vim.api.nvim_tabpage_is_valid(tab) and #vim.api.nvim_list_tabpages() > 1 then
@@ -169,6 +198,7 @@ function M.start(info)
     local tab = vim.api.nvim_get_current_tabpage()
     local session = { number = info.number, repo = info.repo, worktree = info.worktree, tab = tab, view = {} }
     session.placeholder_buf = vim.api.nvim_get_current_buf()
+    require("jpr.views.diff").attach(session)
     -- Registered only once the panel and the engine are up, so a failure here
     -- never leaves a half-built session for `:Jpr open` to refocus.
     local opened, open_err = pcall(panel.open, session)
@@ -195,15 +225,45 @@ function M.start(info)
     handshake(session, client)
 end
 
---- Keeps `view` as the session's latest and redraws its panel from it, for
---- every view the engine answers with or announces.
-function M.show(session, view)
-    session.view = view
-    panel.render(session, view)
+--- Whether the pull request's head or base commit moved between
+--- `previous_view` and `view`, which changes every diff.
+function M.have_commits_changed(previous_view, view)
+    local previous_pr, current_pr = previous_view and previous_view.pr, view.pr
+    if not previous_pr or not current_pr then
+        return false
+    end
+    return previous_pr.headSha ~= current_pr.headSha or previous_pr.baseSha ~= current_pr.baseSha
 end
 
---- Asks the engine to sync `session` with GitHub now; the panel redraws from
---- the answer, and a failure is reported to the user.
+--- Keeps `view` as the session's latest and redraws from it: the panel
+--- always, and the stream and the diffs once the pull request is known (the
+--- stream opens on the first such view, and is fetched again when it changes).
+function M.show(session, view)
+    local previous_view = session.view
+    session.view = view
+    panel.render(session, view)
+    if not view.pr then
+        return
+    end
+    local stream = require("jpr.views.stream")
+    if not session.stream_opened then
+        -- The first time only, and never over a file the reviewer opened.
+        session.stream_opened = true
+        stream.show(session, { only_if_free = true })
+    else
+        stream.refresh(session)
+    end
+    local diff = require("jpr.views.diff")
+    if M.have_commits_changed(previous_view, view) then
+        diff.redraw_all(session)
+    else
+        diff.reconcile(session)
+    end
+end
+
+--- Asks the engine to sync `session` with GitHub now; the panel, the stream
+--- and the diffs redraw from the answer, and a failure is reported to the
+--- user.
 function M.sync(session)
     if not session.client then
         return jpr().error(
@@ -218,10 +278,12 @@ function M.sync(session)
     end)
 end
 
---- Handles a notification from `session`'s engine: a sync event redraws the
---- panel, and a protocol error is reported to the user.
+--- Handles a notification from `session`'s engine: a `synced` or
+--- `viewedChanged` event redraws the panel, the stream and the diffs, a
+--- `syncFailed` event redraws the panel, and a protocol error is reported to
+--- the user.
 function M.on_notification(session, method, params)
-    if method == "event" and params and params.type == "synced" then
+    if method == "event" and params and (params.type == "synced" or params.type == "viewedChanged") then
         M.show(session, params.view)
     elseif method == "event" and params and params.type == "syncFailed" then
         session.view.sync = { state = "failed", at = os.time(), message = params.message }
@@ -260,6 +322,27 @@ function M.close_current()
         return jpr().error("no pull request is open in this tab")
     end
     forget(session, true)
+end
+
+--- `:Jpr toggle`: flips every review between unified and split views, and
+--- remembers the choice.
+function M.toggle_view()
+    local mode = require("jpr.view_mode").toggle()
+    for _, session in pairs(M.by_tab) do
+        require("jpr.views.diff").redraw_all(session)
+        require("jpr.views.stream").refresh(session, true)
+    end
+    jpr().info(("%s view"):format(mode))
+end
+
+--- `:Jpr stream`: shows the current review's stream beside the panel and
+--- focuses it.
+function M.stream_current()
+    local session = M.current()
+    if not session then
+        return jpr().error("no pull request is open in this tab")
+    end
+    require("jpr.views.stream").show(session, { focus = true })
 end
 
 return M

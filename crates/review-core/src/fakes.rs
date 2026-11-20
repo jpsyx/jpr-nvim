@@ -2,6 +2,8 @@
 //! fake is a cheap handle: clones share state, so a test can keep one and give
 //! another to the session.
 
+mod workspace;
+
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -11,7 +13,9 @@ use review_model::{
     ViewedState,
 };
 
-use crate::ports::{Clock, Forge, ForgeSnapshot, ReviewStore, StoreSnapshot};
+use crate::ports::{Clock, Forge, ForgeSnapshot, Ports, ReviewStore, StoreSnapshot};
+
+pub use workspace::{FAKE_MERGE_BASE, FakeWorkspace};
 
 /// A pull request with plausible values (#7 in octo/widgets), for tests that
 /// need any valid pull request, such as a fake forge's or a store round trip.
@@ -28,6 +32,7 @@ pub fn sample_pr() -> PullRequest {
         head_ref: "fix/widget".into(),
         head_sha: "abc123".into(),
         base_ref: "main".into(),
+        base_sha: "base000".into(),
     }
 }
 
@@ -70,6 +75,9 @@ struct ForgeState {
     snapshot: ForgeSnapshot,
     failure: Option<String>,
     fetches: usize,
+    read_failure: Option<String>,
+    write_failure: Option<String>,
+    viewed_calls: Vec<(String, bool)>,
 }
 
 /// A forge that answers from memory, for session and server tests. Clones
@@ -109,6 +117,26 @@ impl FakeForge {
         self.lock().fetches
     }
 
+    /// Makes every later write fail with `message` while reads still work, or
+    /// lets writes succeed again with `None`. A forge that answers reads but
+    /// refuses writes is how a queued change is tested.
+    pub fn fail_writes_with(&self, message: Option<&str>) {
+        self.lock().write_failure = message.map(str::to_owned);
+    }
+
+    /// Makes every later read fail with `message` while writes still work, or
+    /// lets reads succeed again with `None`. A forge that takes a queued mark
+    /// and then fails the pull is how a sync's partial progress is tested.
+    pub fn fail_reads_with(&self, message: Option<&str>) {
+        self.lock().read_failure = message.map(str::to_owned);
+    }
+
+    /// Every viewed mark the forge accepted, in order.
+    #[must_use]
+    pub fn viewed_calls(&self) -> Vec<(String, bool)> {
+        self.lock().viewed_calls.clone()
+    }
+
     fn lock(&self) -> MutexGuard<'_, ForgeState> {
         self.state.lock().expect("the fake forge lock is poisoned")
     }
@@ -117,7 +145,7 @@ impl FakeForge {
 impl Forge for FakeForge {
     fn pull_request(&self, number: u64) -> Result<PullRequest> {
         let state = self.lock();
-        if let Some(message) = &state.failure {
+        if let Some(message) = state.failure.as_ref().or(state.read_failure.as_ref()) {
             return Err(anyhow!("{message}"));
         }
         state
@@ -129,11 +157,27 @@ impl Forge for FakeForge {
 
     fn fetch(&self, _pr: &PullRequest) -> Result<ForgeSnapshot> {
         let mut state = self.lock();
-        if let Some(message) = &state.failure {
+        if let Some(message) = state.failure.as_ref().or(state.read_failure.as_ref()) {
             return Err(anyhow!("{message}"));
         }
         state.fetches += 1;
         Ok(state.snapshot.clone())
+    }
+
+    fn set_viewed(&self, _pr: &PullRequest, path: &str, viewed: bool) -> Result<()> {
+        let mut state = self.lock();
+        if let Some(message) = state.failure.as_ref().or(state.write_failure.as_ref()) {
+            return Err(anyhow!("{message}"));
+        }
+        state.viewed_calls.push((path.to_owned(), viewed));
+        let marked = crate::viewed::viewed_flag_to_state(viewed);
+        for file in &mut state.snapshot.files {
+            if file.path == path {
+                file.viewed = marked;
+            }
+        }
+        drop(state);
+        Ok(())
     }
 }
 
@@ -195,5 +239,50 @@ impl FixedClock {
 impl Clock for FixedClock {
     fn now(&self) -> u64 {
         self.now.load(Ordering::SeqCst)
+    }
+}
+
+/// [`Ports`] over clones of these fakes, so a test keeps handles that share
+/// state with what the session holds.
+#[must_use]
+pub fn create_fake_ports(
+    forge: &FakeForge,
+    store: &MemoryStore,
+    workspace: &FakeWorkspace,
+    clock: &FixedClock,
+) -> Ports {
+    Ports {
+        forge: Box::new(forge.clone()),
+        store: Box::new(store.clone()),
+        workspace: Box::new(workspace.clone()),
+        clock: Box::new(clock.clone()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_fake_forge_records_viewed_marks_and_can_refuse_them() {
+        let forge = FakeForge::new(
+            sample_pr(),
+            ForgeSnapshot {
+                files: vec![changed_file("a.rs", ViewedState::Unviewed)],
+                ..ForgeSnapshot::default()
+            },
+        );
+        forge.set_viewed(&sample_pr(), "a.rs", true).unwrap();
+        assert_eq!(forge.viewed_calls(), [("a.rs".to_owned(), true)]);
+        let fetched = forge.fetch(&sample_pr()).unwrap();
+        assert_eq!(
+            fetched.files[0].viewed,
+            ViewedState::Viewed,
+            "the forge remembers the mark"
+        );
+        forge.fail_writes_with(Some("offline"));
+        assert!(forge.set_viewed(&sample_pr(), "a.rs", false).is_err());
+        assert!(forge.fetch(&sample_pr()).is_ok(), "reads still work");
+        assert_eq!(forge.viewed_calls().len(), 1);
     }
 }

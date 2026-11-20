@@ -8,7 +8,7 @@ vim.api.nvim_create_user_command("Jpr", function(opts)
     require("jpr").command(opts.fargs)
 end, {
     nargs = "+",
-    desc = "Review a GitHub pull request (open, sync, close)",
+    desc = "Review a GitHub pull request (open, sync, toggle, stream, close)",
     complete = function(arglead, cmdline)
         return require("jpr").complete(arglead, cmdline)
     end,

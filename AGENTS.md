@@ -164,6 +164,33 @@ The rules for this project's language and frameworks live in `docs/rules/`:
   this Rust code: `crates/jpr-review/src/prompt.rs` for questions,
   `crates/jpr-review/src/theme.rs` for color.
 
+## PR smoke tests
+
+Some behavior can only be checked against real GitHub (the viewed mutations,
+`baseRefOid`, DISMISSED, comment sync). This section is standing permission to
+run such a smoke test without asking first, inside these limits:
+
+- **Only this repository.** Open the smoke test PR against this repo and no
+  other. Pass `--repo` explicitly to every `gh` call, and check first that
+  `origin` is this repo. Never run a smoke test against any other repository.
+- **Everything is new.** Use a new branch (for example `chore/smoke-<topic>`),
+  a new worktree (through `wt`, never raw `git worktree`) and a new PR. Never
+  reuse an existing branch, worktree or PR, and never test on one that holds
+  real work.
+- **Never touch main.** A smoke test never commits to, pushes to, merges into,
+  force-pushes to, rebases or deletes `main`, and never edits or closes any PR
+  or branch it did not create. The PR it opens targets `main` only as its
+  base: it is closed, never merged.
+- **Clean up completely.** When the test is done, or if it fails midway, close
+  the PR (without merging), delete its remote branch, delete the local branch
+  and the worktree, and remove anything else the test created (state
+  directories, temporary files, comments, labels). Then check that nothing
+  associated with the smoke test is left, and report what was removed.
+- Inside the smoke test PR you may do whatever the test needs: mark files
+  viewed, push more commits to its branch, and write comments, replies,
+  reviews and labels. These actions act only on the smoke test PR. If a step
+  could affect anything else, stop and ask.
+
 ## Agent skills
 
 - This project's agent skills are installed by `npx skills` from

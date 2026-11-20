@@ -4,16 +4,24 @@
 //! domain types but default every missing field, so a field added to the
 //! model later does not make existing files unreadable.
 
+use std::collections::BTreeMap;
+
 use anyhow::{Context, Result, bail};
-use review_core::ports::SessionRecord;
+use review_core::ports::{SessionRecord, SyncRegistry};
 use review_model::{ChangedFile, PullRequest, ViewedState};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
-/// The `session.json` shape this build reads and writes.
-pub const SESSION_VERSION: u32 = 1;
+/// The `session.json` shape this build writes. Version 2 added the pull
+/// request's `baseSha`.
+pub const SESSION_VERSION: u32 = 2;
+/// The oldest `session.json` shape this build still reads: version 1 has no
+/// `baseSha`, which reads as empty until the next sync fills it.
+pub const OLDEST_SESSION_VERSION: u32 = 1;
 /// The `viewed.json` shape this build reads and writes.
 pub const VIEWED_VERSION: u32 = 1;
+/// The `github.json` shape this build reads and writes.
+pub const GITHUB_VERSION: u32 = 1;
 
 /// Just the version, read before anything else in a file.
 #[derive(Deserialize)]
@@ -40,6 +48,14 @@ struct ViewedFile {
     files: Vec<StoredChangedFile>,
 }
 
+/// `github.json`: what the engine still owes GitHub.
+#[derive(Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+struct GithubFile {
+    version: u32,
+    queued_viewed: BTreeMap<String, bool>,
+}
+
 #[derive(Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase", default)]
 struct StoredPullRequest {
@@ -53,6 +69,7 @@ struct StoredPullRequest {
     head_ref: String,
     head_sha: String,
     base_ref: String,
+    base_sha: String,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -86,9 +103,9 @@ pub fn encode_session(record: &SessionRecord) -> Result<Vec<u8>> {
     })
 }
 
-/// The session record in `session.json`'s bytes.
+/// `session.json`'s session record.
 pub fn decode_session(bytes: &[u8]) -> Result<SessionRecord> {
-    let file: SessionFile = decode(bytes, SESSION_VERSION)?;
+    let file: SessionFile = decode(bytes, OLDEST_SESSION_VERSION, SESSION_VERSION)?;
     Ok(SessionRecord {
         pid: file.pid,
         worktree: file.worktree,
@@ -107,8 +124,24 @@ pub fn encode_files(files: &[ChangedFile]) -> Result<Vec<u8>> {
 
 /// The changed files in `viewed.json`'s bytes.
 pub fn decode_files(bytes: &[u8]) -> Result<Vec<ChangedFile>> {
-    let file: ViewedFile = decode(bytes, VIEWED_VERSION)?;
+    let file: ViewedFile = decode(bytes, VIEWED_VERSION, VIEWED_VERSION)?;
     Ok(file.files.into_iter().map(ChangedFile::from).collect())
+}
+
+/// `github.json`'s bytes for `registry`.
+pub fn encode_registry(registry: &SyncRegistry) -> Result<Vec<u8>> {
+    encode(&GithubFile {
+        version: GITHUB_VERSION,
+        queued_viewed: registry.queued_viewed.clone(),
+    })
+}
+
+/// The registry in `github.json`'s bytes.
+pub fn decode_registry(bytes: &[u8]) -> Result<SyncRegistry> {
+    let file: GithubFile = decode(bytes, GITHUB_VERSION, GITHUB_VERSION)?;
+    Ok(SyncRegistry {
+        queued_viewed: file.queued_viewed,
+    })
 }
 
 /// The version a file declares, without reading the rest of it.
@@ -136,15 +169,28 @@ fn encode<T: Serialize>(value: &T) -> Result<Vec<u8>> {
     Ok(bytes)
 }
 
-fn decode<T: DeserializeOwned>(bytes: &[u8], known: u32) -> Result<T> {
+/// Reads a file whose version is between `oldest` and `known`. Every shape in
+/// that range must read into the same struct, with defaults for the fields
+/// an older version lacks.
+fn decode<T: DeserializeOwned>(bytes: &[u8], oldest: u32, known: u32) -> Result<T> {
     let found = stored_version(bytes)?;
     refuse_newer(found, known)?;
-    if found != known {
+    if found < oldest {
         bail!(
-            "it is format version {found}, which this build cannot read (it reads version {known})"
+            "it is format version {found}, which this build cannot read (it reads {})",
+            build_readable_versions_label(oldest, known)
         );
     }
     serde_json::from_slice(bytes).context("this is not valid review state (fix or delete the file)")
+}
+
+/// `version 1`, or `versions 1 to 2`, for an error message.
+fn build_readable_versions_label(oldest: u32, known: u32) -> String {
+    if oldest == known {
+        format!("version {known}")
+    } else {
+        format!("versions {oldest} to {known}")
+    }
 }
 
 // Destructuring both ways turns a field added to the model into a compile
@@ -162,6 +208,7 @@ impl From<PullRequest> for StoredPullRequest {
             head_ref,
             head_sha,
             base_ref,
+            base_sha,
         } = pr;
         Self {
             owner,
@@ -174,6 +221,7 @@ impl From<PullRequest> for StoredPullRequest {
             head_ref,
             head_sha,
             base_ref,
+            base_sha,
         }
     }
 }
@@ -191,6 +239,7 @@ impl From<StoredPullRequest> for PullRequest {
             head_ref,
             head_sha,
             base_ref,
+            base_sha,
         } = pr;
         Self {
             owner,
@@ -203,6 +252,7 @@ impl From<StoredPullRequest> for PullRequest {
             head_ref,
             head_sha,
             base_ref,
+            base_sha,
         }
     }
 }
@@ -242,101 +292,4 @@ impl From<StoredChangedFile> for ChangedFile {
 }
 
 #[cfg(test)]
-mod tests {
-    use review_core::fakes::{changed_file, sample_pr};
-    use serde_json::{Value, json};
-
-    use super::*;
-
-    fn session() -> SessionRecord {
-        SessionRecord {
-            pid: Some(42),
-            worktree: Some("/tmp/widgets-worktrees/pr-7".into()),
-            pr: Some(sample_pr()),
-            last_synced_at: Some(100),
-        }
-    }
-
-    fn as_json(bytes: &[u8]) -> Value {
-        serde_json::from_slice(bytes).unwrap()
-    }
-
-    #[test]
-    fn a_session_round_trips_inside_a_version_1_envelope() {
-        let bytes = encode_session(&session()).unwrap();
-        assert_eq!(as_json(&bytes)["version"], json!(1));
-        assert_eq!(as_json(&bytes)["pr"]["headSha"], json!("abc123"));
-        assert_eq!(decode_session(&bytes).unwrap(), session());
-    }
-
-    #[test]
-    fn the_viewed_file_is_a_version_1_envelope_around_the_files() {
-        let files = vec![changed_file("src/a.rs", ViewedState::Viewed)];
-        let bytes = encode_files(&files).unwrap();
-        assert_eq!(
-            as_json(&bytes),
-            json!({
-                "version": 1,
-                "files": [{ "path": "src/a.rs", "additions": 3, "deletions": 1, "viewed": "VIEWED" }],
-            })
-        );
-        assert!(bytes.ends_with(b"}\n"));
-        assert_eq!(decode_files(&bytes).unwrap(), files);
-    }
-
-    #[test]
-    fn a_newer_version_is_refused_naming_both_versions() {
-        let error = decode_files(br#"{"version": 2, "files": []}"#).unwrap_err();
-        let message = format!("{error:#}");
-        assert!(
-            message.contains("version 2") && message.contains("version 1"),
-            "{message}"
-        );
-        assert!(!message.contains("delete"), "{message}");
-    }
-
-    #[test]
-    fn an_unknown_older_version_is_refused() {
-        let error = decode_session(br#"{"version": 0}"#).unwrap_err();
-        assert!(format!("{error:#}").contains("version 0"), "{error:#}");
-    }
-
-    #[test]
-    fn a_file_without_a_version_is_refused() {
-        let error = decode_files(b"[]").unwrap_err();
-        assert!(format!("{error:#}").contains("fix or delete"), "{error:#}");
-    }
-
-    #[test]
-    fn an_old_file_missing_newer_fields_loads_with_defaults() {
-        let files = decode_files(br#"{"version": 1, "files": [{"path": "src/a.rs"}]}"#).unwrap();
-        assert_eq!(files[0].path, "src/a.rs");
-        assert_eq!(
-            (files[0].additions, files[0].viewed),
-            (0, ViewedState::Unviewed)
-        );
-        let record =
-            decode_session(br#"{"version": 1, "pr": {"owner": "octo", "number": 7}}"#).unwrap();
-        let pr = record.pr.unwrap();
-        assert_eq!(
-            (pr.owner.as_str(), pr.number, pr.node_id.as_str()),
-            ("octo", 7, "")
-        );
-        assert_eq!(record.last_synced_at, None);
-    }
-
-    #[test]
-    fn stored_version_reads_only_the_version() {
-        assert_eq!(
-            stored_version(br#"{"version": 3, "files": "anything"}"#).unwrap(),
-            3
-        );
-    }
-
-    #[test]
-    fn only_a_newer_version_blocks_an_overwrite() {
-        assert!(refuse_newer(2, 1).is_err());
-        assert!(refuse_newer(1, 1).is_ok());
-        assert!(refuse_newer(0, 1).is_ok());
-    }
-}
+mod tests;

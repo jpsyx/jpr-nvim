@@ -12,8 +12,16 @@ local view = {
         { path = "src/b.rs", additions = 1, deletions = 0, viewed = "DISMISSED", threads = 0 },
         { path = "docs/x.md", additions = 4, deletions = 4, viewed = "UNVIEWED", threads = 0 },
     },
+    tree = {
+        { depth = 0, name = "docs" },
+        { depth = 1, name = "x.md", file = 2 },
+        { depth = 0, name = "src" },
+        { depth = 1, name = "a.rs", file = 0 },
+        { depth = 1, name = "b.rs", file = 1 },
+    },
     viewedCount = 1,
     threadCount = 2,
+    queuedCount = 0,
     sync = { state = "synced", at = 100 },
 }
 local built = panel.build(view, 112)
@@ -22,11 +30,14 @@ assert(vim.deep_equal(built.lines, {
     "viewed 1/3 · threads 2",
     "synced 12s ago",
     "",
-    "✓ src/a.rs  +12 -3 [2]",
-    "● src/b.rs  +1 -0",
-    "  docs/x.md  +4 -4",
+    "docs/",
+    "    x.md  +4 -4",
+    "src/",
+    "  ✓ a.rs  +12 -3 [2]",
+    "  ● b.rs  +1 -0",
 }), vim.inspect(built.lines))
-assert(built.paths[5] == "src/a.rs" and built.paths[7] == "docs/x.md" and built.paths[4] == nil, vim.inspect(built.paths))
+assert(built.paths[6] == "docs/x.md" and built.paths[8] == "src/a.rs" and built.paths[9] == "src/b.rs", vim.inspect(built.paths))
+assert(built.paths[5] == nil and built.paths[7] == nil, "directories open nothing")
 
 local function highlighted(result, group)
     local texts = {}
@@ -37,11 +48,17 @@ local function highlighted(result, group)
     end
     return texts
 end
-assert(vim.deep_equal(highlighted(built, "JprAdded"), { "+12", "+1", "+4" }), vim.inspect(highlighted(built, "JprAdded")))
-assert(vim.deep_equal(highlighted(built, "JprRemoved"), { "-3", "-0", "-4" }), vim.inspect(highlighted(built, "JprRemoved")))
+assert(vim.deep_equal(highlighted(built, "JprAdded"), { "+4", "+12", "+1" }), vim.inspect(highlighted(built, "JprAdded")))
+assert(vim.deep_equal(highlighted(built, "JprRemoved"), { "-4", "-3", "-0" }), vim.inspect(highlighted(built, "JprRemoved")))
 assert(vim.deep_equal(highlighted(built, "JprViewed"), { "✓" }), "viewed mark")
 assert(vim.deep_equal(highlighted(built, "JprDismissed"), { "●" }), "dismissed mark")
 assert(vim.deep_equal(highlighted(built, "JprTitle"), { "#7 Fix the widget" }), "title")
+assert(
+    vim.deep_equal(highlighted(built, "JprMuted"), { "viewed 1/3 · threads 2", "synced 12s ago", "docs/", "src/" }),
+    vim.inspect(highlighted(built, "JprMuted"))
+)
+local queued = panel.build({ files = {}, queuedCount = 2 }, 0)
+assert(queued.lines[2] == "viewed 0/0 · threads 0 · 2 waiting for GitHub", queued.lines[2])
 
 local failed = panel.build({ files = {}, sync = { state = "failed", at = 1, message = "offline" } }, 2)
 assert(failed.lines[1] == "Loading pull request…", failed.lines[1])

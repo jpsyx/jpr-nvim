@@ -1,5 +1,5 @@
-//! The GitHub forge: `gh pr view` for the pull request and `gh api graphql`
-//! for threads, files and viewed state.
+//! The GitHub forge: `gh pr view` for the pull request, `gh api graphql` for
+//! threads, files and viewed state, and the viewed mutations.
 
 mod gh;
 pub mod graphql;
@@ -7,7 +7,7 @@ pub mod pr;
 
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use review_core::ports::{Forge, ForgeSnapshot};
 use review_model::PullRequest;
 use serde_json::{Value, json};
@@ -106,6 +106,16 @@ impl Forge for GhForge {
             threads,
             files,
         })
+    }
+
+    fn set_viewed(&self, pr: &PullRequest, path: &str, viewed: bool) -> Result<()> {
+        let mark = if viewed { "viewed" } else { "unviewed" };
+        self.graphql(
+            graphql::viewed_flag_to_mutation(viewed),
+            &json!({ "pr": pr.node_id, "path": path }),
+        )
+        .with_context(|| format!("marking {path} {mark} on GitHub"))?;
+        Ok(())
     }
 }
 

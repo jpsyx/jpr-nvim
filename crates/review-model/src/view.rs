@@ -43,6 +43,20 @@ pub struct FileRow {
     pub threads: usize,
 }
 
+/// One row of the changed files drawn as a tree: a directory, or a file of
+/// [`SessionView::files`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TreeRow {
+    /// How deep the row is nested; top-level rows are 0.
+    pub depth: usize,
+    /// A directory's path below its parent row (a directory holding only
+    /// one directory is joined to it, as in `src/core`), or a file's name.
+    pub name: String,
+    /// A file's index in `SessionView::files`; `None` for a directory.
+    pub file: Option<usize>,
+}
+
 /// Everything a frontend needs to draw the session's status. The session
 /// returns it for a snapshot or a sync and sends it with every `Synced` event,
 /// so a frontend redraws from it alone.
@@ -53,10 +67,14 @@ pub struct SessionView {
     pub pr: Option<PullRequest>,
     /// The changed files, in the forge's order.
     pub files: Vec<FileRow>,
+    /// The changed files as a tree, for a file panel.
+    pub tree: Vec<TreeRow>,
     /// How many files are viewed; a dismissed file does not count.
     pub viewed_count: usize,
     /// How many threads the pull request has, across every file.
     pub thread_count: usize,
+    /// Viewed marks waiting to reach the forge.
+    pub queued_count: usize,
     /// When the session last talked to the forge, and how it went.
     pub sync: SyncState,
 }
@@ -77,6 +95,12 @@ pub enum Event {
     SyncFailed {
         /// What went wrong, for a person to read.
         message: String,
+    },
+    /// A file was marked viewed or unviewed, or a queued mark reached the
+    /// forge.
+    ViewedChanged {
+        /// The new state.
+        view: Box<SessionView>,
     },
 }
 
@@ -115,8 +139,10 @@ mod tests {
                 viewed: ViewedState::Viewed,
                 threads: 3,
             }],
+            tree: Vec::new(),
             viewed_count: 1,
             thread_count: 3,
+            queued_count: 2,
             sync: SyncState::Never,
         };
         let json = serde_json::to_value(Event::Synced {
@@ -126,6 +152,7 @@ mod tests {
         assert_eq!(json["type"], "synced");
         assert_eq!(json["view"]["viewedCount"], 1);
         assert_eq!(json["view"]["threadCount"], 3);
+        assert_eq!(json["view"]["queuedCount"], 2);
         assert_eq!(json["view"]["files"][0]["viewed"], "VIEWED");
         let failed = serde_json::to_value(Event::SyncFailed {
             message: "offline".into(),

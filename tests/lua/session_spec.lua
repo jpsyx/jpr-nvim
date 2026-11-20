@@ -21,6 +21,15 @@ assert(
     "checkout args with the repository a URL named"
 )
 
+-- Only a moved head or base commit redraws every diff.
+local pr = { headSha = "head1", baseSha = "base1" }
+assert(not session.have_commits_changed({ pr = pr }, { pr = vim.deepcopy(pr) }), "the same commits")
+assert(session.have_commits_changed({ pr = pr }, { pr = { headSha = "head2", baseSha = "base1" } }), "a moved head")
+assert(session.have_commits_changed({ pr = pr }, { pr = { headSha = "head1", baseSha = "base2" } }), "a moved base")
+assert(not session.have_commits_changed({}, { pr = pr }), "the first view with a pull request")
+assert(not session.have_commits_changed(nil, { pr = pr }), "no previous view")
+assert(not session.have_commits_changed({ pr = pr }, {}), "a view without a pull request")
+
 local info = session.parse_checkout('Checking out...\n{"worktree":"/tmp/w","repo":"octo/widgets","number":7,"title":"T"}\n')
 assert(info.worktree == "/tmp/w" and info.repo == "octo/widgets" and info.number == 7, vim.inspect(info))
 local missing, err = session.parse_checkout("")
@@ -41,7 +50,7 @@ assert(vim.wait(3000, function()
     return vim.api.nvim_buf_get_lines(review.panel.buf, 0, 1, false)[1] == "#7 Fix the widget"
 end), "the panel shows the synced pull request")
 local lines = vim.api.nvim_buf_get_lines(review.panel.buf, 0, -1, false)
-assert(lines[5] == "✓ README.md  +2 -1 [1]", vim.inspect(lines))
+assert(lines[5] == "  README.md  +2 -1 [1]", vim.inspect(lines))
 
 vim.api.nvim_set_current_win(review.panel.win)
 vim.api.nvim_win_set_cursor(review.panel.win, { 5, 0 })

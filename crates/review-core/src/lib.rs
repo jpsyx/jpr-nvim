@@ -5,6 +5,8 @@
 pub mod ports;
 mod presenter;
 mod session;
+mod tree;
+mod viewed;
 
 #[cfg(any(test, feature = "fakes"))]
 pub mod contract;

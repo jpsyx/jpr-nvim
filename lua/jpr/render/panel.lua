@@ -33,48 +33,76 @@ function M.sync_text(sync, now)
     return "sync failed: " .. M.one_line(sync.message or "unknown error"), "JprError"
 end
 
+--- The counts line: viewed files, threads, and viewed marks still waiting
+--- for GitHub.
+function M.build_counts_text(view)
+    local text = ("viewed %d/%d · threads %d"):format(view.viewedCount or 0, #(view.files or {}), view.threadCount or 0)
+    if (view.queuedCount or 0) > 0 then
+        text = text .. (" · %d waiting for GitHub"):format(view.queuedCount)
+    end
+    return text
+end
+
+--- Tree rows for `files` when a view carries no tree: every file at the top
+--- level, under its full path.
+function M.create_flat_tree_from_files(files)
+    local rows = {}
+    for index, file in ipairs(files) do
+        rows[index] = { depth = 0, name = file.path, file = index - 1 }
+    end
+    return rows
+end
+
+--- Adds one file's line to `content`: indent, viewed mark, name, counts and
+--- threads, with their highlights.
+local function add_file_line(content, file, name, indent)
+    local mark = VIEWED_MARK[file.viewed] or " "
+    local plus = ("+%d"):format(file.additions)
+    local stats = ("%s -%d"):format(plus, file.deletions)
+    local threads = file.threads > 0 and (" [%d]"):format(file.threads) or ""
+    local shown_name = M.one_line(name)
+    content.add_line(("%s%s %s  %s%s"):format(indent, mark, shown_name, stats, threads))
+    local line = #content.lines - 1
+    content.paths[#content.lines] = file.path
+    local mark_group = (file.viewed == "VIEWED" and "JprViewed") or (file.viewed == "DISMISSED" and "JprDismissed") or nil
+    if mark_group then
+        content.highlights[#content.highlights + 1] = { line = line, col_start = #indent, col_end = #indent + #mark, group = mark_group }
+    end
+    local stats_start = #indent + #mark + 1 + #shown_name + 2
+    content.highlights[#content.highlights + 1] = { line = line, col_start = stats_start, col_end = stats_start + #plus, group = "JprAdded" }
+    content.highlights[#content.highlights + 1] =
+        { line = line, col_start = stats_start + #plus + 1, col_end = stats_start + #stats, group = "JprRemoved" }
+end
+
 --- The panel's contents for `view` at time `now` (Unix seconds): its lines,
 --- their highlights, and which file each line shows, for the panel window to
 --- draw and to open files from.
 --- @return table { lines: string[], highlights: { line, col_start, col_end, group }[], paths: table<integer, string> }
 --- `line` is 0-based and columns are byte offsets; `paths` is keyed by 1-based line number.
 function M.build(view, now)
-    local lines, highlights, paths = {}, {}, {}
-    local function add_line(text, group)
-        lines[#lines + 1] = text
+    local content = { lines = {}, highlights = {}, paths = {} }
+    function content.add_line(text, group)
+        content.lines[#content.lines + 1] = text
         if group then
-            highlights[#highlights + 1] = { line = #lines - 1, col_start = 0, col_end = #text, group = group }
+            content.highlights[#content.highlights + 1] = { line = #content.lines - 1, col_start = 0, col_end = #text, group = group }
         end
     end
-
     local pr = view.pr
-    add_line(pr and ("#%d %s"):format(pr.number, M.one_line(pr.title)) or "Loading pull request…", "JprTitle")
+    content.add_line(pr and ("#%d %s"):format(pr.number, M.one_line(pr.title)) or "Loading pull request…", "JprTitle")
+    content.add_line(M.build_counts_text(view), "JprMuted")
+    content.add_line(M.sync_text(view.sync, now))
+    content.add_line("")
     local files = view.files or {}
-    add_line(("viewed %d/%d · threads %d"):format(view.viewedCount or 0, #files, view.threadCount or 0), "JprMuted")
-    add_line(M.sync_text(view.sync, now))
-    add_line("")
-
-    for _, file in ipairs(files) do
-        local mark = VIEWED_MARK[file.viewed] or " "
-        local plus = ("+%d"):format(file.additions)
-        local stats = ("%s -%d"):format(plus, file.deletions)
-        local threads = file.threads > 0 and (" [%d]"):format(file.threads) or ""
-        local shown_path = M.one_line(file.path)
-        add_line(("%s %s  %s%s"):format(mark, shown_path, stats, threads))
-        local line = #lines - 1
-        paths[#lines] = file.path
-        if file.viewed == "VIEWED" then
-            highlights[#highlights + 1] = { line = line, col_start = 0, col_end = #mark, group = "JprViewed" }
-        elseif file.viewed == "DISMISSED" then
-            highlights[#highlights + 1] = { line = line, col_start = 0, col_end = #mark, group = "JprDismissed" }
+    for _, row in ipairs(view.tree or M.create_flat_tree_from_files(files)) do
+        local indent = ("  "):rep(row.depth)
+        local file = row.file and files[row.file + 1]
+        if file then
+            add_file_line(content, file, row.name, indent)
+        else
+            content.add_line(indent .. M.one_line(row.name) .. "/", "JprMuted")
         end
-        local stats_start = #mark + 1 + #shown_path + 2
-        highlights[#highlights + 1] = { line = line, col_start = stats_start, col_end = stats_start + #plus, group = "JprAdded" }
-        highlights[#highlights + 1] =
-            { line = line, col_start = stats_start + #plus + 1, col_end = stats_start + #stats, group = "JprRemoved" }
     end
-
-    return { lines = lines, highlights = highlights, paths = paths }
+    return { lines = content.lines, highlights = content.highlights, paths = content.paths }
 end
 
 return M

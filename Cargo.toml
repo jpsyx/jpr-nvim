@@ -6,7 +6,7 @@ resolver = "3"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT"
@@ -17,8 +17,12 @@ clap = { version = "4", features = ["derive", "env"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tempfile = "3"
+# Line and word diffs: Histogram for lines (as git), Myers for words. Only the
+# slice API is used, so the text helpers stay off.
+similar = { version = "3", default-features = false, features = ["std"] }
 review-model = { path = "crates/review-model" }
 review-core = { path = "crates/review-core" }
+review-diff = { path = "crates/review-diff" }
 review-store-fs = { path = "crates/review-store-fs" }
 review-forge-github = { path = "crates/review-forge-github" }
 review-workspace-git = { path = "crates/review-workspace-git" }

@@ -1,96 +1,26 @@
 //! The server end to end, over in-memory streams and the fake ports.
 
-use std::io::{BufReader, Cursor, Read};
+#[path = "serve/support.rs"]
+mod support;
+
+use std::io::{BufReader, Cursor};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use std::thread;
 use std::time::{Duration, Instant};
 
-use review_core::ReviewSession;
-use review_core::fakes::{
-    FakeForge, FixedClock, MemoryStore, changed_file, github_thread, sample_pr,
-};
-use review_core::ports::ForgeSnapshot;
-use review_model::ViewedState;
 use review_rpc::{ServeOptions, serve};
 use serde_json::Value;
 
-fn forge() -> FakeForge {
-    FakeForge::new(
-        sample_pr(),
-        ForgeSnapshot {
-            head_sha: "abc123".into(),
-            has_pending_review: false,
-            threads: vec![github_thread("T1", "src/a.rs")],
-            files: vec![changed_file("src/a.rs", ViewedState::Viewed)],
-        },
-    )
-}
-
-fn session(forge: &FakeForge) -> Arc<Mutex<ReviewSession>> {
-    let session = ReviewSession::open(
-        7,
-        Box::new(forge.clone()),
-        Box::new(MemoryStore::default()),
-        Box::new(FixedClock::at(100)),
-    )
-    .unwrap();
-    Arc::new(Mutex::new(session))
-}
-
-fn options(poll_every: Option<Duration>) -> ServeOptions {
-    ServeOptions {
-        server_version: "9.9.9".into(),
-        poll_every,
-    }
-}
-
-fn request(id: u64, method: &str) -> String {
-    format!("{{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"{method}\"}}\n")
-}
-
-fn messages(output: &Mutex<Vec<u8>>) -> Vec<Value> {
-    let bytes = output.lock().unwrap().clone();
-    String::from_utf8(bytes)
-        .unwrap()
-        .lines()
-        .map(|line| serde_json::from_str(line).unwrap())
-        .collect()
-}
-
-/// Serves `input` and returns everything written, events included: `serve`
-/// writes every event before it returns.
-fn run(input: &str, forge: &FakeForge) -> Vec<Value> {
-    let output = Arc::new(Mutex::new(Vec::<u8>::new()));
-    serve(
-        Cursor::new(input.to_owned()),
-        &output,
-        &session(forge),
-        &options(None),
-    )
-    .unwrap();
-    messages(&output)
-}
-
-fn response(messages: &[Value], id: u64) -> &Value {
-    messages
-        .iter()
-        .find(|message| message["id"] == id)
-        .unwrap_or_else(|| panic!("no response {id} in {messages:?}"))
-}
-
-fn event(messages: &[Value]) -> &Value {
-    messages
-        .iter()
-        .find(|message| message["method"] == "event")
-        .unwrap_or_else(|| panic!("no event in {messages:?}"))
-}
+use support::{
+    Closed, EndsWhen, build_request_with_params, changed_snapshot, event, forge, messages, options,
+    request, response, run, session, synced_views,
+};
 
 #[test]
 fn initialize_reports_the_protocol_and_server_versions() {
     let written = run(&request(1, "initialize"), &forge());
     let result = &response(&written, 1)["result"];
-    assert_eq!(result["protocolVersion"], 1);
+    assert_eq!(result["protocolVersion"], 2);
     assert_eq!(result["version"], "9.9.9");
 }
 
@@ -150,20 +80,92 @@ fn shutdown_answers_and_stops_reading() {
     );
 }
 
-/// A reader that keeps the server running until `done` holds or `deadline`
-/// passes, so a test waits on what it expects instead of a fixed window.
-struct EndsWhen<F: Fn() -> bool> {
-    done: F,
-    deadline: Instant,
+#[test]
+fn file_diff_answers_with_the_files_diff() {
+    let input =
+        request(1, "sync") + &build_request_with_params(2, "fileDiff", r#"{"path":"src/a.rs"}"#);
+    let written = run(&input, &forge());
+    let diff = &response(&written, 2)["result"];
+    assert_eq!(diff["path"], "src/a.rs");
+    assert_eq!(diff["added"][0]["line"], 1);
+    assert_eq!(diff["baseText"], "fn a() {}\n");
 }
 
-impl<F: Fn() -> bool> Read for EndsWhen<F> {
-    fn read(&mut self, _buffer: &mut [u8]) -> std::io::Result<usize> {
-        while !(self.done)() && Instant::now() < self.deadline {
-            thread::sleep(Duration::from_millis(5));
-        }
-        Ok(0)
+#[test]
+fn stream_answers_in_the_requested_mode() {
+    let input = request(1, "sync") + &build_request_with_params(2, "stream", r#"{"mode":"split"}"#);
+    let written = run(&input, &forge());
+    let stream = &response(&written, 2)["result"];
+    assert_eq!(stream["mode"], "split");
+    assert_eq!(stream["rows"][0]["kind"], "file");
+}
+
+#[test]
+fn set_viewed_announces_the_change_before_answering() {
+    let input = request(1, "sync")
+        + &build_request_with_params(2, "setViewed", r#"{"path":"src/a.rs","viewed":false}"#);
+    let written = run(&input, &forge());
+    let changed = written
+        .iter()
+        .position(|message| message["params"]["type"] == "viewedChanged")
+        .expect("a viewedChanged event");
+    let answer = written
+        .iter()
+        .position(|message| message["id"] == 2)
+        .unwrap();
+    assert!(changed < answer, "the event comes first");
+    assert_eq!(
+        response(&written, 2)["result"]["files"][0]["viewed"],
+        "UNVIEWED"
+    );
+}
+
+#[test]
+fn bad_params_are_invalid_params_errors() {
+    let input = build_request_with_params(1, "stream", r#"{"mode":"sideways"}"#)
+        + &build_request_with_params(2, "fileDiff", "{}")
+        + &build_request_with_params(3, "setViewed", r#"{"path":"a"}"#);
+    let written = run(&input, &forge());
+    for id in 1..=3 {
+        assert_eq!(
+            response(&written, id)["error"]["code"],
+            -32602,
+            "request {id}"
+        );
     }
+}
+
+#[test]
+fn missing_or_mistyped_params_are_errors_and_serving_goes_on() {
+    let input = request(1, "fileDiff")
+        + &build_request_with_params(2, "setViewed", r#"{"path":"src/a.rs","viewed":"yes"}"#)
+        + &build_request_with_params(3, "stream", r#"["split"]"#)
+        + &build_request_with_params(4, "fileDiff", r#"{"path":null}"#)
+        + &request(5, "initialize");
+    let written = run(&input, &forge());
+    for id in 1..=4 {
+        let error = &response(&written, id)["error"];
+        assert_eq!(error["code"], -32602, "request {id}");
+        assert!(
+            error["message"].as_str().unwrap().contains("expected"),
+            "{error}"
+        );
+    }
+    assert_eq!(response(&written, 5)["result"]["protocolVersion"], 2);
+}
+
+#[test]
+fn an_engine_failure_in_a_new_method_is_an_engine_error() {
+    let written = run(
+        &build_request_with_params(1, "stream", r#"{"mode":"unified"}"#),
+        &forge(),
+    );
+    let error = &response(&written, 1)["error"];
+    assert_eq!(error["code"], -32000);
+    assert!(
+        error["message"].as_str().unwrap().contains("not synced"),
+        "{error}"
+    );
 }
 
 #[test]
@@ -185,25 +187,36 @@ fn the_poller_syncs_in_the_background() {
     assert!(forge.fetches() >= 2, "fetched {} times", forge.fetches());
 }
 
-/// The views of every `synced` event in `output`.
-fn synced_views(output: &Mutex<Vec<u8>>) -> Vec<Value> {
-    messages(output)
-        .into_iter()
-        .filter(|message| message["params"]["type"] == "synced")
-        .map(|message| message["params"]["view"].clone())
-        .collect()
-}
-
-fn changed_snapshot() -> ForgeSnapshot {
-    ForgeSnapshot {
-        head_sha: "def456".into(),
-        has_pending_review: false,
-        threads: vec![github_thread("T1", "src/a.rs")],
-        files: vec![
-            changed_file("src/a.rs", ViewedState::Viewed),
-            changed_file("src/b.rs", ViewedState::Unviewed),
-        ],
+#[test]
+fn the_poller_retries_a_refused_viewed_mark_between_syncs() {
+    let forge = forge();
+    let shared = session(&forge);
+    {
+        let mut session = shared.lock().unwrap();
+        session.sync().unwrap();
+        forge.fail_writes_with(Some("offline"));
+        session.set_viewed("src/a.rs", false).unwrap();
     }
+    forge.fail_writes_with(None);
+    let output = Arc::new(Mutex::new(Vec::<u8>::new()));
+    let watched = forge.clone();
+    let reader = BufReader::new(EndsWhen {
+        done: move || !watched.viewed_calls().is_empty(),
+        deadline: Instant::now() + Duration::from_secs(10),
+    });
+    let options = ServeOptions {
+        retry_every: Some(Duration::from_millis(20)),
+        ..options(Some(Duration::from_secs(3600)))
+    };
+    serve(reader, &output, &shared, &options).unwrap();
+    assert_eq!(forge.viewed_calls(), [("src/a.rs".to_owned(), false)]);
+    assert_eq!(forge.fetches(), 1, "it retried without syncing again");
+    assert!(
+        messages(&output)
+            .iter()
+            .any(|message| message["params"]["type"] == "viewedChanged"),
+        "the landed mark is announced"
+    );
 }
 
 #[test]
@@ -275,19 +288,6 @@ fn shutdown_waits_for_every_event_to_be_written() {
             matches!((synced, shutdown), (Some(event), Some(answer)) if event < answer),
             "attempt {attempt}: {written:?}"
         );
-    }
-}
-
-/// A writer whose reader has gone away.
-struct Closed;
-
-impl std::io::Write for Closed {
-    fn write(&mut self, _buffer: &[u8]) -> std::io::Result<usize> {
-        Err(std::io::ErrorKind::BrokenPipe.into())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
     }
 }
 

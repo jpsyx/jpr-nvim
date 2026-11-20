@@ -10,6 +10,9 @@ M.defaults = {
     worktree_cmd = nil,
     -- Width of the PR panel.
     panel_width = 44,
+    -- The diff view until the reviewer flips it with :Jpr toggle, which is
+    -- then remembered: "unified" or "split".
+    view = "unified",
 }
 
 --- The options in effect: the defaults merged with what `setup` was given.
@@ -17,7 +20,7 @@ M.defaults = {
 M.config = vim.deepcopy(M.defaults)
 
 --- The `:Jpr` subcommands, in the order completion offers them.
-M.subcommands = { "open", "sync", "close" }
+M.subcommands = { "open", "sync", "toggle", "stream", "close" }
 
 --- Links the panel's highlight groups to the colorscheme's, without
 --- replacing any link the user set. Runs at `setup` and again when a review
@@ -31,6 +34,13 @@ function M.define_highlights()
         JprAdded = "Added",
         JprRemoved = "Removed",
         JprError = "DiagnosticError",
+        JprDiffAdd = "DiffAdd",
+        JprDiffAddText = "DiffText",
+        JprDiffDelete = "DiffDelete",
+        JprDiffDeleteText = "DiffText",
+        JprDiffFiller = "NonText",
+        JprHunk = "Special",
+        JprFileHeader = "Title",
     }
     for name, target in pairs(links) do
         vim.api.nvim_set_hl(0, name, { link = target, default = true })
@@ -87,6 +97,10 @@ function M.command(fargs)
         require("jpr.session").open(number, repo)
     elseif subcommand == "sync" then
         require("jpr.session").sync_current()
+    elseif subcommand == "toggle" then
+        require("jpr.session").toggle_view()
+    elseif subcommand == "stream" then
+        require("jpr.session").stream_current()
     elseif subcommand == "close" then
         require("jpr.session").close_current()
     else
