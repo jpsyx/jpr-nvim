@@ -252,8 +252,8 @@ function M.sync_current()
     M.sync(session)
 end
 
---- `:Jpr close`: stops the current tab's engine, closes the tab and forgets
---- the session.
+--- `:Jpr close`: stops the current tab's engine, closes the tab (unless it is
+--- the last one) and forgets the session.
 function M.close_current()
     local session = M.current()
     if not session then

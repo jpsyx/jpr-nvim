@@ -58,8 +58,8 @@ pub struct Anchor {
 }
 
 impl Anchor {
-    /// A single line on the new side of `file`, the most common anchor, for
-    /// example for a thread a test or a local comment starts on one line.
+    /// A single line on the new side of `file`, with no commit or snapshot.
+    /// Use it to anchor a thread to one line, for example in a test fixture.
     #[must_use]
     pub fn line(file: &str, line: u64) -> Self {
         Self {

@@ -66,9 +66,9 @@ pub struct StoreSnapshot {
 
 /// Durable storage for one pull request's review state.
 ///
-/// The session loads from it when it opens and saves through it after every
-/// sync; for example, a store can keep files on disk or keep everything in
-/// memory for a test.
+/// The session loads from it when it opens, and saves through it after every
+/// successful sync and when the daemon records itself; for example, a store can
+/// keep files on disk or keep everything in memory for a test.
 pub trait ReviewStore: Send {
     /// What was saved last, or an empty snapshot when nothing was.
     fn load(&self) -> Result<StoreSnapshot>;

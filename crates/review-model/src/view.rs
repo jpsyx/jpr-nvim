@@ -49,7 +49,7 @@ pub struct FileRow {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionView {
-    /// The pull request, or `None` before the first sync.
+    /// The pull request, or `None` until a sync has ever succeeded for it.
     pub pr: Option<PullRequest>,
     /// The changed files, in the forge's order.
     pub files: Vec<FileRow>,
