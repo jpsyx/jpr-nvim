@@ -8,7 +8,11 @@ local ns = vim.api.nvim_create_namespace("jpr-panel")
 --- Opens the panel on the left of the current tab for `session`.
 function M.open(session)
     local buf = vim.api.nvim_create_buf(false, true)
-    vim.api.nvim_buf_set_name(buf, ("jpr://panel/%d"):format(session.number))
+    local named, name_err = pcall(vim.api.nvim_buf_set_name, buf, ("jpr://panel/%d"):format(session.number))
+    if not named then
+        vim.api.nvim_buf_delete(buf, { force = true })
+        error(name_err, 0)
+    end
     vim.bo[buf].filetype = "jpr-panel"
     vim.bo[buf].bufhidden = "wipe"
     vim.bo[buf].modifiable = false

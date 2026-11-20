@@ -67,30 +67,48 @@ function M.open(number)
     end))
 end
 
---- Drops `session` from its tab and wipes its panel, so `:Jpr open` starts a
---- fresh engine and can name a new panel after the same pull request.
-local function unregister(session)
-    if M.by_tab[session.tab] == session then
-        M.by_tab[session.tab] = nil
-        panel.close(session)
+--- Wipes the empty buffer `tabnew` made for `session`, unless it was named,
+--- edited or is still on screen.
+local function wipe_placeholder(session)
+    local buf = session.placeholder_buf
+    if
+        buf
+        and vim.api.nvim_buf_is_valid(buf)
+        and vim.api.nvim_buf_get_name(buf) == ""
+        and not vim.bo[buf].modified
+        and #vim.fn.win_findbuf(buf) == 0
+    then
+        vim.api.nvim_buf_delete(buf, { force = true })
     end
 end
 
---- Shuts down `session`'s engine on purpose, so its exit is not reported.
-local function stop_engine(session)
+--- The one teardown path, for `:Jpr close`, `:tabclose`, an engine exit and a
+--- failed start: stops the engine, wipes the panel and drops the session, so
+--- `:Jpr open` can start the pull request again from scratch. The tab closes
+--- too when `close_tab` is set or the session never finished starting; one
+--- whose engine dies mid-review keeps its tab and the user's windows.
+local function forget(session, close_tab)
     session.closing = true
     if session.client then
         session.client:request("shutdown", nil, function() end)
         session.client:stop()
     end
+    if M.by_tab[session.tab] == session then
+        M.by_tab[session.tab] = nil
+    end
+    panel.close(session)
+    local tab = session.tab
+    if (close_tab or not session.ready) and vim.api.nvim_tabpage_is_valid(tab) and #vim.api.nvim_list_tabpages() > 1 then
+        vim.cmd.tabclose(vim.api.nvim_tabpage_get_number(tab))
+    end
+    wipe_placeholder(session)
 end
 
---- Stops the engines of sessions whose tab was closed, e.g. by `:tabclose`.
+--- Forgets the sessions whose tab was closed, e.g. by `:tabclose`.
 function M.forget_closed_tabs()
     for tab, session in pairs(M.by_tab) do
         if not vim.api.nvim_tabpage_is_valid(tab) then
-            stop_engine(session)
-            M.by_tab[tab] = nil
+            forget(session)
         end
     end
 end
@@ -100,17 +118,15 @@ end
 local function handshake(session, client)
     client:request("initialize", { protocolVersion = rpc.PROTOCOL_VERSION, client = "jpr.nvim" }, function(init_err, result)
         if init_err then
-            unregister(session)
-            -- An engine that died is reported by on_exit, with its stderr.
+            -- An engine that died is forgotten and reported by on_exit, with its stderr.
             if client.exited then
                 return
             end
-            stop_engine(session)
+            forget(session)
             return jpr().error("could not start the review engine: " .. init_err.message)
         end
         if result.protocolVersion ~= rpc.PROTOCOL_VERSION then
-            unregister(session)
-            stop_engine(session)
+            forget(session)
             return jpr().error(
                 ("protocol mismatch: the plugin speaks %d and %s speaks %d; install both from the same checkout"):format(
                     rpc.PROTOCOL_VERSION,
@@ -119,6 +135,7 @@ local function handshake(session, client)
                 )
             )
         end
+        session.ready = true
         client:request("snapshot", nil, function(_, view)
             if view then
                 M.show(session, view)
@@ -140,10 +157,12 @@ function M.start(info)
     vim.cmd.tcd(info.worktree)
     local tab = vim.api.nvim_get_current_tabpage()
     local session = { number = info.number, repo = info.repo, worktree = info.worktree, tab = tab, view = {} }
+    session.placeholder_buf = vim.api.nvim_get_current_buf()
     -- Registered only once the panel and the engine are up, so a failure here
     -- never leaves a half-built session for `:Jpr open` to refocus.
     local opened, open_err = pcall(panel.open, session)
     if not opened then
+        forget(session)
         return jpr().error("could not open the panel: " .. open_err)
     end
 
@@ -157,7 +176,7 @@ function M.start(info)
         end,
     })
     if not client then
-        panel.close(session)
+        forget(session)
         return jpr().error(err)
     end
     session.client = client
@@ -197,10 +216,10 @@ end
 
 function M.on_exit(session, code, stderr)
     session.client = nil
-    unregister(session)
     if session.closing then
         return
     end
+    forget(session)
     local detail = (stderr and stderr ~= "") and (": " .. stderr) or ""
     jpr().error(("the review engine for PR #%d stopped (exit %d)%s"):format(session.number, code, detail))
 end
@@ -218,12 +237,7 @@ function M.close_current()
     if not session then
         return jpr().error("no pull request is open in this tab")
     end
-    stop_engine(session)
-    M.by_tab[session.tab] = nil
-    if vim.api.nvim_tabpage_is_valid(session.tab) and #vim.api.nvim_list_tabpages() > 1 then
-        vim.api.nvim_set_current_tabpage(session.tab)
-        vim.cmd("tabclose")
-    end
+    forget(session, true)
 end
 
 return M
