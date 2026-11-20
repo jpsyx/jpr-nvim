@@ -76,8 +76,8 @@ pub fn serve<R: BufRead, W: Write + Send + 'static>(
     });
     let answered = answer_requests(reader, writer, session, &events, options);
     // The poller stops before the last drain, so no sync can announce
-    // anything after it, and a closed output ends the poller instead of
-    // blocking this join.
+    // anything after it. The join waits for at most one in-flight sync and
+    // the write of its events.
     drop(stop);
     if let Some(poller) = poller {
         // A poller that panicked has nothing left to stop.

@@ -1,6 +1,7 @@
 //! The server end to end, over in-memory streams and the fake ports.
 
 use std::io::{BufReader, Cursor, Read};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -57,9 +58,9 @@ fn messages(output: &Mutex<Vec<u8>>) -> Vec<Value> {
         .collect()
 }
 
-/// Serves `input` and returns what was written, waiting up to a second for
-/// `expected` messages because events arrive from another thread.
-fn run(input: &str, forge: &FakeForge, expected: usize) -> Vec<Value> {
+/// Serves `input` and returns everything written, events included: `serve`
+/// writes every event before it returns.
+fn run(input: &str, forge: &FakeForge) -> Vec<Value> {
     let output = Arc::new(Mutex::new(Vec::<u8>::new()));
     serve(
         Cursor::new(input.to_owned()),
@@ -68,14 +69,7 @@ fn run(input: &str, forge: &FakeForge, expected: usize) -> Vec<Value> {
         &options(None),
     )
     .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(1);
-    loop {
-        let written = messages(&output);
-        if written.len() >= expected || Instant::now() > deadline {
-            return written;
-        }
-        thread::sleep(Duration::from_millis(10));
-    }
+    messages(&output)
 }
 
 fn response(messages: &[Value], id: u64) -> &Value {
@@ -94,7 +88,7 @@ fn event(messages: &[Value]) -> &Value {
 
 #[test]
 fn initialize_reports_the_protocol_and_server_versions() {
-    let written = run(&request(1, "initialize"), &forge(), 1);
+    let written = run(&request(1, "initialize"), &forge());
     let result = &response(&written, 1)["result"];
     assert_eq!(result["protocolVersion"], 1);
     assert_eq!(result["version"], "9.9.9");
@@ -102,7 +96,7 @@ fn initialize_reports_the_protocol_and_server_versions() {
 
 #[test]
 fn snapshot_before_any_sync_is_empty() {
-    let written = run(&request(1, "snapshot"), &forge(), 1);
+    let written = run(&request(1, "snapshot"), &forge());
     let result = &response(&written, 1)["result"];
     assert_eq!(result["sync"]["state"], "never");
     assert_eq!(result["files"], serde_json::json!([]));
@@ -110,7 +104,7 @@ fn snapshot_before_any_sync_is_empty() {
 
 #[test]
 fn sync_answers_with_the_view_and_announces_it() {
-    let written = run(&request(1, "sync"), &forge(), 2);
+    let written = run(&request(1, "sync"), &forge());
     let result = &response(&written, 1)["result"];
     assert_eq!(result["files"][0]["path"], "src/a.rs");
     assert_eq!(result["files"][0]["threads"], 1);
@@ -125,7 +119,7 @@ fn sync_answers_with_the_view_and_announces_it() {
 fn a_failed_sync_is_an_engine_error_and_an_event() {
     let forge = forge();
     forge.fail_with(Some("offline"));
-    let written = run(&request(1, "sync"), &forge, 2);
+    let written = run(&request(1, "sync"), &forge);
     let error = &response(&written, 1)["error"];
     assert_eq!(error["code"], -32000);
     assert!(error["message"].as_str().unwrap().contains("offline"));
@@ -134,11 +128,7 @@ fn a_failed_sync_is_an_engine_error_and_an_event() {
 
 #[test]
 fn unknown_methods_and_bad_json_get_error_responses() {
-    let written = run(
-        &format!("{}{{oops\n", request(1, "frobnicate")),
-        &forge(),
-        2,
-    );
+    let written = run(&format!("{}{{oops\n", request(1, "frobnicate")), &forge());
     assert_eq!(response(&written, 1)["error"]["code"], -32601);
     let parse_error = written
         .iter()
@@ -152,7 +142,6 @@ fn shutdown_answers_and_stops_reading() {
     let written = run(
         &format!("{}{}", request(1, "shutdown"), request(2, "initialize")),
         &forge(),
-        2,
     );
     assert_eq!(response(&written, 1)["result"], Value::Null);
     assert!(
@@ -194,6 +183,70 @@ fn the_poller_syncs_in_the_background() {
     )
     .unwrap();
     assert!(forge.fetches() >= 2, "fetched {} times", forge.fetches());
+}
+
+/// The views of every `synced` event in `output`.
+fn synced_views(output: &Mutex<Vec<u8>>) -> Vec<Value> {
+    messages(output)
+        .into_iter()
+        .filter(|message| message["params"]["type"] == "synced")
+        .map(|message| message["params"]["view"].clone())
+        .collect()
+}
+
+fn changed_snapshot() -> ForgeSnapshot {
+    ForgeSnapshot {
+        head_sha: "def456".into(),
+        has_pending_review: false,
+        threads: vec![github_thread("T1", "src/a.rs")],
+        files: vec![
+            changed_file("src/a.rs", ViewedState::Viewed),
+            changed_file("src/b.rs", ViewedState::Unviewed),
+        ],
+    }
+}
+
+#[test]
+fn the_poller_announces_each_sync_while_the_client_is_connected() {
+    let forge = forge();
+    let output = Arc::new(Mutex::new(Vec::<u8>::new()));
+    let announced_while_open = Arc::new(AtomicBool::new(false));
+    let (watched, written, announced) = (
+        forge.clone(),
+        Arc::clone(&output),
+        Arc::clone(&announced_while_open),
+    );
+    // Once the first poll is announced the forge changes, and the reader
+    // stays open until a later poll announces the change.
+    let reader = BufReader::new(EndsWhen {
+        done: move || {
+            let views = synced_views(&written);
+            if views.is_empty() {
+                return false;
+            }
+            watched.set_snapshot(changed_snapshot());
+            let has_changed = views.iter().any(|view| {
+                view["files"]
+                    .as_array()
+                    .is_some_and(|files| files.len() == 2)
+            });
+            announced.store(has_changed, Ordering::SeqCst);
+            has_changed
+        },
+        deadline: Instant::now() + Duration::from_secs(10),
+    });
+    serve(
+        reader,
+        &output,
+        &session(&forge),
+        &options(Some(Duration::from_millis(20))),
+    )
+    .unwrap();
+    assert!(
+        announced_while_open.load(Ordering::SeqCst),
+        "{:?}",
+        messages(&output)
+    );
 }
 
 #[test]
