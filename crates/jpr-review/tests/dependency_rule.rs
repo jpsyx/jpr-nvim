@@ -26,64 +26,104 @@ const GENERIC_PREFIX: &str = "review-";
 
 /// Every way a generic crate reaches a frontend crate or a UI library.
 fn violations(metadata: &Value) -> Vec<String> {
-    let names: HashMap<&str, &str> = metadata["packages"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|package| Some((package["id"].as_str()?, package["name"].as_str()?)))
-        .collect();
-    let members: BTreeSet<&str> = metadata["workspace_members"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .collect();
-    let edges: HashMap<&str, Vec<&str>> = metadata["resolve"]["nodes"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter_map(|node| {
-            let deps = node["deps"]
-                .as_array()?
-                .iter()
-                .filter(|dep| runtime(dep))
-                .filter_map(|dep| dep["pkg"].as_str())
-                .collect();
-            Some((node["id"].as_str()?, deps))
-        })
-        .collect();
-    let mut found = Vec::new();
-    for &member in &members {
-        let member_name = names.get(member).copied().unwrap_or(member);
-        if !member_name.starts_with(GENERIC_PREFIX) {
-            continue;
+    let graph = DependencyGraph::from_metadata(metadata);
+    graph
+        .members
+        .iter()
+        .copied()
+        .filter(|member| graph.name(member).starts_with(GENERIC_PREFIX))
+        .flat_map(|member| graph.violations_of(member))
+        .collect()
+}
+
+/// The parts of `cargo metadata`'s resolved graph the rule reads, keyed by
+/// package id.
+struct DependencyGraph<'a> {
+    /// Each package's name.
+    names: HashMap<&'a str, &'a str>,
+    /// The workspace's own packages.
+    members: BTreeSet<&'a str>,
+    /// Each package's normal and build dependencies.
+    edges: HashMap<&'a str, Vec<&'a str>>,
+}
+
+impl<'a> DependencyGraph<'a> {
+    fn from_metadata(metadata: &'a Value) -> Self {
+        let names = metadata["packages"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|package| Some((package["id"].as_str()?, package["name"].as_str()?)))
+            .collect();
+        let members = metadata["workspace_members"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .collect();
+        let edges = metadata["resolve"]["nodes"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|node| {
+                let dependencies = node["deps"]
+                    .as_array()?
+                    .iter()
+                    .filter(|dependency| is_runtime_dependency(dependency))
+                    .filter_map(|dependency| dependency["pkg"].as_str())
+                    .collect();
+                Some((node["id"].as_str()?, dependencies))
+            })
+            .collect();
+        Self {
+            names,
+            members,
+            edges,
         }
-        let mut seen = BTreeSet::new();
-        let mut stack = vec![member];
-        while let Some(id) = stack.pop() {
-            for &dep in edges.get(id).map(Vec::as_slice).unwrap_or_default() {
-                if !seen.insert(dep) {
+    }
+
+    /// The name of the package `package_id`, or the id when it has none.
+    fn name(&self, package_id: &'a str) -> &'a str {
+        self.names.get(package_id).copied().unwrap_or(package_id)
+    }
+
+    /// Every UI library and frontend crate `member` reaches, directly or
+    /// through another crate, as one message each.
+    fn violations_of(&self, member: &'a str) -> Vec<String> {
+        let member_name = self.name(member);
+        let mut found_violations = Vec::new();
+        let mut visited = BTreeSet::new();
+        let mut to_visit = vec![member];
+        while let Some(package_id) = to_visit.pop() {
+            for &dependency in self
+                .edges
+                .get(package_id)
+                .map(Vec::as_slice)
+                .unwrap_or_default()
+            {
+                if !visited.insert(dependency) {
                     continue;
                 }
-                let name = names.get(dep).copied().unwrap_or(dep);
+                let name = self.name(dependency);
                 if UI_CRATES.contains(&name) {
-                    found.push(format!("{member_name} depends on the UI library {name}"));
+                    found_violations
+                        .push(format!("{member_name} depends on the UI library {name}"));
                 }
-                if members.contains(dep) && !name.starts_with(GENERIC_PREFIX) {
-                    found.push(format!(
+                if self.members.contains(dependency) && !name.starts_with(GENERIC_PREFIX) {
+                    found_violations.push(format!(
                         "{member_name} depends on the frontend crate {name}"
                     ));
                 }
-                stack.push(dep);
+                to_visit.push(dependency);
             }
         }
+        found_violations
     }
-    found
 }
 
 /// Whether an edge is a normal or build dependency. Dev-dependencies may be anything.
-fn runtime(dep: &Value) -> bool {
-    dep["dep_kinds"].as_array().is_some_and(|kinds| {
+fn is_runtime_dependency(dependency: &Value) -> bool {
+    dependency["dep_kinds"].as_array().is_some_and(|kinds| {
         kinds
             .iter()
             .any(|kind| kind["kind"].is_null() || kind["kind"] == "build")
@@ -113,11 +153,11 @@ fn workspace_metadata() -> Value {
 
 #[test]
 fn generic_crates_stay_frontend_neutral() {
-    let found = violations(&workspace_metadata());
+    let found_violations = violations(&workspace_metadata());
     assert!(
-        found.is_empty(),
+        found_violations.is_empty(),
         "the dependency rule is broken:\n{}",
-        found.join("\n")
+        found_violations.join("\n")
     );
 }
 

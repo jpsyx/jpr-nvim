@@ -118,6 +118,25 @@ pub fn parse_files_page(data: &Value) -> Result<FilesPage> {
 
 fn parse_thread(node: &Value) -> Option<Thread> {
     let path = node["path"].as_str()?.to_owned();
+    let comments = node.pointer("/comments/nodes")?.as_array()?;
+    Some(Thread {
+        id: node["id"].as_str()?.to_owned(),
+        origin: Origin::Github,
+        anchor: parse_anchor(node, path),
+        state: if node["isResolved"].as_bool().unwrap_or(false) {
+            ThreadState::Resolved
+        } else {
+            ThreadState::Open
+        },
+        outdated: node["isOutdated"].as_bool().unwrap_or(false),
+        messages: comments.iter().filter_map(parse_comment).collect(),
+    })
+}
+
+/// Where a `THREADS` node on `path` is attached: its lines when GitHub reports
+/// any (an outdated thread's original lines when the current ones are gone),
+/// else the whole file.
+fn parse_anchor(node: &Value, path: String) -> Anchor {
     let side = if node["diffSide"].as_str() == Some("LEFT") {
         Side::Left
     } else {
@@ -127,26 +146,8 @@ fn parse_thread(node: &Value) -> Option<Thread> {
     let line = node["line"]
         .as_u64()
         .or_else(|| node["originalLine"].as_u64());
-    let anchor = match (is_file, line) {
-        (false, Some(end)) => {
-            let start = node["startLine"]
-                .as_u64()
-                .or_else(|| node["originalStartLine"].as_u64())
-                .filter(|start| *start != end);
-            Anchor {
-                file: Some(path),
-                kind: if start.is_some() {
-                    AnchorKind::Range
-                } else {
-                    AnchorKind::Line
-                },
-                side,
-                start: Some(start.unwrap_or(end)),
-                end: Some(end),
-                commit: None,
-                snapshot: None,
-            }
-        }
+    match (is_file, line) {
+        (false, Some(end)) => parse_line_anchor(node, path, side, end),
         _ => Anchor {
             file: Some(path),
             kind: AnchorKind::File,
@@ -156,20 +157,29 @@ fn parse_thread(node: &Value) -> Option<Thread> {
             commit: None,
             snapshot: None,
         },
-    };
-    let comments = node.pointer("/comments/nodes")?.as_array()?;
-    Some(Thread {
-        id: node["id"].as_str()?.to_owned(),
-        origin: Origin::Github,
-        anchor,
-        state: if node["isResolved"].as_bool().unwrap_or(false) {
-            ThreadState::Resolved
+    }
+}
+
+/// A line anchor ending at `end`, or a range anchor when the node starts on
+/// an earlier line.
+fn parse_line_anchor(node: &Value, path: String, side: Side, end: u64) -> Anchor {
+    let start = node["startLine"]
+        .as_u64()
+        .or_else(|| node["originalStartLine"].as_u64())
+        .filter(|start| *start != end);
+    Anchor {
+        file: Some(path),
+        kind: if start.is_some() {
+            AnchorKind::Range
         } else {
-            ThreadState::Open
+            AnchorKind::Line
         },
-        outdated: node["isOutdated"].as_bool().unwrap_or(false),
-        messages: comments.iter().filter_map(parse_comment).collect(),
-    })
+        side,
+        start: Some(start.unwrap_or(end)),
+        end: Some(end),
+        commit: None,
+        snapshot: None,
+    }
 }
 
 fn parse_comment(node: &Value) -> Option<Message> {
@@ -218,8 +228,9 @@ mod tests {
                 "state": state, "viewerDidAuthor": false, "author": { "login": login, "__typename": kind } })
     }
 
-    #[test]
-    fn parses_line_range_outdated_and_file_threads() {
+    /// One parsed `THREADS` page holding, in order, a line, a range, an
+    /// outdated and a file thread.
+    fn parsed_threads_page() -> ThreadsPage {
         let data = json!({ "node": {
             "headRefOid": "head1",
             "reviewThreads": {
@@ -240,15 +251,30 @@ mod tests {
                 ]
             }
         } });
-        let (head, threads, cursor) = parse_threads_page(&data).unwrap();
+        parse_threads_page(&data).unwrap()
+    }
+
+    #[test]
+    fn parses_the_head_commit_and_the_next_cursor() {
+        let (head, _, cursor) = parsed_threads_page();
         assert_eq!(head, "head1");
         assert_eq!(cursor.as_deref(), Some("CUR"));
+    }
+
+    #[test]
+    fn parses_a_line_thread() {
+        let (_, threads, _) = parsed_threads_page();
         let line = &threads[0];
         assert_eq!(
             (line.anchor.kind, line.anchor.start, line.anchor.end),
             (AnchorKind::Line, Some(12), Some(12))
         );
         assert_eq!(line.messages[0].sync, Some(MessageSync::Published));
+    }
+
+    #[test]
+    fn parses_a_resolved_range_thread_with_a_bot_draft() {
+        let (_, threads, _) = parsed_threads_page();
         let range = &threads[1];
         assert_eq!(
             (
@@ -262,12 +288,22 @@ mod tests {
         assert_eq!(range.state, ThreadState::Resolved);
         assert_eq!(range.messages[0].author, "dependabot[bot]");
         assert_eq!(range.messages[0].sync, Some(MessageSync::Draft));
+    }
+
+    #[test]
+    fn parses_an_outdated_thread_at_its_original_line() {
+        let (_, threads, _) = parsed_threads_page();
         let outdated = &threads[2];
         assert!(outdated.outdated);
         assert_eq!(
             (outdated.anchor.kind, outdated.anchor.end),
             (AnchorKind::Line, Some(4))
         );
+    }
+
+    #[test]
+    fn parses_a_file_thread() {
+        let (_, threads, _) = parsed_threads_page();
         let file = &threads[3];
         assert_eq!(
             (
