@@ -1,112 +1,145 @@
 # Architecture
 
-jpr-nvim is a single crate with two targets: a library that holds
-everything worth testing, and a binary that is a shell around it. Extend this
-document as the shape changes; it is meant to grow, not to be replaced.
+jpr-nvim is a pull-request review engine in Rust with a Neovim plugin on top.
+The engine is frontend-neutral on purpose: Neovim is its first frontend, and
+other frontends (a terminal UI, for reviewers who do not use Neovim) are meant
+to reuse it. Extend this document as the shape changes.
 
-## The layout
+## Layers
 
 ```
-src/
-├── main.rs          the binary: parse, dispatch, report, exit
-├── lib.rs           the library root: module list and the product name
-├── cli.rs           the clap types: every flag and subcommand
-├── config.rs        the settings: their shape, their file, their defaults
-├── prompt.rs        asking for a value that was left out
-├── theme.rs         semantic colors for human-facing output
-└── commands/
-    ├── mod.rs       dispatch, plus the narration commands share
-    ├── greet.rs     a command that asks when a value is missing
-    ├── info.rs      a command whose output is data
-    └── config/
-        ├── mod.rs   routing for the `config` subcommand
-        ├── show.rs  the effective settings, one key=value line each
-        └── set.rs   change one setting and save it
-tests/
-└── public_api.rs    the library surface, driven from outside the crate
+Neovim (lua/jpr)  --JSON-RPC over stdio-->  jpr-review serve (one per PR)
+   ^  events                                     | owns the session
+   |                                             +--> gh (GitHub)
+   +-- draws view models                         +--> state files
 ```
 
-## Why a library plus a thin binary
+| Kind | Crates and paths | May depend on |
+| --- | --- | --- |
+| Generic engine | `crates/review-*` | std, small general-purpose crates, other `review-*` crates |
+| Composition root | `crates/jpr-review` | everything above |
+| Neovim adapter | `lua/jpr`, `plugin/jpr.lua` | the protocol in `docs/protocol.md` |
 
-`main.rs` does four things: parse the arguments, call `commands::run`, print a
-failure on stderr, and return an exit code. Everything else is in the library,
-so a test can reach it by calling a function instead of spawning a process.
-`tests/public_api.rs` is that test: it drives the same public surface the
-binary does, which is also a check that the surface is usable from outside.
+**The dependency rule.** A generic crate never depends on Neovim, Lua, a
+terminal UI library, or a frontend crate, directly or transitively.
+`crates/jpr-review/tests/dependency_rule.rs` enforces it against
+`cargo metadata`: a `review-*` crate may not reach a known UI or editor crate,
+or a workspace crate outside `review-*`, through its runtime dependencies.
+Dev-dependencies are exempt. Generic crate names never contain `nvim` or `jpr`.
 
-## How a value is resolved
+**Where logic goes.** If a decision would be the same in a terminal UI, it is
+Rust in a generic crate. Lua manages windows, buffers and keys, and draws the
+read models the engine returns.
 
-Every value a command needs is looked for in the same order, and `greet` is
-the worked example:
+## The generic crates
 
-1. the flag or argument (`--name Ada`), which is what an agent or a script
-   passes and what makes every action reachable without a prompt;
-2. the configuration file (`name = "Ada"`), which is how a person avoids
-   typing the same flag every day;
-3. a question, asked through `src/prompt.rs`, when there is a terminal to ask
-   on;
-4. a failure naming the flag, when there is not.
-
-Steps 1 and 2 are pure functions (`commands::greet::resolve_name`), step 3 is
-the one module allowed to read from the terminal, and step 4 is the reason an
-agent never hangs on a question it cannot see.
-
-## The pure/impure split
-
-The split runs through every module, and it is the reason the test suite is
-fast and boring:
-
-| Pure, tested inline | Impure, deliberately thin |
+| Crate | Responsibility |
 | --- | --- |
-| `cli.rs`: the argument types, and that they parse | `main.rs`: process plumbing |
-| `theme.rs`: which role gets which color | `config::load` / `config::save`: reading and writing the file |
-| `config`: parsing, validating a setting, where the file lives | `prompt::ask`: the terminal read/write loop |
-| `prompt::interpret` / `render`: what an answer means, and how a question looks | `commands/*::run`: printing, prompting, saving |
-| `commands::greet::greeting` and `resolve_name`: the message and where the name came from | |
-| `commands::info::facts`: the facts and their order | |
-| `commands::config::show::lines`: the shape of the output | |
+| `review-model` | Domain types (pull requests, changed files, threads, anchors, messages) and read models (`SessionView`, `FileRow`, `SyncState`, `Event`). Pure data. |
+| `review-core` | The ports (`Forge`, `ReviewStore`, `Clock`), the `ReviewSession` facade, and the presenter that builds read models. The `fakes` feature adds in-memory fakes and the port contract tests. |
+| `review-store-fs` | The `ReviewStore` adapter: one directory per PR, two versioned JSON files written atomically (see "State on disk"). |
+| `review-forge-github` | The `Forge` adapter: `gh pr view` and `gh api graphql`, with a 30 second timeout per call. Adapted from dif. |
+| `review-workspace-git` | Checks a PR out into a worktree: the default (`git worktree add` plus `gh pr checkout`) or a custom command that prints the path. |
+| `review-rpc` | The JSON-RPC protocol and a server over any line-based transport, with a background poller. |
 
-When one of the thin shells grows an `if` that matters, that `if` moves into a
-pure function next to it before it grows a second one.
+## Patterns
 
-## Output channels
+- **Ports and adapters.** The engine reaches the outside world only through
+  traits in `review_core::ports`. The store adapter passes the shared contract
+  test for its port (`review_core::contract`).
+- **Facade.** Frontends talk only to `ReviewSession`.
+- **Command/query split.** `sync` changes state; `view` reads it. The RPC
+  methods follow the same split (`sync` and `snapshot`).
+- **Observer.** `ReviewSession::subscribe` returns a channel of `Event`s; the
+  RPC server forwards them as `event` notifications.
+- **Presenter.** `review_core::session_view` builds the `SessionView` every
+  frontend draws.
+- **Composition root.** Only `crates/jpr-review` builds real adapters.
 
-Stdout carries data, stderr carries the conversation with the person: prompts,
-progress, failures, and every confirmation. That is why `config show` writes
-`key=value` lines on stdout while `config set` reports what it saved on
-stderr, and why `theme.rs` decides whether to emit color by looking at stderr.
-See `docs/rules/cli-ux.md`.
+## Process model
 
-## The configuration file
+`:Jpr open <n>` runs `jpr-review checkout --pr <n>` in Neovim's current
+directory, which prints the worktree as JSON. The plugin then opens a tab whose
+directory is the worktree, opens the panel, and starts
+`jpr-review serve --pr <n> --repo <owner/name>` there. After the `initialize`
+handshake it asks for a `snapshot` (what was saved last) and then a `sync`.
 
-The settings are one `serde` struct with defaults (`src/config.rs`), stored as
-TOML under the XDG configuration directory: `$XDG_CONFIG_HOME/<package>/
-config.toml`, or `~/.config/<package>/config.toml`. `--config <PATH>` (or
-`CLI_CONFIG`) points every command at a different file, which is what tests
-and scripts use so they never touch the real one. A missing file is not an
-error: it means nothing has been configured yet, so the defaults apply.
+The server reads requests on stdin, writes responses and notifications on
+stdout, and syncs with GitHub in the background every 60 seconds (`--poll`).
+A sync failure keeps the last view and is announced as an event. Threads run
+the poller and the event forwarder around one `Mutex<ReviewSession>`; there is
+no async runtime.
 
-Adding a setting is one field on `Config`, one arm in `Config::set`, one line
-in `Config::describe`, and its name in `Config::KEYS`. The tests that walk
-`KEYS` then cover it everywhere: `config show` prints it, `config set` offers
-it, and the round trip through the file keeps it.
+### Checkout
 
-## The dependencies, and what each is for
+The default checkout puts PR `n` at `<repo>-worktrees/pr-<n>` beside the main
+checkout: `git worktree add --detach`, then `gh pr checkout <n> -b pr-<n>`
+inside it. If that path already exists, it is reused only when it is a
+worktree of this repository on branch `pr-<n>`. Anything else there is an
+error and is never removed, because it may hold work git cannot see. The only
+forced removal is of a worktree the same call just created, when
+`gh pr checkout` fails in it. A custom `worktree_cmd` (`{n}` is the number)
+replaces all of this: it must print an existing directory as its last line.
 
-| Crate | Why it is here |
+### Session lifecycle in the plugin
+
+Each tab holds at most one session, and `:Jpr open` on a PR that already has
+a tab switches to it. Every way a session ends (`:Jpr close`,
+`:tabclose`, the engine exiting, a failed start or handshake) goes through one
+`forget` path: it sends `shutdown`, stops the engine, wipes the panel and
+unregisters the session, so a later `:Jpr open` starts fresh. A session is
+registered only once its panel and engine are up. `rpc.start` returns
+`nil, err` rather than raising when the engine cannot be started.
+
+## State on disk
+
+The state of PR `n` lives in `$XDG_STATE_HOME/jpr/<owner>/<repo>/pr-<n>/`
+(`~/.local/state/...` when `XDG_STATE_HOME` is unset or relative).
+`jpr-review state-path` prints it. The owner and repository must each be one
+plain name: empty, `.`, `..` and anything holding a path separator are
+rejected.
+
+| File | Holds |
 | --- | --- |
-| `anyhow` | One error type across the program, with a `.context(...)` chain the binary prints as the failure message. |
-| `clap` (derive, env) | The command-line surface, declared next to the types it fills. `env` lets any flag also come from the environment. |
-| `serde` (derive) | The configuration struct is (de)serialized rather than parsed by hand, so a new setting is one more field. |
-| `toml` (preserve_order) | The configuration file format, because a file a person edits should look like one. `preserve_order` keeps a table in the order it was read rather than sorting it. |
+| `session.json` | `{"version":1,"pid","worktree","pr","lastSyncedAt"}`: the daemon's pid, the worktree, the pull request, the last successful sync (Unix seconds) |
+| `viewed.json` | `{"version":1,"files":[{"path","additions","deletions","viewed"}]}`: the changed files with their counts and viewed state |
 
-The set is small on purpose (`docs/rules/rust.md`). Adding to it means saying
-here what the crate is for, in one line, in the same change.
+- **Versioned envelopes.** A file without a `version` is rejected as corrupt.
+  A file with a newer version is refused and never overwritten, so an older
+  build cannot drop what a newer one added. Both files are checked before
+  either is written.
+- **Atomic writes.** Each write goes to a temporary file unique to that write,
+  is flushed, renamed over the target, and the directory is flushed. Files are
+  created with mode 0600.
+- **Known limits.** The two files are not written atomically as a pair, and
+  the directory key ignores the forge host and letter case.
 
-## Things to rename once
+Later milestones add local threads, the sync registry and agent rounds.
 
-- `CLI_VERBOSE` and `CLI_CONFIG`, the environment variables behind `--verbose`
-  and `--config` in `src/cli.rs`. Give them a prefix of your own when the
-  tool's name settles.
-- `APP_NAME` in `src/lib.rs` is the name people read; the crate name is what
-  they type.
+## The binary
+
+`crates/jpr-review` keeps the scaffold's library-plus-thin-binary shape:
+`src/main.rs` parses, calls `commands::run`, and turns an error into a stderr
+line and exit code 1. Its commands are `checkout`, `serve` and `state-path`.
+`prompt.rs` asks for a value left out on a terminal, and `theme.rs` holds the
+semantic colors. `serve` takes only flags, because its stdin is the protocol.
+
+## The Neovim plugin
+
+| Module | Responsibility |
+| --- | --- |
+| `plugin/jpr.lua` | Defines `:Jpr` |
+| `jpr` | Config, highlight groups, argument parsing, subcommand dispatch |
+| `jpr.rpc` | JSON-RPC client over `jobstart` |
+| `jpr.session` | One review per tab: checkout, engine process, panel updates, and the one teardown path |
+| `jpr.render.panel` | Pure: `SessionView` to lines, highlights and paths |
+| `jpr.views.panel` | The panel window; `<CR>` opens a file |
+
+## Tests
+
+- `cargo test --workspace --all-features`: the engine against fakes, the
+  adapters, the protocol over in-memory streams, and the dependency rule.
+- `./scripts/test-lua.sh`: headless Neovim specs against
+  `tests/lua/fixtures/fake_engine.sh` (and `crashing_engine.sh`, an engine
+  that dies at startup).
+- `just check` runs both plus formatting and clippy.

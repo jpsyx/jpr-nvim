@@ -1,51 +1,63 @@
 # jpr-nvim
 
-A command-line tool written in Rust (edition 2024). clap declares the
-command-line surface, a serde struct stored as TOML holds the settings, and
-anyhow carries errors with the context that produced them. Tasks run through
-`just`, and `./install.sh` builds a release binary and installs it on your
-PATH.
+Review GitHub pull requests in Neovim. `:Jpr open <number>` checks the pull
+request out into its own worktree and opens a tab with a panel of its changed
+files, viewed state and review threads, kept in sync with GitHub.
 
-## Getting started
+The review engine (`jpr-review`) is a Rust workspace of frontend-neutral crates;
+the Neovim plugin is a thin Lua frontend over its JSON-RPC protocol. See
+[`docs/architecture.md`](docs/architecture.md) and
+[`docs/protocol.md`](docs/protocol.md).
 
-A Rust toolchain is the only prerequisite ([rustup.rs](https://rustup.rs)).
-`just` is optional (`cargo install just`): every recipe is one command you can
-also type by hand.
+## Requirements
+
+- A Rust toolchain ([rustup.rs](https://rustup.rs)) to build the engine.
+- The GitHub CLI (`gh`), logged in.
+- git and Neovim 0.11 or newer.
+
+## Install
 
 ```sh
-# run it (with no subcommand it prints its help)
-cargo run -- --help
-cargo run -- greet --name Ada                 # just run greet --name Ada
-cargo run -- config show                      # just run config show
+./install.sh                  # builds jpr-review into ~/.local/bin (BIN_DIR to change)
+```
 
-# the full test suite: the inline unit tests plus tests/
-cargo test                                    # just test
+Load the plugin from the same checkout, so the Lua and the engine always come
+from one commit. With lazy.nvim:
 
-# lint clean (clippy pedantic + nursery are on, warnings are errors)
-cargo clippy --all-targets -- -D warnings     # just lint
+```lua
+{
+  dir = "/path/to/jpr-nvim",
+  name = "jpr",
+  cmd = "Jpr",
+  config = function()
+    require("jpr").setup({
+      -- Optional: a command that creates the worktree and prints its path.
+      -- worktree_cmd = "my-worktree-tool pr {n}",
+    })
+  end,
+}
+```
 
-# format
-cargo fmt                                     # just fmt
+## Use
 
-# everything that has to pass before a change lands
-just check
+| Command | What it does |
+| --- | --- |
+| `:Jpr open <n \| #n \| URL>` | Check the pull request out and open its review tab |
+| `:Jpr sync` | Sync with GitHub now (it also syncs every minute) |
+| `:Jpr close` | Stop the engine and close the tab |
 
-# install the binary at $BIN_DIR/<name> (default ~/.local/bin)
-./install.sh                                  # just install
+In the panel, `<CR>` opens the file under the cursor from the worktree.
+
+## Develop
+
+```sh
+just check        # fmt, clippy, Rust tests, Lua specs
+just test         # Rust tests only
+just test-lua     # Lua specs only
+just run --help   # the engine's commands
 ```
 
 ## Agent skills
 
 Agent skills are not tracked in git, but `skills-lock.json` is.
 `just skills-install` restores them after a clone.
-Run `npx skills list` to see what is installed and
-`just skills-update` to upgrade them. See
-[`docs/skills.md`](docs/skills.md) for how the two skill managers
-divide the work.
-
-## Agent rules
-
-Coding conventions live in `AGENTS.md`, which is the single source of truth.
-`CLAUDE.md` (Claude Code) and `.cursor/rules/agents.mdc` (Cursor) are symlinks
-to it, and it is also the file the Codex CLI reads natively. Update `AGENTS.md`
-and every tool stays in sync.

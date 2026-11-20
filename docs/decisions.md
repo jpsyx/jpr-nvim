@@ -105,3 +105,69 @@ the file stays readable as shell.
 
 **Revisit when.** A task needs logic rather than a command line. That is the
 moment `cargo xtask` starts paying for itself.
+
+## A workspace of generic crates and one composition root
+
+**Decision.** The engine is split into `review-*` crates that know nothing
+about Neovim, plus `jpr-review`, the only crate that wires real adapters
+together. This supersedes "The dependency set stays at four crates": that was
+the scaffold's starting point for a single-crate tool. It also retires "The
+settings are one typed struct in one TOML file": the scaffold's settings file
+left with the example commands that used it.
+
+**Why.** The review engine is meant to be reused by other frontends, starting
+with dif's terminal UI. Crate boundaries make the dependency rule mechanical,
+and a test enforces it.
+
+**Consequences.** `serde_json` joins (the protocol and the state files are
+JSON). `toml` and the scaffold's example `greet`, `info` and `config` commands
+leave. `tempfile` joins: `review-store-fs` writes each state file through a
+unique temporary file, and the filesystem tests use temporary directories.
+
+**Revisit when.** A crate is only ever used by one other crate and never by a
+frontend; merge it then.
+
+## Threads and channels, not an async runtime
+
+**Decision.** The server uses a reader loop, a poller thread and an
+event-forwarding thread around one `Mutex<ReviewSession>`.
+
+**Why.** Every outside call is a short blocking `gh` or file operation, which
+is also how dif works. An async runtime would add weight without a need.
+
+**Consequences.** A request waits while a background sync holds the session
+lock, up to `gh`'s 30 second timeout on a bad network.
+
+**Revisit when.** Requests need to stay responsive during a long sync.
+
+## The Unix socket waits for the agent milestone
+
+**Decision.** Milestone 1 serves JSON-RPC on stdio only. The socket for agent
+commands (`jpr-review reply`) arrives with the agent loop, on the same
+line-based `serve` function.
+
+**Why.** Nothing outside Neovim talks to the engine until the agent does.
+
+## `checkout` prints JSON
+
+**Decision.** `jpr-review checkout` prints `{ "worktree", "repo", "number",
+"title" }` as its last stdout line and narrates on stderr.
+
+**Why.** The plugin needs the worktree path and the `owner/name` that `serve`
+uses for its state directory, and the state directory must be known even when
+GitHub is unreachable later.
+
+## The state files are versioned envelopes
+
+**Decision.** `session.json` and `viewed.json` each carry a top-level
+`"version"`. A file without one is corrupt, and a file with a newer version is
+refused and never overwritten.
+
+**Why.** The state outlives any one build, and later milestones add fields. An
+older build that rewrote a newer file would silently drop what it did not
+understand.
+
+**Consequences.** Changing a file's shape means bumping its version in
+`review-store-fs` and reading the old one. The two files are still written one
+after the other, not as a pair, and the state directory ignores the forge host
+and letter case; both are known limits for a later milestone.

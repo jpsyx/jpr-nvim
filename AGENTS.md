@@ -2,22 +2,23 @@
 
 ## Stack
 
-- This project is a command-line tool written in Rust (edition 2024) and built
-  with cargo. There is no web server and no browser: the interface is the
-  terminal.
-- The command-line surface is **clap** (derive), the settings are a **serde**
-  struct stored as **TOML**, and failures travel as **anyhow** errors carrying
-  the context that produced them.
-- `src/main.rs` is deliberately thin. It parses arguments and hands them to the
-  library in `src/`, so every decision is reachable from a test without
-  spawning a process. Read [`docs/architecture.md`](docs/architecture.md)
-  before adding a module.
-- Every action is reachable with flags alone. A value left out on a terminal is
-  asked for through `src/prompt.rs`, never demanded through a prompt an agent
-  cannot answer.
+- This project is a pull-request review engine written in Rust (edition 2024,
+  a Cargo workspace under `crates/`) plus a Neovim plugin in Lua (`lua/`,
+  `plugin/`). There is no web server and no browser.
+- **The dependency rule is binding.** Generic crates (`crates/review-*`) never
+  depend on Neovim, Lua, a terminal UI library, or a frontend crate. Review
+  rules live in Rust; Lua only draws view models and manages windows. Read
+  [`docs/architecture.md`](docs/architecture.md) before adding a module, and
+  [`docs/protocol.md`](docs/protocol.md) before changing a request or event.
+- The binary crate `crates/jpr-review` is the composition root: clap (derive)
+  for the command-line surface, anyhow errors with context, and a thin
+  `src/main.rs`.
+- Every command is reachable with flags alone. A value left out on a terminal
+  is asked for through `crates/jpr-review/src/prompt.rs`; `serve` takes only
+  flags because its stdin is the protocol.
 - Tasks live in the `justfile` (`just --list`). Every recipe is a single
-  command you could type by hand, so `just` is a convenience and never a
-  dependency.
+  command you could type by hand. `just check` runs formatting, clippy, the
+  Rust tests and the Lua specs.
 
 ## Documentation
 
@@ -84,30 +85,33 @@ When in doubt, write the test.
 
 ## Build, test, lint
 
-A Rust toolchain is the only prerequisite ([rustup.rs](https://rustup.rs)).
+A Rust toolchain ([rustup.rs](https://rustup.rs)) builds and tests the engine;
+the Lua specs also need Neovim on `PATH`.
 `just` is optional (`cargo install just`): every recipe is one command you can
 also type by hand.
 
 ```sh
-# run it (with no subcommand it prints its help)
-cargo run -- --help
-cargo run -- greet --name Ada                 # just run greet --name Ada
-cargo run -- config show                      # just run config show
+# run the engine (with no subcommand it prints its help)
+cargo run -p jpr-review -- --help                    # just run --help
+cargo run -p jpr-review -- state-path --pr 7 --repo octo/widgets
 
-# the full test suite: the inline unit tests plus tests/
-cargo test                                    # just test
+# the Rust tests: every crate, with the shared fakes and port contracts
+cargo test --workspace --all-features                # just test
+
+# the Lua specs, in a clean headless Neovim
+./scripts/test-lua.sh                                # just test-lua
 
 # lint clean (clippy pedantic + nursery are on, warnings are errors)
-cargo clippy --all-targets -- -D warnings     # just lint
+cargo clippy --workspace --all-targets --all-features -- -D warnings   # just lint
 
 # format
-cargo fmt                                     # just fmt
+cargo fmt --all                                      # just fmt
 
 # everything that has to pass before a change lands
 just check
 
-# install the binary at $BIN_DIR/<name> (default ~/.local/bin)
-./install.sh                                  # just install
+# install jpr-review at $BIN_DIR/jpr-review (default ~/.local/bin)
+./install.sh                                         # just install
 ```
 
 ## General Code Style & Formatting
@@ -157,7 +161,8 @@ The rules for this project's language and frameworks live in `docs/rules/`:
   is scriptable, every value a person omits is asked for, every color is
   semantic.
 - [`docs/rules/cli-rust.md`](docs/rules/cli-rust.md): where those rules live in
-  this Rust code: `src/prompt.rs` for questions, `src/theme.rs` for color.
+  this Rust code: `crates/jpr-review/src/prompt.rs` for questions,
+  `crates/jpr-review/src/theme.rs` for color.
 
 ## Agent skills
 
