@@ -39,7 +39,7 @@ fmt-check:
     cargo fmt --all --check
 
 # Everything that has to pass before a change lands (reports only: `just fmt` fixes).
-check: fmt-check lint test
+check: fmt-check lint test test-lua
 
 # Build release and install `jpr-review` into $BIN_DIR (default ~/.local/bin).
 install:
