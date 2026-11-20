@@ -1,6 +1,3 @@
-//! Running `gh`, the GitHub CLI, with a timeout. `gh` is how the reviewer is
-//! already logged in, so everything happens as that account. Copied from dif.
-
 use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::{Child, Command, Output, Stdio};
@@ -16,7 +13,9 @@ use crate::graphql;
 /// than refusing connections, `gh` hangs instead of failing.
 pub const GH_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Runs `gh` in one directory.
+/// Runs `gh`, the GitHub CLI, in one directory with a timeout. `gh` is how the
+/// reviewer is already logged in, so every call happens as that account; the
+/// GitHub forge sends all its requests through it.
 #[derive(Debug, Clone)]
 pub struct Gh {
     dir: PathBuf,

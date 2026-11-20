@@ -1,7 +1,10 @@
 //! Subcommand dispatch and the helpers commands share.
 
+/// `checkout`: put a pull request in its own worktree and say where.
 pub mod checkout;
+/// `serve`: one pull request's review session, as JSON-RPC on stdin/stdout.
 pub mod serve;
+/// `state-path`: where a pull request's review state lives on this machine.
 pub mod state_path;
 
 use std::env;

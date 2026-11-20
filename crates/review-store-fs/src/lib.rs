@@ -17,9 +17,11 @@ use review_core::ports::{ReviewStore, StoreSnapshot};
 pub use format::{SESSION_VERSION, VIEWED_VERSION};
 pub use paths::state_dir;
 
-/// The daemon and what it last saw.
+/// The file, in a pull request's state directory, that holds the daemon and
+/// what it last saw.
 pub const SESSION_FILE: &str = "session.json";
-/// The changed files and their viewed state.
+/// The file, in a pull request's state directory, that holds the changed files
+/// and their viewed state.
 pub const VIEWED_FILE: &str = "viewed.json";
 
 /// A [`ReviewStore`] in one directory.

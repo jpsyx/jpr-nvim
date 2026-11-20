@@ -13,7 +13,8 @@ use review_model::{
 
 use crate::ports::{Clock, Forge, ForgeSnapshot, ReviewStore, StoreSnapshot};
 
-/// A pull request with plausible values (#7 in octo/widgets).
+/// A pull request with plausible values (#7 in octo/widgets), for tests that
+/// need any valid pull request, such as a fake forge's or a store round trip.
 #[must_use]
 pub fn sample_pr() -> PullRequest {
     PullRequest {
@@ -30,7 +31,8 @@ pub fn sample_pr() -> PullRequest {
     }
 }
 
-/// A changed file with three additions and one deletion.
+/// A changed file with three additions and one deletion, for tests that build
+/// a forge snapshot or a stored file list.
 #[must_use]
 pub fn changed_file(path: &str, viewed: ViewedState) -> ChangedFile {
     ChangedFile {
@@ -41,7 +43,8 @@ pub fn changed_file(path: &str, viewed: ViewedState) -> ChangedFile {
     }
 }
 
-/// A published GitHub thread with one comment on line 1 of `path`.
+/// A published GitHub thread with one comment on line 1 of `path`, for tests
+/// that count or forward threads.
 #[must_use]
 pub fn github_thread(id: &str, path: &str) -> Thread {
     Thread {
@@ -69,7 +72,9 @@ struct ForgeState {
     fetches: usize,
 }
 
-/// A forge that answers from memory.
+/// A forge that answers from memory, for session and server tests. Clones
+/// share state, so a test keeps one to steer it (fail, change the snapshot,
+/// count fetches) while the session holds another.
 #[derive(Debug, Clone, Default)]
 pub struct FakeForge {
     state: Arc<Mutex<ForgeState>>,
@@ -132,7 +137,9 @@ impl Forge for FakeForge {
     }
 }
 
-/// A store that keeps the snapshot in memory.
+/// A store that keeps the snapshot in memory, for tests that open a session
+/// without a disk. Clones share state, so a test can read what the session
+/// saved.
 #[derive(Debug, Clone, Default)]
 pub struct MemoryStore {
     saved: Arc<Mutex<StoreSnapshot>>,
@@ -163,7 +170,8 @@ impl ReviewStore for MemoryStore {
     }
 }
 
-/// A clock a test sets by hand.
+/// A clock a test sets by hand, so sync times are exact. Clones share the
+/// time, so a test can move the clock the session reads.
 #[derive(Debug, Clone, Default)]
 pub struct FixedClock {
     now: Arc<AtomicU64>,

@@ -7,6 +7,10 @@ use crate::fakes::{changed_file, sample_pr};
 use crate::ports::{ReviewStore, SessionRecord, StoreSnapshot};
 
 /// Checks a [`ReviewStore`] that starts empty.
+///
+/// It must load as the default snapshot, round-trip a save, and let a later
+/// save replace the earlier one. Call it from each adapter's tests, for example
+/// with a file store in a fresh temporary directory.
 pub fn check_review_store(store: &dyn ReviewStore) {
     assert_eq!(
         store.load().expect("an empty store loads"),

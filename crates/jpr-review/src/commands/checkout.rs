@@ -1,5 +1,3 @@
-//! `checkout`: put a pull request in its own worktree and say where.
-
 use std::env;
 use std::path::Path;
 
@@ -12,6 +10,11 @@ use serde_json::json;
 
 use crate::theme::Theme;
 
+/// Runs `jpr-review checkout`: puts pull request `number` in its own worktree.
+///
+/// Prints where, as one JSON line on stdout, for the Neovim plugin to open.
+/// `expected_repo` (owner/name) refuses a pull request from another
+/// repository, and `worktree_cmd` replaces the default checkout.
 pub fn run(
     number: u64,
     expected_repo: Option<&str>,

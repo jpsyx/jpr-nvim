@@ -1,8 +1,8 @@
-//! Pull requests and the files they change.
-
 use serde::{Deserialize, Serialize};
 
-/// A pull request under review.
+/// A pull request under review, as the forge reports it. The session saves it
+/// and puts it in every view, so a frontend can title its panel and an adapter
+/// can address the pull request on the forge again.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PullRequest {
@@ -10,8 +10,11 @@ pub struct PullRequest {
     pub owner: String,
     /// The repository name, e.g. `widgets`.
     pub repo: String,
+    /// The pull request number within its repository.
     pub number: u64,
+    /// The title, as the author wrote it.
     pub title: String,
+    /// The pull request's web page.
     pub url: String,
     /// The forge's own id for the pull request (GitHub's GraphQL node id).
     pub node_id: String,
@@ -25,18 +28,22 @@ pub struct PullRequest {
     pub base_ref: String,
 }
 
-/// Whether the reviewer has viewed a file, as the forge tracks it.
+/// Whether the reviewer has viewed a file, as the forge tracks it. The file
+/// list marks each file with it, and the session counts the viewed files.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ViewedState {
+    /// Marked viewed, and unchanged since.
     Viewed,
+    /// Not marked viewed.
     Unviewed,
     /// Viewed once, but the file changed since.
     Dismissed,
 }
 
 impl ViewedState {
-    /// Parses GitHub's `FileViewedState` spelling.
+    /// Parses GitHub's `FileViewedState` spelling, for adapters that read it
+    /// from the forge. `None` for any other spelling.
     #[must_use]
     pub fn parse(value: &str) -> Option<Self> {
         match value {
@@ -48,13 +55,18 @@ impl ViewedState {
     }
 }
 
-/// One file the pull request changes.
+/// One file the pull request changes, as the forge reports it. The session
+/// saves the list and turns it into the file rows a frontend draws.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChangedFile {
+    /// The file's path from the repository root.
     pub path: String,
+    /// Lines the pull request adds to the file.
     pub additions: u64,
+    /// Lines the pull request removes from the file.
     pub deletions: u64,
+    /// Whether the reviewer has viewed the file.
     pub viewed: ViewedState,
 }
 

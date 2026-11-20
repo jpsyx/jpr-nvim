@@ -1,5 +1,5 @@
 //! The GitHub forge: `gh pr view` for the pull request and `gh api graphql`
-//! for threads, files and viewed state. Adapted from dif's `github/` module.
+//! for threads, files and viewed state.
 
 mod gh;
 pub mod graphql;
@@ -14,7 +14,9 @@ use serde_json::{Value, json};
 
 pub use gh::{GH_TIMEOUT, Gh};
 
-/// [`Forge`] over the GitHub CLI.
+/// [`Forge`] over the GitHub CLI, for any frontend that reviews GitHub pull
+/// requests. Every call runs as the account `gh` is logged in to, so it needs
+/// no token of its own.
 #[derive(Debug, Clone)]
 pub struct GhForge {
     gh: Gh,

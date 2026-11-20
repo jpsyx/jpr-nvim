@@ -1,6 +1,6 @@
-//! Serving a `ReviewSession` over any line-based transport: stdio today, a
-//! Unix socket for agent commands later. Responses and event notifications
-//! share one writer, one JSON message per line.
+//! Serving a `ReviewSession` over any line-based transport, such as stdio.
+//! Responses and event notifications share one writer, one JSON message per
+//! line.
 
 use std::io::{BufRead, Write};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
@@ -18,7 +18,8 @@ use crate::protocol::{
     PROTOCOL_VERSION, Request, RpcError, failure, notification, parse_request, success,
 };
 
-/// How a server runs.
+/// How a server runs, for example as the `serve` command sets it from its
+/// flags.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServeOptions {
     /// The engine's version, reported by `initialize`.

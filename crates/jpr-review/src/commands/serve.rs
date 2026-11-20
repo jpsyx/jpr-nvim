@@ -1,5 +1,3 @@
-//! `serve`: one pull request's review session, as JSON-RPC on stdin/stdout.
-
 use std::env;
 use std::io;
 use std::sync::{Arc, Mutex};
@@ -12,6 +10,11 @@ use review_forge_github::GhForge;
 use review_rpc::ServeOptions;
 use review_store_fs::FsStore;
 
+/// Runs `jpr-review serve` for pull request `number` of `repo` (owner/name).
+///
+/// It speaks JSON-RPC on stdin and stdout until the client shuts it down or
+/// closes stdin. The Neovim plugin starts one per review tab; `poll` is the
+/// seconds between background syncs, 0 for none.
 pub fn run(number: u64, repo: &str, poll: u64) -> Result<()> {
     let (owner, name) = super::parse_repo(repo)?;
     let cwd = env::current_dir().context("reading the current directory")?;

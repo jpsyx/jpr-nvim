@@ -1,8 +1,7 @@
-//! Review threads. GitHub's and local ones share one shape.
-
 use serde::{Deserialize, Serialize};
 
-/// Where a thread lives.
+/// Where a thread lives, so a frontend can tell a forge thread from one kept
+/// only on this machine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Origin {
@@ -22,23 +21,31 @@ pub enum Side {
     Right,
 }
 
-/// What a thread is attached to.
+/// What a thread is attached to. It decides which of an [`Anchor`]'s fields
+/// are set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AnchorKind {
+    /// One line of a file.
     Line,
+    /// A run of lines of a file, from `start` to `end`.
     Range,
+    /// A whole file, with no line.
     File,
+    /// The pull request as a whole, with no file.
     Pr,
 }
 
-/// Where a thread is attached.
+/// Where a thread is attached. A frontend uses it to place the thread in the
+/// diff, and the snapshot lets a thread whose lines moved find them again.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Anchor {
     /// The file, for every kind but `pr`.
     pub file: Option<String>,
+    /// What the thread is attached to.
     pub kind: AnchorKind,
+    /// Which side of the diff the lines are on.
     pub side: Side,
     /// The first line, for `line` and `range`.
     pub start: Option<u64>,
@@ -51,7 +58,8 @@ pub struct Anchor {
 }
 
 impl Anchor {
-    /// A single line on the new side of `file`.
+    /// A single line on the new side of `file`, the most common anchor, for
+    /// example for a thread a test or a local comment starts on one line.
     #[must_use]
     pub fn line(file: &str, line: u64) -> Self {
         Self {
@@ -66,15 +74,19 @@ impl Anchor {
     }
 }
 
-/// Whether a thread still needs attention.
+/// Whether a thread still needs attention, so a frontend can fold settled
+/// threads away.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ThreadState {
+    /// Still needs an answer or a fix.
     Open,
+    /// Settled.
     Resolved,
 }
 
-/// Where a forge message stands. Local messages have none.
+/// Where a forge message stands, so a frontend can show which messages others
+/// can see. Local messages have none.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MessageSync {
@@ -82,36 +94,54 @@ pub enum MessageSync {
     Draft,
     /// Being written to the forge.
     Pending,
+    /// On the forge, visible to everyone who can see the pull request.
     Published,
+    /// Writing it to the forge failed.
     Failed,
     /// Waiting for the network.
     Queued,
 }
 
-/// One message in a thread.
+/// One message in a thread, as a frontend draws it in the conversation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Message {
+    /// Identifies the message on the forge, or on this machine for a local one.
     pub id: String,
+    /// The author's login; a bot's ends in `[bot]`.
     pub author: String,
+    /// The message text, as the author wrote it.
     pub body: String,
+    /// When the message was written, as the forge's timestamp.
     pub created: String,
+    /// When the message was last edited, in the same format as `created`.
     pub updated: String,
+    /// Where a forge message stands; `None`, and left out of the JSON, for a
+    /// local message.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sync: Option<MessageSync>,
 }
 
-/// A conversation attached to an anchor.
+/// A review conversation attached to an [`Anchor`].
+///
+/// GitHub's threads and the ones kept only on this machine share this one
+/// shape, so the session counts them per file and a frontend draws both the
+/// same way.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Thread {
+    /// Identifies the thread on the forge, or on this machine for a local one.
     pub id: String,
+    /// Whether the thread lives on the forge or only on this machine.
     pub origin: Origin,
+    /// Where the thread is attached.
     pub anchor: Anchor,
+    /// Whether the thread still needs attention.
     pub state: ThreadState,
     /// The forge says the anchored code changed since the thread was opened.
     #[serde(default)]
     pub outdated: bool,
+    /// The messages, in the order the forge reports them.
     pub messages: Vec<Message>,
 }
 
@@ -158,7 +188,7 @@ mod tests {
         assert!(!thread.outdated);
         assert_eq!(thread.anchor.kind, AnchorKind::Pr);
         assert_eq!(thread.messages[0].sync, None);
-        let out = serde_json::to_value(&thread).unwrap();
-        assert!(out["messages"][0].get("sync").is_none());
+        let serialized = serde_json::to_value(&thread).unwrap();
+        assert!(serialized["messages"][0].get("sync").is_none());
     }
 }

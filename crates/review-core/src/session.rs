@@ -1,6 +1,3 @@
-//! The facade every frontend talks to. It owns the session state, reaches the
-//! outside world only through the ports, and announces changes as events.
-
 use std::sync::mpsc::{self, Receiver, Sender};
 
 use anyhow::Result;
@@ -9,7 +6,10 @@ use review_model::{Event, PullRequest, SessionView, SyncState, Thread};
 use crate::ports::{Clock, Forge, ForgeSnapshot, ReviewStore, StoreSnapshot};
 use crate::presenter::session_view;
 
-/// One pull request's review session.
+/// One pull request's review session: the facade every frontend talks to.
+///
+/// It owns the session state, reaches the outside world only through the ports,
+/// and announces changes as [`Event`]s to its subscribers.
 pub struct ReviewSession {
     number: u64,
     forge: Box<dyn Forge>,

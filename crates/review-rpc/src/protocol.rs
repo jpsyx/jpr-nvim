@@ -5,26 +5,36 @@ use serde_json::{Value, json};
 /// Bumped whenever a request, response or event changes shape.
 pub const PROTOCOL_VERSION: u32 = 1;
 
-/// A request from the client.
+/// A request from the client, as [`parse_request`] reads it off the wire. The
+/// server routes it by `method` and answers with its `id`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Request {
+    /// The id the response echoes; never null.
     pub id: Value,
+    /// The method to call, such as `sync`.
     pub method: String,
     /// `null` when the request had none.
     pub params: Value,
 }
 
-/// A JSON-RPC error.
+/// A JSON-RPC error, sent back as a response's `error` when a request cannot
+/// be parsed, names an unknown method, or the engine cannot do it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RpcError {
+    /// The JSON-RPC error code, one of the constants on this type.
     pub code: i64,
+    /// What went wrong, for a person to read.
     pub message: String,
 }
 
 impl RpcError {
+    /// The line was not valid JSON.
     pub const PARSE_ERROR: i64 = -32700;
+    /// The JSON was not a request: it had no string method or no id.
     pub const INVALID_REQUEST: i64 = -32600;
+    /// No method has that name.
     pub const METHOD_NOT_FOUND: i64 = -32601;
+    /// The params do not fit the method.
     pub const INVALID_PARAMS: i64 = -32602;
     /// The request was valid, but the review engine could not do it.
     pub const ENGINE_ERROR: i64 = -32000;
