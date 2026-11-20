@@ -56,13 +56,19 @@ function M.start(cmd, opts)
     return self
 end
 
+--- Dispatches every complete line. A callback that raises does not stop the
+--- lines after it; the first failure is raised once they have all run.
 function Client:_on_stdout(data)
-    local lines
+    local lines, first_err
     lines, self.pending = M.split_chunks(self.pending, data)
     for _, line in ipairs(lines) do
         if line ~= "" then
-            self:_dispatch(line)
+            local ok, err = pcall(self._dispatch, self, line)
+            first_err = first_err or (not ok and err) or nil
         end
+    end
+    if first_err then
+        error(first_err, 0)
     end
 end
 

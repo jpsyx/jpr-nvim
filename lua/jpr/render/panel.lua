@@ -14,6 +14,12 @@ function M.age(seconds)
     return ("%dh ago"):format(math.floor(seconds / 3600))
 end
 
+--- `text` on one line: a buffer line cannot hold a newline, and gh's errors
+--- and git's file names can.
+function M.one_line(text)
+    return vim.trim((tostring(text):gsub("%s*[\r\n]+%s*", " ")))
+end
+
 --- The sync status line and its highlight group.
 function M.sync_text(sync, now)
     if not sync or sync.state == "never" then
@@ -22,7 +28,7 @@ function M.sync_text(sync, now)
     if sync.state == "synced" then
         return "synced " .. M.age(math.max(0, now - sync.at)), "JprMuted"
     end
-    return "sync failed: " .. (sync.message or "unknown error"), "JprError"
+    return "sync failed: " .. M.one_line(sync.message or "unknown error"), "JprError"
 end
 
 --- @return table { lines: string[], highlights: { line, col_start, col_end, group }[], paths: table<integer, string> }
@@ -37,7 +43,7 @@ function M.build(view, now)
     end
 
     local pr = view.pr
-    add(pr and ("#%d %s"):format(pr.number, pr.title) or "Loading pull request…", "JprTitle")
+    add(pr and ("#%d %s"):format(pr.number, M.one_line(pr.title)) or "Loading pull request…", "JprTitle")
     local files = view.files or {}
     add(("viewed %d/%d · threads %d"):format(view.viewedCount or 0, #files, view.threadCount or 0), "JprMuted")
     add(M.sync_text(view.sync, now))
@@ -48,7 +54,8 @@ function M.build(view, now)
         local plus = ("+%d"):format(file.additions)
         local stats = ("%s -%d"):format(plus, file.deletions)
         local threads = file.threads > 0 and (" [%d]"):format(file.threads) or ""
-        add(("%s %s  %s%s"):format(mark, file.path, stats, threads))
+        local shown_path = M.one_line(file.path)
+        add(("%s %s  %s%s"):format(mark, shown_path, stats, threads))
         local line = #lines - 1
         paths[#lines] = file.path
         if file.viewed == "VIEWED" then
@@ -56,7 +63,7 @@ function M.build(view, now)
         elseif file.viewed == "DISMISSED" then
             highlights[#highlights + 1] = { line = line, col_start = 0, col_end = #mark, group = "JprDismissed" }
         end
-        local stats_start = #mark + 1 + #file.path + 2
+        local stats_start = #mark + 1 + #shown_path + 2
         highlights[#highlights + 1] = { line = line, col_start = stats_start, col_end = stats_start + #plus, group = "JprAdded" }
         highlights[#highlights + 1] =
             { line = line, col_start = stats_start + #plus + 1, col_end = stats_start + #stats, group = "JprRemoved" }

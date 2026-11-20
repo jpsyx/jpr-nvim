@@ -77,8 +77,10 @@ function M.open_file_under_cursor(session)
         target = vim.api.nvim_get_current_win()
     end
     vim.api.nvim_set_current_win(target)
-    -- Relative to the tab's directory, which is the worktree.
-    vim.cmd.edit(path)
+    -- The path comes from the pull request, so it is untrusted: anchored in the
+    -- worktree, so a leading `+cmd`, `~` or `-` is not special, and escaped, so
+    -- `%`, `#` and spaces are taken literally.
+    vim.cmd.edit(vim.fn.fnameescape(session.worktree .. "/" .. path))
 end
 
 return M

@@ -135,6 +135,13 @@ semantic colors. `serve` takes only flags, because its stdin is the protocol.
 | `jpr.render.panel` | Pure: `SessionView` to lines, highlights and paths |
 | `jpr.views.panel` | The panel window; `<CR>` opens a file |
 
+Text from the pull request (file names, the title, `gh`'s errors) is
+untrusted. It reaches Ex commands only through `vim.fn.fnameescape`, and a file
+is opened by its path inside the worktree, so a name like `+cmd` or `%` is
+taken literally. The renderer folds newlines into spaces, because a buffer
+line cannot hold one. `jpr.rpc` dispatches each line of engine output on its
+own, so a callback that raises cannot swallow the messages after it.
+
 ## Tests
 
 - `cargo test --workspace --all-features`: the engine against fakes, the

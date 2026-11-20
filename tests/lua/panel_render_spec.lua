@@ -49,4 +49,16 @@ assert(failed.lines[3] == "sync failed: offline", failed.lines[3])
 assert(vim.deep_equal(highlighted(failed, "JprError"), { "sync failed: offline" }), "failure is an error")
 assert(panel.build({}, 0).lines[3] == "not synced yet", "a fresh view")
 
+-- gh's errors and git's file names can hold newlines; every line stays one line.
+local multi_line = panel.build({
+    pr = { number = 7, title = "Two\nlines" },
+    files = { { path = "new\nline.md", additions = 3, deletions = 1, viewed = "UNVIEWED", threads = 0 } },
+    sync = { state = "failed", at = 1, message = "error connecting\r\n  check your connection\n" },
+}, 2)
+assert(multi_line.lines[1] == "#7 Two lines", multi_line.lines[1])
+assert(multi_line.lines[3] == "sync failed: error connecting check your connection", multi_line.lines[3])
+assert(multi_line.lines[5] == "  new line.md  +3 -1", multi_line.lines[5])
+assert(multi_line.paths[5] == "new\nline.md", "the path keeps its real name for opening")
+assert(vim.deep_equal(highlighted(multi_line, "JprAdded"), { "+3" }), vim.inspect(highlighted(multi_line, "JprAdded")))
+
 print("panel_render_spec: ok")

@@ -67,4 +67,23 @@ assert(late and late.message:find("not running", 1, true), "requests after exit 
 local missing, missing_err = rpc.start({ root .. "/tests/lua/fixtures/missing-engine" }, {})
 assert(missing == nil and missing_err:find("could not start", 1, true), "a binary that is not executable is an error, not a raise")
 
+-- A callback that raises does not swallow the messages after it in the same chunk.
+local answered
+local isolated = assert(rpc.start({ root .. "/tests/lua/fixtures/fake_engine.sh" }, {
+    on_notification = function()
+        error("a broken notification handler")
+    end,
+}))
+isolated.callbacks[1] = function(_, result)
+    answered = result
+end
+local raised, raise_err = pcall(isolated._on_stdout, isolated, {
+    '{"jsonrpc":"2.0","method":"event","params":{"type":"syncFailed","message":"offline"}}',
+    '{"jsonrpc":"2.0","id":1,"result":"after"}',
+    "",
+})
+assert(answered == "after", "the reply after a failing notification still reaches its callback")
+assert(not raised and tostring(raise_err):find("a broken notification handler", 1, true), "the failure is still raised: " .. tostring(raise_err))
+isolated:stop()
+
 print("rpc_spec: ok")

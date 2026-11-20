@@ -154,7 +154,8 @@ function M.start(info)
         callback = M.forget_closed_tabs,
     })
     vim.cmd("tabnew")
-    vim.cmd.tcd(info.worktree)
+    -- Escaped: Ex commands expand `%` and `#` in a path.
+    vim.cmd.tcd(vim.fn.fnameescape(info.worktree))
     local tab = vim.api.nvim_get_current_tabpage()
     local session = { number = info.number, repo = info.repo, worktree = info.worktree, tab = tab, view = {} }
     session.placeholder_buf = vim.api.nvim_get_current_buf()
