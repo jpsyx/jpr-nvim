@@ -161,16 +161,17 @@ fn shutdown_answers_and_stops_reading() {
     );
 }
 
-/// A reader that ends after a while, to keep the server running.
-struct EndsLater {
-    at: Instant,
+/// A reader that keeps the server running until `done` holds or `deadline`
+/// passes, so a test waits on what it expects instead of a fixed window.
+struct EndsWhen<F: Fn() -> bool> {
+    done: F,
+    deadline: Instant,
 }
 
-impl Read for EndsLater {
+impl<F: Fn() -> bool> Read for EndsWhen<F> {
     fn read(&mut self, _buffer: &mut [u8]) -> std::io::Result<usize> {
-        let now = Instant::now();
-        if now < self.at {
-            thread::sleep(self.at - now);
+        while !(self.done)() && Instant::now() < self.deadline {
+            thread::sleep(Duration::from_millis(5));
         }
         Ok(0)
     }
@@ -180,8 +181,10 @@ impl Read for EndsLater {
 fn the_poller_syncs_in_the_background() {
     let forge = forge();
     let output = Arc::new(Mutex::new(Vec::<u8>::new()));
-    let reader = BufReader::new(EndsLater {
-        at: Instant::now() + Duration::from_millis(300),
+    let watched = forge.clone();
+    let reader = BufReader::new(EndsWhen {
+        done: move || watched.fetches() >= 2,
+        deadline: Instant::now() + Duration::from_secs(10),
     });
     serve(
         reader,

@@ -136,7 +136,10 @@ event-forwarding thread around one `Mutex<ReviewSession>`.
 is also how dif works. An async runtime would add weight without a need.
 
 **Consequences.** A request waits while a background sync holds the session
-lock, up to `gh`'s 30 second timeout on a bad network.
+lock. One sync is at least four sequential `gh` calls (`pr view`, the thread
+pages, the file pages, the pending review), each with its own 30 second
+timeout, so on a bad network a `snapshot` or `sync` can wait 2 minutes or
+more.
 
 **Revisit when.** Requests need to stay responsive during a long sync.
 
