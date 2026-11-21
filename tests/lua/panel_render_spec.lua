@@ -21,23 +21,27 @@ local view = {
     },
     viewedCount = 1,
     threadCount = 2,
+    draftCount = 1,
+    conversationCount = 2,
     queuedCount = 0,
     sync = { state = "synced", at = 100 },
 }
 local built = panel.build(view, 112)
 assert(vim.deep_equal(built.lines, {
     "#7 Fix the widget",
-    "viewed 1/3 · threads 2",
+    "viewed 1/3 · threads 2 · drafts 1",
     "synced 12s ago",
     "",
+    "  💬 Conversation [2]",
     "docs/",
     "    x.md  +4 -4",
     "src/",
     "  ✓ a.rs  +12 -3 [2]",
     "  ● b.rs  +1 -0",
 }), vim.inspect(built.lines))
-assert(built.paths[6] == "docs/x.md" and built.paths[8] == "src/a.rs" and built.paths[9] == "src/b.rs", vim.inspect(built.paths))
-assert(built.paths[5] == nil and built.paths[7] == nil, "directories open nothing")
+assert(built.conversation_line == 5, tostring(built.conversation_line))
+assert(built.paths[7] == "docs/x.md" and built.paths[9] == "src/a.rs" and built.paths[10] == "src/b.rs", vim.inspect(built.paths))
+assert(built.paths[5] == nil and built.paths[6] == nil and built.paths[8] == nil, "conversation and directories open nothing")
 
 local function highlighted(result, group)
     local texts = {}
@@ -52,13 +56,17 @@ assert(vim.deep_equal(highlighted(built, "JprAdded"), { "+4", "+12", "+1" }), vi
 assert(vim.deep_equal(highlighted(built, "JprRemoved"), { "-4", "-3", "-0" }), vim.inspect(highlighted(built, "JprRemoved")))
 assert(vim.deep_equal(highlighted(built, "JprViewed"), { "✓" }), "viewed mark")
 assert(vim.deep_equal(highlighted(built, "JprDismissed"), { "●" }), "dismissed mark")
-assert(vim.deep_equal(highlighted(built, "JprTitle"), { "#7 Fix the widget" }), "title")
+assert(vim.deep_equal(highlighted(built, "JprTitle"), { "#7 Fix the widget", "  💬 Conversation [2]" }), "title and conversation")
 assert(
-    vim.deep_equal(highlighted(built, "JprMuted"), { "viewed 1/3 · threads 2", "synced 12s ago", "docs/", "src/" }),
+    vim.deep_equal(highlighted(built, "JprMuted"), { "viewed 1/3 · threads 2 · drafts 1", "synced 12s ago", "docs/", "src/" }),
     vim.inspect(highlighted(built, "JprMuted"))
 )
 local queued = panel.build({ files = {}, queuedCount = 2 }, 0)
 assert(queued.lines[2] == "viewed 0/0 · threads 0 · 2 waiting for GitHub", queued.lines[2])
+local zero_counts = panel.build({ files = {}, draftCount = 0, conversationCount = 0 }, 0)
+assert(zero_counts.lines[2] == "viewed 0/0 · threads 0", zero_counts.lines[2])
+assert(zero_counts.lines[5] == "  💬 Conversation", zero_counts.lines[5])
+assert(zero_counts.conversation_line == 5, tostring(zero_counts.conversation_line))
 
 local failed = panel.build({ files = {}, sync = { state = "failed", at = 1, message = "offline" } }, 2)
 assert(failed.lines[1] == "Loading pull request…", failed.lines[1])
@@ -74,8 +82,8 @@ local multi_line = panel.build({
 }, 2)
 assert(multi_line.lines[1] == "#7 Two lines", multi_line.lines[1])
 assert(multi_line.lines[3] == "sync failed: error connecting check your connection", multi_line.lines[3])
-assert(multi_line.lines[5] == "  new line.md  +3 -1", multi_line.lines[5])
-assert(multi_line.paths[5] == "new\nline.md", "the path keeps its real name for opening")
+assert(multi_line.lines[6] == "  new line.md  +3 -1", multi_line.lines[6])
+assert(multi_line.paths[6] == "new\nline.md", "the path keeps its real name for opening")
 assert(vim.deep_equal(highlighted(multi_line, "JprAdded"), { "+3" }), vim.inspect(highlighted(multi_line, "JprAdded")))
 
 print("panel_render_spec: ok")

@@ -51,7 +51,7 @@ for _, win in ipairs(vim.api.nvim_tabpage_list_wins(review.tab)) do
         vim.api.nvim_win_close(win, true)
     end
 end
-press("<CR>", 5)
+press("<CR>", 6)
 local file_win = vim.api.nvim_get_current_win()
 assert(file_win ~= panel_win, "the file opens beside the panel")
 assert(vim.fn.resolve(vim.api.nvim_buf_get_name(0)) == vim.fn.resolve(worktree .. "/README.md"), "<CR> opens README.md")
@@ -79,7 +79,7 @@ panel_view.render(review, {
     tree = { { depth = 0, name = "notes.md", file = 0 }, { depth = 0, name = "../x", file = 1 } },
 })
 local buf_before = vim.api.nvim_win_get_buf(file_win)
-for _, line in ipairs({ 5, 6 }) do
+for _, line in ipairs({ 6, 7 }) do
     errors = {}
     local pressed, press_err = pcall(press, "<CR>", line)
     assert(pressed, "line " .. line .. " threw: " .. tostring(press_err))
@@ -96,18 +96,37 @@ local function find_sent_requests(needle)
         return line:find('"method":"setViewed"', 1, true) ~= nil and line:find(needle, 1, true) ~= nil
     end, vim.fn.readfile(log))
 end
-press("v", 5)
+press("v", 6)
 assert(vim.wait(3000, function()
     return review.view.viewedCount == 1
 end), "the engine's viewedChanged reaches the view")
 assert(#find_sent_requests('"viewed":true') == 1 and #find_sent_requests('"path":"README.md"') == 1, vim.inspect(vim.fn.readfile(log)))
-press("v", 5)
+press("v", 6)
 assert(vim.wait(3000, function()
     return #find_sent_requests('"viewed":false') == 1
 end), "v on a viewed file unmarks it")
 press("v", 1)
 vim.wait(200)
 assert(#find_sent_requests("setViewed") == 2, "v on a line with no file sends nothing")
+
+-- <CR> on the Conversation row opens the PR conversation instead of a file.
+local conversation_opened = false
+local main_window_edit_called = false
+local original_conversation_current = session.conversation_current
+local main_window = require("jpr.views.main_window")
+local original_main_window_edit = main_window.edit
+session.conversation_current = function()
+    conversation_opened = true
+end
+main_window.edit = function(...)
+    main_window_edit_called = true
+    return original_main_window_edit(...)
+end
+press("<CR>", 5)
+session.conversation_current = original_conversation_current
+main_window.edit = original_main_window_edit
+assert(conversation_opened, "<CR> on line 5 opens the conversation")
+assert(not main_window_edit_called, "<CR> on line 5 does not open a file")
 
 -- With the stream split, <CR> opens the file in the main window, not in the
 -- stream's left half, and adds no window.
@@ -121,7 +140,7 @@ end), "the stream is split")
 local left_win = review.stream.left_win
 local stream_win = vim.fn.win_findbuf(review.stream.buffers.main)[1]
 assert(#vim.api.nvim_tabpage_list_wins(review.tab) == 3, "the panel and the halves")
-press("<CR>", 5)
+press("<CR>", 6)
 assert(vim.api.nvim_get_current_win() == stream_win, "README.md opens in the main window")
 assert(vim.fn.resolve(vim.api.nvim_buf_get_name(0)) == vim.fn.resolve(worktree .. "/README.md"), "<CR> opens README.md")
 assert(not vim.api.nvim_win_is_valid(left_win) or vim.api.nvim_win_get_buf(left_win) ~= vim.api.nvim_get_current_buf(), "not in the left half")

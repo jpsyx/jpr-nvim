@@ -63,6 +63,7 @@ function M.render(session, view)
     end
     local built = render.build(view, os.time())
     panel.paths = built.paths
+    panel.conversation_line = built.conversation_line
     vim.bo[panel.buf].modifiable = true
     vim.api.nvim_buf_set_lines(panel.buf, 0, -1, false, built.lines)
     vim.bo[panel.buf].modifiable = false
@@ -78,10 +79,14 @@ function M.render(session, view)
     end
 end
 
---- Opens the file on the cursor line in the main window beside the panel.
+--- Opens the conversation or file on the cursor line in the main window beside the panel.
 function M.open_file_under_cursor(session)
     local panel = session.panel
-    local path = panel.paths[vim.api.nvim_win_get_cursor(panel.win)[1]]
+    local cursor_line = vim.api.nvim_win_get_cursor(panel.win)[1]
+    if cursor_line == panel.conversation_line then
+        return require("jpr.session").conversation_current()
+    end
+    local path = panel.paths[cursor_line]
     if not path then
         return
     end

@@ -33,10 +33,13 @@ function M.sync_text(sync, now)
     return "sync failed: " .. M.one_line(sync.message or "unknown error"), "JprError"
 end
 
---- The counts line: viewed files, threads, and viewed marks still waiting
---- for GitHub.
+--- The counts line: viewed files, threads, drafts, and viewed marks still
+--- waiting for GitHub.
 function M.build_counts_text(view)
     local text = ("viewed %d/%d · threads %d"):format(view.viewedCount or 0, #(view.files or {}), view.threadCount or 0)
+    if (view.draftCount or 0) > 0 then
+        text = text .. (" · drafts %d"):format(view.draftCount)
+    end
     if (view.queuedCount or 0) > 0 then
         text = text .. (" · %d waiting for GitHub"):format(view.queuedCount)
     end
@@ -77,7 +80,7 @@ end
 --- The panel's contents for `view` at time `now` (Unix seconds): its lines,
 --- their highlights, and which file each line shows, for the panel window to
 --- draw and to open files from.
---- @return table { lines: string[], highlights: { line, col_start, col_end, group }[], paths: table<integer, string> }
+--- @return table { lines: string[], highlights: { line, col_start, col_end, group }[], paths: table<integer, string>, conversation_line: integer }
 --- `line` is 0-based and columns are byte offsets; `paths` is keyed by 1-based line number.
 function M.build(view, now)
     local content = { lines = {}, highlights = {}, paths = {} }
@@ -92,6 +95,10 @@ function M.build(view, now)
     content.add_line(M.build_counts_text(view), "JprMuted")
     content.add_line(M.sync_text(view.sync, now))
     content.add_line("")
+    local conversation_count = view.conversationCount or 0
+    local conversation_suffix = conversation_count > 0 and (" [%d]"):format(conversation_count) or ""
+    content.add_line("  💬 Conversation" .. conversation_suffix, "JprTitle")
+    local conversation_line = #content.lines
     local files = view.files or {}
     for _, row in ipairs(view.tree or M.create_flat_tree_from_files(files)) do
         local indent = ("  "):rep(row.depth)
@@ -102,7 +109,7 @@ function M.build(view, now)
             content.add_line(indent .. M.one_line(row.name) .. "/", "JprMuted")
         end
     end
-    return { lines = content.lines, highlights = content.highlights, paths = content.paths }
+    return { lines = content.lines, highlights = content.highlights, paths = content.paths, conversation_line = conversation_line }
 end
 
 return M
