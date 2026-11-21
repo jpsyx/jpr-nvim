@@ -35,6 +35,7 @@ pub fn forge() -> FakeForge {
 fn create_workspace() -> FakeWorkspace {
     let workspace = FakeWorkspace::default();
     workspace.put_base("src/a.rs", "fn a() {}\n");
+    workspace.put_at("abc123", "src/a.rs", "fn a() { 1 }\n");
     workspace.put_disk("src/a.rs", "fn a() { 1 }\n");
     workspace
 }

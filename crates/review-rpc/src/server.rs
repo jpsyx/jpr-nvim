@@ -2,6 +2,8 @@
 //! Responses and event notifications share one writer, one JSON message per
 //! line.
 
+mod comments;
+
 use std::io::{BufRead, Write};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -101,15 +103,12 @@ pub fn handle(
             )?)
         }
         "shutdown" => Ok(Value::Null),
-        other => Err(RpcError::new(
-            RpcError::METHOD_NOT_FOUND,
-            format!("unknown method {other:?}"),
-        )),
+        other => comments::handle_comment_method(session, other, params),
     }
 }
 
 /// An engine failure as an RPC error, with its whole context chain.
-fn engine_result_to_rpc<T>(result: anyhow::Result<T>) -> Result<T, RpcError> {
+pub fn engine_result_to_rpc<T>(result: anyhow::Result<T>) -> Result<T, RpcError> {
     result.map_err(|error| RpcError::new(RpcError::ENGINE_ERROR, format!("{error:#}")))
 }
 
@@ -265,7 +264,8 @@ fn write_line<W: Write>(writer: &Mutex<W>, message: &Value) -> Result<()> {
     writer.flush().context("flushing a message")
 }
 
-fn lock(session: &Mutex<ReviewSession>) -> Result<MutexGuard<'_, ReviewSession>, RpcError> {
+/// Acquires the review session lock or turns poisoning into an RPC error.
+pub fn lock(session: &Mutex<ReviewSession>) -> Result<MutexGuard<'_, ReviewSession>, RpcError> {
     session.lock().map_err(|_| {
         RpcError::new(
             RpcError::ENGINE_ERROR,
@@ -274,7 +274,8 @@ fn lock(session: &Mutex<ReviewSession>) -> Result<MutexGuard<'_, ReviewSession>,
     })
 }
 
-fn to_value<T: Serialize>(value: &T) -> Result<Value, RpcError> {
+/// Serializes a response value or turns serialization failure into an RPC error.
+pub fn to_value<T: Serialize>(value: &T) -> Result<Value, RpcError> {
     serde_json::to_value(value).map_err(|error| {
         RpcError::new(
             RpcError::ENGINE_ERROR,
