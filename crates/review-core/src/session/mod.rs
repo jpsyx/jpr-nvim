@@ -79,7 +79,7 @@ impl ReviewSession {
             &self.saved.files,
             &self.threads,
             &self.sync,
-            self.saved.registry.queued_viewed.len(),
+            self.saved.registry.queued_viewed.len() + self.saved.registry.queued_ops.len(),
         )
     }
 
@@ -122,6 +122,26 @@ mod tests {
         fakes.store.save(&snapshot).unwrap();
         let view = fakes.open().view();
         assert_eq!(view.thread_count, 1);
+    }
+
+    #[test]
+    fn reopening_counts_both_queued_viewed_and_queued_ops() {
+        let fakes = Fakes::new(10);
+        let mut snapshot = StoreSnapshot::default();
+        snapshot
+            .registry
+            .queued_viewed
+            .insert("src/a.rs".into(), true);
+        snapshot
+            .registry
+            .queued_ops
+            .push(crate::ports::QueuedCommentOp::SetResolved {
+                thread_id: "T1".into(),
+                resolved: true,
+            });
+        fakes.store.save(&snapshot).unwrap();
+        let view = fakes.open().view();
+        assert_eq!(view.queued_count, 2);
     }
 
     #[test]

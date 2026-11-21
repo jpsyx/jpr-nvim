@@ -2,6 +2,7 @@
 //! outside world is reached only through the traits in [`ports`]. See
 //! docs/architecture.md.
 
+mod comments;
 pub mod ports;
 mod presenter;
 mod session;
