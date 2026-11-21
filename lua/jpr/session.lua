@@ -507,4 +507,13 @@ function M.suggest_current()
     require("jpr.comments.suggest").run(session)
 end
 
+--- `:Jpr submit`: opens the review submission modal for the current PR.
+function M.submit_current()
+    local session = M.current()
+    if not session then
+        return jpr().error("no pull request is open in this tab")
+    end
+    require("jpr.views.submit").open(session)
+end
+
 return M
