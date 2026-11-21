@@ -4,6 +4,7 @@ use anyhow::Result;
 use review_model::{Event, PullRequest, SessionView, SyncState};
 
 use super::ReviewSession;
+use crate::comments::{merge_unflushed_threads, reconcile_concurrent_edits, record_agreed_bodies};
 use crate::ports::ForgeSnapshot;
 use crate::viewed::{apply_queued, drop_stale_marks};
 
@@ -48,7 +49,8 @@ impl ReviewSession {
         Ok((pr, snapshot))
     }
 
-    /// Keeps what a successful pull reported, saves it, and announces it.
+    /// Keeps what a successful pull reported, reconciles queued comment ops,
+    /// saves, and announces it.
     fn apply_pull(
         &mut self,
         pr: PullRequest,
@@ -57,11 +59,25 @@ impl ReviewSession {
     ) -> Result<SessionView> {
         self.saved.session.pr = Some(pr);
         self.saved.session.last_synced_at = Some(now);
+        reconcile_concurrent_edits(
+            &mut snapshot.threads,
+            &mut self.saved.registry.agreed_bodies,
+            &mut self.saved.registry.queued_ops,
+        );
+        self.saved.registry.pending_review_id = snapshot.pending_review_id;
+        self.saved.registry.viewer_login = snapshot.viewer_login;
+        self.saved.registry.mention_candidates = snapshot.mention_candidates;
+        self.clear_reconciled_queued_markers();
+        merge_unflushed_threads(&mut snapshot.threads, &self.threads);
+        self.threads = snapshot.threads;
+        let _ = self.send_queued_comments();
+        self.apply_pending_thread_ops();
+        record_agreed_bodies(&self.threads, &mut self.saved.registry.agreed_bodies);
+        self.saved.registry.threads.clone_from(&self.threads);
         let queue = &mut self.saved.registry.queued_viewed;
         drop_stale_marks(queue, &snapshot.files);
         apply_queued(&mut snapshot.files, queue);
         self.saved.files = snapshot.files;
-        self.threads = snapshot.threads;
         self.sync = SyncState::Synced { at: now };
         self.ports.store.save(&self.saved)?;
         let view = self.view();

@@ -11,10 +11,6 @@ use crate::ports::QueuedCommentOp;
 
 /// Rewrites `from_id` to `to_id` across every queued operation waiting behind
 /// a newly created thread or message.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "wired into ReviewSession in subsequent tasks")
-)]
 pub fn remap_queued_ops(ops: &mut [QueuedCommentOp], from_id: &str, to_id: &str) {
     let replace = |target: &mut String| {
         if target == from_id {
@@ -47,10 +43,6 @@ pub fn remap_queued_ops(ops: &mut [QueuedCommentOp], from_id: &str, to_id: &str)
 }
 
 /// Remembers the forge-confirmed body of every published or draft message.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "wired into ReviewSession in subsequent tasks")
-)]
 pub fn record_agreed_bodies(threads: &[Thread], agreed_bodies: &mut BTreeMap<String, String>) {
     for thread in threads {
         for message in &thread.messages {
@@ -66,10 +58,6 @@ pub fn record_agreed_bodies(threads: &[Thread], agreed_bodies: &mut BTreeMap<Str
 
 /// Drops queued `EditMessage` ops whose target message changed on the forge
 /// since the edit was queued, preserving the local text in `recoverable_body`.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "wired into ReviewSession in subsequent tasks")
-)]
 pub fn reconcile_concurrent_edits(
     remote_threads: &mut [Thread],
     agreed_bodies: &mut BTreeMap<String, String>,
@@ -103,10 +91,6 @@ pub fn reconcile_concurrent_edits(
 
 /// Re-attaches optimistic threads and messages (`Pending`, `Queued`, or `Failed`)
 /// from `local_threads` onto a freshly pulled `remote_threads` list.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "wired into ReviewSession in subsequent tasks")
-)]
 pub fn merge_unflushed_threads(remote_threads: &mut Vec<Thread>, local_threads: &[Thread]) {
     let known_threads: HashSet<String> = remote_threads
         .iter()
@@ -127,10 +111,6 @@ pub fn merge_unflushed_threads(remote_threads: &mut Vec<Thread>, local_threads: 
     }
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "wired into ReviewSession in subsequent tasks")
-)]
 const fn is_unflushed_sync(sync: Option<MessageSync>) -> bool {
     matches!(
         sync,
@@ -138,10 +118,6 @@ const fn is_unflushed_sync(sync: Option<MessageSync>) -> bool {
     )
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "wired into ReviewSession in subsequent tasks")
-)]
 fn has_unflushed_messages(thread: &Thread) -> bool {
     thread
         .messages
@@ -149,10 +125,6 @@ fn has_unflushed_messages(thread: &Thread) -> bool {
         .any(|message| is_unflushed_sync(message.sync))
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "wired into ReviewSession in subsequent tasks")
-)]
 fn merge_unflushed_messages(remote: &mut Thread, local_messages: &[Message]) {
     for local_msg in local_messages {
         if let Some(existing) = remote
@@ -179,10 +151,6 @@ fn merge_unflushed_messages(remote: &mut Thread, local_messages: &[Message]) {
 
 /// Optimistically toggles `content` in `reactions`, returning whether the
 /// reaction was added (`true`) or removed (`false`).
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "wired into ReviewSession in subsequent tasks")
-)]
 pub fn toggle_reaction_in_list(reactions: &mut Vec<Reaction>, content: ReactionContent) -> bool {
     if let Some(index) = reactions.iter().position(|item| item.content == content) {
         if reactions[index].viewer_has_reacted {
@@ -280,10 +248,6 @@ fn build_snippet_from_body(body: &str) -> String {
 }
 
 /// Finds the message with `message_id` inside `threads`.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "wired into ReviewSession in subsequent tasks")
-)]
 pub fn find_message_mut<'a>(
     threads: &'a mut [Thread],
     message_id: &str,

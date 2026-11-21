@@ -2,6 +2,7 @@
 //! Each use case lives in its own submodule; this one holds the state they
 //! share.
 
+mod comments;
 mod diffs;
 mod sync;
 #[cfg(test)]

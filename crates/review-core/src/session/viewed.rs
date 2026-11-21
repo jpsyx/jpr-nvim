@@ -28,21 +28,25 @@ impl ReviewSession {
         self.save_and_announce_viewed()
     }
 
-    /// Whether any viewed mark is waiting for the forge, so a server knows
-    /// to retry before the next sync.
+    /// Whether any viewed mark or comment operation is waiting for the forge,
+    /// so a server knows to retry before the next sync.
     #[must_use]
     pub fn has_queued(&self) -> bool {
-        !self.saved.registry.queued_viewed.is_empty()
+        !self.saved.registry.queued_viewed.is_empty() || !self.saved.registry.queued_ops.is_empty()
     }
 
-    /// Sends the queued viewed marks again, and saves and announces it when
-    /// any got through. Returns whether any did.
+    /// Sends the queued viewed marks and comment operations again, saving and
+    /// announcing whichever progressed. Returns whether anything changed.
     pub fn flush_queued(&mut self) -> Result<bool> {
-        if !self.send_queued() {
-            return Ok(false);
+        let has_viewed_landed = self.send_queued();
+        let has_comments_progressed = self.send_queued_comments();
+        if has_comments_progressed {
+            self.save_and_announce_threads()?;
         }
-        self.save_and_announce_viewed()?;
-        Ok(true)
+        if has_viewed_landed {
+            self.save_and_announce_viewed()?;
+        }
+        Ok(has_viewed_landed || has_comments_progressed)
     }
 
     /// Sends the queued marks in path order until one fails, dropping each
