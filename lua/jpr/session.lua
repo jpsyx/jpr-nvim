@@ -119,6 +119,14 @@ local function wipe_placeholder(session)
     end
 end
 
+--- Closes an optional view module when it has already been loaded.
+local function close_optional_view(module_name, session)
+    local view_module = package.loaded[module_name]
+    if view_module and view_module.close then
+        view_module.close(session)
+    end
+end
+
 --- The one teardown path, for `:Jpr close`, `:tabclose`, an engine exit and a
 --- failed start: stops the engine, wipes the panel and drops the session, so
 --- `:Jpr open` can start the pull request again from scratch. The tab closes
@@ -133,6 +141,10 @@ local function forget(session, close_tab)
     if M.by_tab[session.tab] == session then
         M.by_tab[session.tab] = nil
     end
+    close_optional_view("jpr.views.conversation", session)
+    close_optional_view("jpr.comments.popup", session)
+    close_optional_view("jpr.comments.compose", session)
+    close_optional_view("jpr.views.submit", session)
     require("jpr.views.stream").close(session)
     require("jpr.views.diff").detach(session)
     panel.close(session)
@@ -278,13 +290,18 @@ function M.sync(session)
     end)
 end
 
---- Handles a notification from `session`'s engine: a `synced` or
---- `viewedChanged` event redraws the panel, the stream and the diffs, a
---- `syncFailed` event redraws the panel, and a protocol error is reported to
---- the user.
+--- Handles a notification from `session`'s engine: `synced`, `viewedChanged`,
+--- and `threadsChanged` redraw from `params.view`, `syncFailed` updates the
+--- panel, and a protocol error is reported to the user.
 function M.on_notification(session, method, params)
     if method == "event" and params and (params.type == "synced" or params.type == "viewedChanged") then
         M.show(session, params.view)
+    elseif method == "event" and params and params.type == "threadsChanged" then
+        M.show(session, params.view)
+        local conversation = package.loaded["jpr.views.conversation"]
+        if conversation and conversation.refresh then
+            conversation.refresh(session)
+        end
     elseif method == "event" and params and params.type == "syncFailed" then
         session.view.sync = { state = "failed", at = os.time(), message = params.message }
         panel.render(session, session.view)

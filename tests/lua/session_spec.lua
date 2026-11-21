@@ -77,9 +77,52 @@ session.open(7)
 assert(vim.api.nvim_get_current_tabpage() == review_tab, "a bare number refocuses")
 jpr.setup({ binary = fixture })
 
+local refreshed_conversation = false
+local closed_views = {}
+package.loaded["jpr.views.conversation"] = {
+    refresh = function(target)
+        if target == review then
+            refreshed_conversation = true
+        end
+    end,
+    close = function(target)
+        if target == review then
+            closed_views.conversation = true
+        end
+    end,
+}
+package.loaded["jpr.comments.popup"] = {
+    close = function(target)
+        if target == review then
+            closed_views.popup = true
+        end
+    end,
+}
+package.loaded["jpr.comments.compose"] = {
+    close = function(target)
+        if target == review then
+            closed_views.compose = true
+        end
+    end,
+}
+package.loaded["jpr.views.submit"] = {
+    close = function(target)
+        if target == review then
+            closed_views.submit = true
+        end
+    end,
+}
+session.on_notification(review, "event", { type = "threadsChanged", view = review.view })
+assert(refreshed_conversation, "threadsChanged refreshes loaded conversation view")
+
 local tabs = #vim.api.nvim_list_tabpages()
 session.close_current()
 assert(session.current() == nil, "closing forgets the session")
 assert(#vim.api.nvim_list_tabpages() == tabs - 1, "closing closes the tab")
+assert(closed_views.conversation and closed_views.popup and closed_views.compose and closed_views.submit, "teardown closes loaded optional M3 views")
+package.loaded["jpr.views.conversation"] = nil
+package.loaded["jpr.comments.popup"] = nil
+package.loaded["jpr.comments.compose"] = nil
+package.loaded["jpr.views.submit"] = nil
 
 print("session_spec: ok")

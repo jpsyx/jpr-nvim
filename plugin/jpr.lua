@@ -1,15 +1,35 @@
--- Defines :Jpr. Everything else loads on first use.
+-- Defines :Jpr and <Plug>(jpr-*) mappings. Everything else loads on first use.
 if vim.g.loaded_jpr then
     return
 end
 vim.g.loaded_jpr = true
 
 vim.api.nvim_create_user_command("Jpr", function(opts)
-    require("jpr").command(opts.fargs)
+    require("jpr").command(opts.fargs, opts)
 end, {
     nargs = "+",
-    desc = "Review a GitHub pull request (open, sync, toggle, stream, close)",
+    range = true,
+    desc = "Review a GitHub pull request",
     complete = function(arglead, cmdline)
         return require("jpr").complete(arglead, cmdline)
     end,
 })
+
+vim.keymap.set({ "n", "x" }, "<Plug>(jpr-comment)", function()
+    require("jpr").action("comment")
+end, { desc = "New GitHub draft comment on line or visual range" })
+vim.keymap.set({ "n", "x" }, "<Plug>(jpr-suggest-comment)", function()
+    require("jpr").action("suggest_comment")
+end, { desc = "New GitHub draft comment pre-filled with a suggestion block" })
+vim.keymap.set("n", "<Plug>(jpr-file-comment)", function()
+    require("jpr").action("file_comment")
+end, { desc = "New file-level GitHub draft comment" })
+vim.keymap.set("n", "<Plug>(jpr-thread-popup)", function()
+    require("jpr").action("thread_popup")
+end, { desc = "Open the review thread popup on the cursor line" })
+vim.keymap.set("n", "<Plug>(jpr-next-thread)", function()
+    require("jpr").action("next_thread")
+end, { desc = "Jump to the next review thread in the buffer" })
+vim.keymap.set("n", "<Plug>(jpr-prev-thread)", function()
+    require("jpr").action("prev_thread")
+end, { desc = "Jump to the previous review thread in the buffer" })
