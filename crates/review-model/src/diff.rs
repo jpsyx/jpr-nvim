@@ -109,6 +109,18 @@ pub enum StreamRow {
         right: Option<LineCell>,
         /// The new-side line a frontend jumps to from this row.
         target: u64,
+        /// Review threads anchored to this line.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        threads: Vec<crate::ThreadPreview>,
+    },
+    /// A file-level or unplaced thread banner shown beneath the file header.
+    Thread {
+        /// The file the thread belongs to.
+        path: String,
+        /// The thread preview to render.
+        thread: crate::ThreadPreview,
+        /// The current-file line a frontend jumps to from this row.
+        target: u64,
     },
     /// A message in place of the lines, such as for a binary file.
     Note {
@@ -127,6 +139,7 @@ impl StreamRow {
             Self::File { path, .. }
             | Self::Hunk { path, .. }
             | Self::Line { path, .. }
+            | Self::Thread { path, .. }
             | Self::Note { path, .. } => path,
         }
     }
@@ -188,6 +201,9 @@ pub struct FileDiffView {
     pub added: Vec<AddedLine>,
     /// The lines the change removed, in blocks, in order.
     pub removed: Vec<RemovedBlock>,
+    /// Review threads anchored on this file.
+    #[serde(default)]
+    pub threads: Vec<crate::ThreadPreview>,
 }
 
 #[cfg(test)]
@@ -221,6 +237,7 @@ mod tests {
                 words: vec![WordRange { start: 8, end: 9 }],
             }),
             target: 3,
+            threads: Vec::new(),
         };
         assert_eq!(
             serde_json::to_value(&row).unwrap(),
@@ -258,6 +275,7 @@ mod tests {
                     words: vec![],
                 }],
             }],
+            threads: Vec::new(),
         };
         let json = serde_json::to_value(&view).unwrap();
         assert_eq!(json["baseText"], "old\n");

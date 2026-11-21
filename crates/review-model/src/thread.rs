@@ -281,6 +281,104 @@ pub struct Thread {
     pub messages: Vec<Message>,
 }
 
+/// How a frontend colors a thread's sign and preview badge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MarkerKind {
+    /// Published on the forge.
+    Published,
+    /// Draft in the pending review, or queued/pending delivery.
+    Draft,
+    /// Refused by the forge and waiting for retry or edit.
+    Failed,
+    /// Local thread for the agent.
+    Local,
+}
+
+/// Compact read model for a thread marker, preview, and inline block.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ThreadPreview {
+    /// Identifies the thread.
+    pub thread_id: String,
+    /// Where the thread is attached.
+    pub anchor: Anchor,
+    /// 1-based line in the current file where a unified overlay places the
+    /// marker, or `0` for a file-level thread.
+    pub display_line: u64,
+    /// Visual badge category.
+    pub kind: MarkerKind,
+    /// Open or resolved.
+    pub state: ThreadState,
+    /// Marked outdated by the forge.
+    pub outdated: bool,
+    /// Total messages in the thread.
+    pub message_count: usize,
+    /// First message's author login.
+    pub first_author: String,
+    /// Trimmed first non-empty line of the first message.
+    pub snippet: String,
+    /// Full messages for inline expansion and the popup.
+    pub messages: Vec<Message>,
+}
+
+/// Builds a [`ThreadPreview`] placed at `display_line`.
+#[must_use]
+pub fn create_thread_preview_from_thread(thread: &Thread, display_line: u64) -> ThreadPreview {
+    let kind = thread_to_marker_kind(thread);
+    let first_author = thread
+        .messages
+        .first()
+        .map_or_else(String::new, |message| message.author.clone());
+    let snippet = thread.messages.first().map_or_else(String::new, |message| {
+        build_snippet_from_body(&message.body)
+    });
+    ThreadPreview {
+        thread_id: thread.id.clone(),
+        anchor: thread.anchor.clone(),
+        display_line,
+        kind,
+        state: thread.state,
+        outdated: thread.outdated,
+        message_count: thread.messages.len(),
+        first_author,
+        snippet,
+        messages: thread.messages.clone(),
+    }
+}
+
+fn thread_to_marker_kind(thread: &Thread) -> MarkerKind {
+    if thread.origin == Origin::Local {
+        return MarkerKind::Local;
+    }
+    if thread
+        .messages
+        .iter()
+        .any(|message| message.sync == Some(MessageSync::Failed))
+    {
+        return MarkerKind::Failed;
+    }
+    if thread.messages.iter().any(|message| {
+        matches!(
+            message.sync,
+            Some(MessageSync::Draft | MessageSync::Pending | MessageSync::Queued)
+        )
+    }) {
+        return MarkerKind::Draft;
+    }
+    MarkerKind::Published
+}
+
+fn build_snippet_from_body(body: &str) -> String {
+    body.lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or_default()
+        .chars()
+        .take(80)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -340,5 +438,33 @@ mod tests {
         );
         assert_eq!(Anchor::file("a.rs").kind, AnchorKind::File);
         assert_eq!(Anchor::pr().kind, AnchorKind::Pr);
+    }
+
+    #[test]
+    fn thread_preview_picks_failed_then_draft_then_published_and_trims_snippet() {
+        let mut thread = Thread {
+            id: "T1".into(),
+            origin: Origin::Github,
+            anchor: Anchor::line("src/a.rs", 7),
+            state: ThreadState::Open,
+            outdated: false,
+            messages: vec![Message::create_with_sync(
+                "M1",
+                "alice",
+                "  first line\nsecond line  ",
+                "2026-11-20T00:00:00Z",
+                Some(MessageSync::Draft),
+            )],
+        };
+        let draft = create_thread_preview_from_thread(&thread, 7);
+        assert_eq!(draft.kind, MarkerKind::Draft);
+        assert_eq!(draft.snippet, "first line");
+        assert_eq!(draft.display_line, 7);
+
+        thread.messages[0].sync = Some(MessageSync::Failed);
+        assert_eq!(
+            create_thread_preview_from_thread(&thread, 7).kind,
+            MarkerKind::Failed
+        );
     }
 }

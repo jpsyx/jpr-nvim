@@ -15,5 +15,8 @@ pub use pr::{ChangedFile, PullRequest, ViewedState};
 pub use review::{
     MentionCandidate, Reaction, ReactionContent, ReviewEvent, SubmitDraft, SubmitPreview,
 };
-pub use thread::{Anchor, AnchorKind, Message, MessageSync, Origin, Side, Thread, ThreadState};
+pub use thread::{
+    Anchor, AnchorKind, MarkerKind, Message, MessageSync, Origin, Side, Thread, ThreadPreview,
+    ThreadState, create_thread_preview_from_thread,
+};
 pub use view::{Event, FileRow, SessionView, SyncState, TreeRow};

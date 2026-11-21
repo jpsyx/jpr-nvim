@@ -9,6 +9,6 @@ mod stream;
 mod text;
 mod words;
 
-pub use overlay::create_file_diff_view_from_texts;
+pub use overlay::{create_file_diff_view_from_texts, create_file_diff_view_with_threads};
 pub use stream::{CONTEXT_LINES, StreamInput, create_stream_view_from_inputs};
 pub use text::FileText;

@@ -18,6 +18,7 @@ fn create_stream_input(
             viewed,
         },
         content: Ok((base.clone(), current.clone())),
+        threads: Vec::new(),
     }
 }
 
@@ -34,14 +35,27 @@ fn rows_to_sketch(rows: &[StreamRow]) -> Vec<String> {
             }
             StreamRow::Hunk { header, target, .. } => format!("{header} ->{target}"),
             StreamRow::Note { text, .. } => format!("note {text}"),
+            StreamRow::Thread { thread, target, .. } => {
+                format!("thread {} ->{target}", thread.thread_id)
+            }
             StreamRow::Line {
                 left,
                 right,
                 target,
+                threads,
                 ..
             } => {
+                let suffix = if threads.is_empty() {
+                    String::new()
+                } else {
+                    let ids: Vec<&str> = threads
+                        .iter()
+                        .map(|preview| preview.thread_id.as_str())
+                        .collect();
+                    format!(" [{}]", ids.join(","))
+                };
                 format!(
-                    "{} | {} ->{target}",
+                    "{} | {} ->{target}{suffix}",
                     cell_to_sketch(left.as_ref()),
                     cell_to_sketch(right.as_ref())
                 )
@@ -228,5 +242,49 @@ fn the_view_keeps_its_mode() {
     assert_eq!(
         create_stream_view_from_inputs(&[], ViewMode::Split).mode,
         ViewMode::Split
+    );
+}
+
+#[test]
+fn stream_places_file_line_and_outdated_threads_without_duplicating() {
+    use review_model::{Anchor, Message, MessageSync, Origin, Side, Thread, ThreadState};
+    let make_thread = |id: &str, anchor: Anchor| Thread {
+        id: id.into(),
+        origin: Origin::Github,
+        anchor,
+        state: ThreadState::Open,
+        outdated: id == "T-outdated",
+        messages: vec![Message::create_with_sync(
+            "M1",
+            "alice",
+            "note",
+            "2026-11-20T00:00:00Z",
+            Some(MessageSync::Published),
+        )],
+    };
+    let mut input = create_stream_input(
+        "a.rs",
+        ViewedState::Unviewed,
+        &create_file_text("same\nold\n"),
+        &create_file_text("same\nnew\n"),
+    );
+    input.threads = vec![
+        make_thread("T-file", Anchor::file("a.rs")),
+        make_thread("T-context", Anchor::side_line("a.rs", Side::Right, 1)),
+        make_thread("T-added", Anchor::side_line("a.rs", Side::Right, 2)),
+        make_thread("T-outdated", Anchor::side_line("a.rs", Side::Right, 99)),
+    ];
+    let rows = create_stream_view_from_inputs(&[input], ViewMode::Unified).rows;
+    assert_eq!(
+        rows_to_sketch(&rows),
+        vec![
+            "file a.rs",
+            "thread T-file ->1",
+            "thread T-outdated ->99",
+            "@@ -1,2 +1,2 @@ ->1",
+            "1 same | 1 same ->1 [T-context]",
+            "2-old | ~ ->2",
+            "~ | 2+new ->2 [T-added]",
+        ]
     );
 }

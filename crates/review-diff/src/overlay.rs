@@ -3,7 +3,10 @@
 
 use std::ops::Range;
 
-use review_model::{AddedLine, FileDiffView, RemovedBlock, RemovedLine};
+use review_model::{
+    AddedLine, AnchorKind, FileDiffView, RemovedBlock, RemovedLine, Side, Thread, ThreadPreview,
+    create_thread_preview_from_thread,
+};
 
 use crate::lines::{
     Block, create_changed_lines_from_spans, create_diff_operations_from_lines,
@@ -22,29 +25,79 @@ pub fn create_file_diff_view_from_texts(
     base: &FileText,
     current: &FileText,
 ) -> FileDiffView {
+    create_file_diff_view_with_threads(path, base, current, &[])
+}
+
+/// Like [`create_file_diff_view_from_texts`], placing every thread on `path`
+/// at its current-file `display_line` (`0` for file-level threads).
+#[must_use]
+pub fn create_file_diff_view_with_threads(
+    path: &str,
+    base: &FileText,
+    current: &FileText,
+    threads: &[Thread],
+) -> FileDiffView {
     let mut view = FileDiffView {
         path: path.to_owned(),
         binary: base.is_binary() || current.is_binary(),
         base_text: None,
         added: Vec::new(),
         removed: Vec::new(),
+        threads: Vec::new(),
     };
-    if view.binary {
-        return view;
-    }
-    view.base_text = base.as_text().map(str::to_owned);
-    let old = base.lines();
-    let new = current.lines();
-    for block in diff_operations_to_blocks(&create_diff_operations_from_lines(&old, &new)) {
-        if let Block::Change {
-            old: old_span,
-            new: new_span,
-        } = block
-        {
-            add_change(&mut view, (&old, old_span), (&new, new_span));
+    let mut removed_spans: Vec<(Range<usize>, u64)> = Vec::new();
+    if !view.binary {
+        view.base_text = base.as_text().map(str::to_owned);
+        let old = base.lines();
+        let new = current.lines();
+        for block in diff_operations_to_blocks(&create_diff_operations_from_lines(&old, &new)) {
+            if let Block::Change {
+                old: old_span,
+                new: new_span,
+            } = block
+            {
+                let above = line_index_to_number(new_span.start);
+                if !old_span.is_empty() {
+                    removed_spans.push((old_span.clone(), above));
+                }
+                add_change(&mut view, (&old, old_span), (&new, new_span));
+            }
         }
     }
+    view.threads = create_overlay_previews(path, threads, &removed_spans);
     view
+}
+
+fn create_overlay_previews(
+    path: &str,
+    threads: &[Thread],
+    removed_spans: &[(Range<usize>, u64)],
+) -> Vec<ThreadPreview> {
+    threads
+        .iter()
+        .filter(|thread| thread.anchor.file.as_deref() == Some(path))
+        .filter_map(|thread| {
+            let display_line = match thread.anchor.kind {
+                AnchorKind::Pr => return None,
+                AnchorKind::File => 0,
+                AnchorKind::Line | AnchorKind::Range => match thread.anchor.side {
+                    Side::Right => thread.anchor.end.unwrap_or(1),
+                    Side::Left => left_line_to_above(thread.anchor.end.unwrap_or(1), removed_spans),
+                },
+            };
+            Some(create_thread_preview_from_thread(thread, display_line))
+        })
+        .collect()
+}
+
+fn left_line_to_above(left_line: u64, removed_spans: &[(Range<usize>, u64)]) -> u64 {
+    let Some(old_index) = usize::try_from(left_line.saturating_sub(1)).ok() else {
+        return left_line;
+    };
+    removed_spans
+        .iter()
+        .find_map(|(span, above)| span.contains(&old_index).then_some(*above))
+        .unwrap_or(left_line)
 }
 
 /// Adds one changed block's added lines and removed lines to `view`.
@@ -159,5 +212,42 @@ mod tests {
         assert!(view.binary);
         assert!(view.added.is_empty() && view.removed.is_empty());
         assert_eq!(view.base_text, None);
+    }
+
+    #[test]
+    fn threads_attach_to_file_header_right_lines_and_removed_block_above() {
+        use review_model::{Anchor, Message, MessageSync, Origin, Side, Thread, ThreadState};
+        let make_thread = |id: &str, anchor: Anchor| Thread {
+            id: id.into(),
+            origin: Origin::Github,
+            anchor,
+            state: ThreadState::Open,
+            outdated: false,
+            messages: vec![Message::create_with_sync(
+                "M1",
+                "alice",
+                "check this",
+                "2026-11-20T00:00:00Z",
+                Some(MessageSync::Published),
+            )],
+        };
+        let threads = vec![
+            make_thread("T-file", Anchor::file("a.rs")),
+            make_thread("T-right", Anchor::side_line("a.rs", Side::Right, 2)),
+            make_thread("T-left", Anchor::side_line("a.rs", Side::Left, 2)),
+            make_thread("T-other", Anchor::line("other.rs", 1)),
+        ];
+        let view = create_file_diff_view_with_threads(
+            "a.rs",
+            &create_file_text("fn main() {\nold_one\nold_two\n}\n"),
+            &create_file_text("fn main() {\nnew_one\n}\n"),
+            &threads,
+        );
+        let placed: Vec<(&str, u64)> = view
+            .threads
+            .iter()
+            .map(|preview| (preview.thread_id.as_str(), preview.display_line))
+            .collect();
+        assert_eq!(placed, [("T-file", 0), ("T-right", 2), ("T-left", 2)]);
     }
 }

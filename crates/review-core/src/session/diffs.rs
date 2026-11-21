@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 
 use anyhow::{Error, Result, anyhow, bail};
 use review_diff::{
-    FileText, StreamInput, create_file_diff_view_from_texts, create_stream_view_from_inputs,
+    FileText, StreamInput, create_file_diff_view_with_threads, create_stream_view_from_inputs,
 };
 use review_model::{FileDiffView, StreamView, ViewMode};
 
@@ -35,7 +35,12 @@ impl ReviewSession {
     /// itself or beside its base.
     pub fn file_diff(&mut self, path: &str) -> Result<FileDiffView> {
         let (base, current) = self.file_texts(path)?;
-        Ok(create_file_diff_view_from_texts(path, &base, &current))
+        Ok(create_file_diff_view_with_threads(
+            path,
+            &base,
+            &current,
+            &self.threads,
+        ))
     }
 
     /// Every changed file's hunks, in the forge's order, laid out for
@@ -49,7 +54,17 @@ impl ReviewSession {
             let content = self
                 .file_texts(&file.path)
                 .map_err(|error| format!("{error:#}"));
-            inputs.push(StreamInput { file, content });
+            let threads = self
+                .threads
+                .iter()
+                .filter(|thread| thread.anchor.file.as_deref() == Some(file.path.as_str()))
+                .cloned()
+                .collect();
+            inputs.push(StreamInput {
+                file,
+                content,
+                threads,
+            });
         }
         Ok(create_stream_view_from_inputs(&inputs, mode))
     }

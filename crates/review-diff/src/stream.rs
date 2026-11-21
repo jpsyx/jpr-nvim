@@ -1,9 +1,11 @@
 //! The stream: every changed file's hunks as rows, laid out unified or split.
 
+use std::collections::HashSet;
 use std::ops::Range;
 
 use review_model::{
-    ChangedFile, LineCell, LineChange, StreamRow, StreamView, ViewMode, ViewedState, WordRange,
+    AnchorKind, ChangedFile, LineCell, LineChange, Side, StreamRow, StreamView, Thread, ViewMode,
+    ViewedState, WordRange, create_thread_preview_from_thread,
 };
 use similar::group_diff_ops;
 
@@ -24,6 +26,8 @@ pub struct StreamInput {
     pub file: ChangedFile,
     /// The base and the current text, or why they could not be read.
     pub content: Result<(FileText, FileText), String>,
+    /// Review threads anchored on this file.
+    pub threads: Vec<Thread>,
 }
 
 /// Every file of `inputs`, in order, laid out for `mode`.
@@ -72,7 +76,67 @@ fn create_file_rows_from_input(input: &StreamInput, mode: ViewMode) -> Vec<Strea
             rows.extend(hunks);
         }
     }
+    attach_threads_to_file_rows(&file.path, &mut rows, &input.threads);
     rows
+}
+
+fn attach_threads_to_file_rows(path: &str, rows: &mut Vec<StreamRow>, threads: &[Thread]) {
+    if threads.is_empty() {
+        return;
+    }
+    let mut placed_ids: HashSet<String> = HashSet::new();
+    for row in rows.iter_mut() {
+        if let StreamRow::Line {
+            left,
+            right,
+            target,
+            threads: line_threads,
+            ..
+        } = row
+        {
+            for thread in threads {
+                if placed_ids.contains(&thread.id)
+                    || !line_row_matches_thread(thread, left.as_ref(), right.as_ref())
+                {
+                    continue;
+                }
+                placed_ids.insert(thread.id.clone());
+                line_threads.push(create_thread_preview_from_thread(thread, *target));
+            }
+        }
+    }
+    let header_threads: Vec<StreamRow> = threads
+        .iter()
+        .filter(|thread| !placed_ids.contains(&thread.id) && thread.anchor.kind != AnchorKind::Pr)
+        .map(|thread| {
+            let target = thread.anchor.end.unwrap_or(1);
+            StreamRow::Thread {
+                path: path.to_owned(),
+                thread: create_thread_preview_from_thread(thread, target),
+                target,
+            }
+        })
+        .collect();
+    if !header_threads.is_empty() {
+        rows.splice(1..1, header_threads);
+    }
+}
+
+fn line_row_matches_thread(
+    thread: &Thread,
+    left: Option<&LineCell>,
+    right: Option<&LineCell>,
+) -> bool {
+    if !matches!(thread.anchor.kind, AnchorKind::Line | AnchorKind::Range) {
+        return false;
+    }
+    let Some(anchor_line) = thread.anchor.end else {
+        return false;
+    };
+    match thread.anchor.side {
+        Side::Left => left.is_some_and(|cell| cell.line == anchor_line),
+        Side::Right => right.is_some_and(|cell| cell.line == anchor_line),
+    }
 }
 
 /// Writes one text file's hunks as rows.
@@ -177,6 +241,7 @@ impl HunkWriter<'_> {
             left,
             right,
             target,
+            threads: Vec::new(),
         }
     }
 
