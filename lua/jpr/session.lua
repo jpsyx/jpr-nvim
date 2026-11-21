@@ -414,4 +414,77 @@ function M.popup_current()
     require("jpr.comments.popup").open(session, threads)
 end
 
+local function resolve_line_range(win, opts)
+    local has_range = (opts.range ~= nil and opts.range > 0) or (opts.range == nil and opts.line1 ~= nil)
+    if has_range then
+        local first_input = opts.line1
+        local second_input = opts.line2 or first_input
+        return math.min(first_input, second_input), math.max(first_input, second_input)
+    end
+    local cursor_line = vim.api.nvim_win_get_cursor(win)[1]
+    return cursor_line, cursor_line
+end
+
+local function resolve_stream_anchor(session, win, opts)
+    local stream = require("jpr.views.stream")
+    if opts.file then
+        local layout = session.stream and session.stream.layout
+        local cursor_line = vim.api.nvim_win_get_cursor(win)[1]
+        local file = layout and require("jpr.render.stream").find_file_at_line(layout, cursor_line)
+        if not file then
+            return nil, "no changed file under the cursor"
+        end
+        return { file = file.path, kind = "file", side = "RIGHT" }
+    end
+    local first, last = resolve_line_range(win, opts)
+    local anchor = stream.anchor_at_range(session, win, first, last)
+    if not anchor then
+        return nil, "cannot anchor a comment on this line or range"
+    end
+    return anchor
+end
+
+local function resolve_diff_anchor(session, win, buf, opts)
+    local path = vim.b[buf].jpr_base_path
+    local side = "LEFT"
+    if type(path) ~= "string" or path == "" then
+        path = require("jpr.views.diff").buffer_to_changed_path(session, buf)
+        side = "RIGHT"
+    end
+    if not path then
+        return nil, "move to a changed file or the review stream to comment"
+    end
+    if opts.file then
+        return { file = path, kind = "file", side = "RIGHT" }
+    end
+    local first, last = resolve_line_range(win, opts)
+    local kind = "line"
+    if first ~= last then
+        kind = "range"
+    end
+    return { file = path, kind = kind, side = side, start = first, ["end"] = last }
+end
+
+--- Opens the comment compose buffer anchored to the current diff line,
+--- visual range, base buffer line, stream row, or file (`opts.file`).
+function M.comment_current(opts)
+    local session = M.current()
+    if not session then
+        return jpr().error("no pull request is open in this tab")
+    end
+    local comment_opts = opts or {}
+    local win = vim.api.nvim_get_current_win()
+    local buf = vim.api.nvim_win_get_buf(win)
+    local anchor, err_msg
+    if is_stream_buffer(session, buf) then
+        anchor, err_msg = resolve_stream_anchor(session, win, comment_opts)
+    else
+        anchor, err_msg = resolve_diff_anchor(session, win, buf, comment_opts)
+    end
+    if not anchor then
+        return jpr().error(err_msg)
+    end
+    require("jpr.comments.compose").open_new(session, anchor, { suggest = comment_opts.suggest == true })
+end
+
 return M
