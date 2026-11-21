@@ -206,6 +206,19 @@ pub struct FileDiffView {
     pub threads: Vec<crate::ThreadPreview>,
 }
 
+/// A local edit turned into a GitHub suggestion block, plus the text that
+/// restores just that hunk.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SuggestedEdit {
+    /// The head-side line or range the suggestion replaces.
+    pub anchor: crate::Anchor,
+    /// Markdown fenced `suggestion` block holding the edited lines.
+    pub suggestion_body: String,
+    /// Full file text with this edited hunk reverted back to `head_text`.
+    pub reverted_text: String,
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;

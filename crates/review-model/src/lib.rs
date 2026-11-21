@@ -9,7 +9,7 @@ mod view;
 
 pub use diff::{
     AddedLine, FileDiffView, LineCell, LineChange, RemovedBlock, RemovedLine, StreamRow,
-    StreamView, ViewMode, WordRange,
+    StreamView, SuggestedEdit, ViewMode, WordRange,
 };
 pub use pr::{ChangedFile, PullRequest, ViewedState};
 pub use review::{
