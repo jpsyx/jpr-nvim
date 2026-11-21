@@ -56,5 +56,6 @@ pub fn create_snapshot() -> ForgeSnapshot {
             changed_file("src/a.rs", ViewedState::Viewed),
             changed_file("src/b.rs", ViewedState::Unviewed),
         ],
+        ..ForgeSnapshot::default()
     }
 }

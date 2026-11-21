@@ -103,8 +103,10 @@ impl Forge for GhForge {
         Ok(ForgeSnapshot {
             head_sha,
             has_pending_review: pending_review.is_some(),
+            pending_review_id: pending_review,
             threads,
             files,
+            ..ForgeSnapshot::default()
         })
     }
 

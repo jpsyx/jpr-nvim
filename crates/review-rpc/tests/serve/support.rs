@@ -26,6 +26,7 @@ pub fn forge() -> FakeForge {
             has_pending_review: false,
             threads: vec![github_thread("T1", "src/a.rs")],
             files: vec![changed_file("src/a.rs", ViewedState::Viewed)],
+            ..ForgeSnapshot::default()
         },
     )
 }
@@ -145,6 +146,7 @@ pub fn changed_snapshot() -> ForgeSnapshot {
             changed_file("src/a.rs", ViewedState::Viewed),
             changed_file("src/b.rs", ViewedState::Unviewed),
         ],
+        ..ForgeSnapshot::default()
     }
 }
 

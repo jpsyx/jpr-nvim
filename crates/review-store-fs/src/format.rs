@@ -4,8 +4,6 @@
 //! domain types but default every missing field, so a field added to the
 //! model later does not make existing files unreadable.
 
-use std::collections::BTreeMap;
-
 use anyhow::{Context, Result, bail};
 use review_core::ports::{SessionRecord, SyncRegistry};
 use review_model::{ChangedFile, PullRequest, ViewedState};
@@ -20,8 +18,12 @@ pub const SESSION_VERSION: u32 = 2;
 pub const OLDEST_SESSION_VERSION: u32 = 1;
 /// The `viewed.json` shape this build reads and writes.
 pub const VIEWED_VERSION: u32 = 1;
-/// The `github.json` shape this build reads and writes.
-pub const GITHUB_VERSION: u32 = 1;
+/// The `github.json` shape this build writes. Version 2 adds persisted threads,
+/// queued comment operations, pending review metadata, and mention candidates.
+pub const GITHUB_VERSION: u32 = 2;
+/// The oldest `github.json` shape this build still reads: version 1 only held
+/// `queuedViewed`.
+pub const OLDEST_GITHUB_VERSION: u32 = 1;
 
 /// Just the version, read before anything else in a file.
 #[derive(Deserialize)]
@@ -53,7 +55,8 @@ struct ViewedFile {
 #[serde(rename_all = "camelCase", default)]
 struct GithubFile {
     version: u32,
-    queued_viewed: BTreeMap<String, bool>,
+    #[serde(flatten)]
+    registry: SyncRegistry,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -132,16 +135,14 @@ pub fn decode_files(bytes: &[u8]) -> Result<Vec<ChangedFile>> {
 pub fn encode_registry(registry: &SyncRegistry) -> Result<Vec<u8>> {
     encode(&GithubFile {
         version: GITHUB_VERSION,
-        queued_viewed: registry.queued_viewed.clone(),
+        registry: registry.clone(),
     })
 }
 
 /// The registry in `github.json`'s bytes.
 pub fn decode_registry(bytes: &[u8]) -> Result<SyncRegistry> {
-    let file: GithubFile = decode(bytes, GITHUB_VERSION, GITHUB_VERSION)?;
-    Ok(SyncRegistry {
-        queued_viewed: file.queued_viewed,
-    })
+    let file: GithubFile = decode(bytes, OLDEST_GITHUB_VERSION, GITHUB_VERSION)?;
+    Ok(file.registry)
 }
 
 /// The version a file declares, without reading the rest of it.

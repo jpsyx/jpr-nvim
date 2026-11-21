@@ -45,11 +45,12 @@ impl ReviewSession {
             .session
             .last_synced_at
             .map_or(SyncState::Never, |at| SyncState::Synced { at });
+        let threads = saved.registry.threads.clone();
         Ok(Self {
             number,
             ports,
             saved,
-            threads: Vec::new(),
+            threads,
             sync,
             subscribers: Vec::new(),
             base_cache: BaseCache::default(),
@@ -102,6 +103,8 @@ mod tests {
     use review_model::SyncState;
 
     use super::test_support::Fakes;
+    use crate::fakes::github_thread;
+    use crate::ports::{ReviewStore, StoreSnapshot};
 
     #[test]
     fn a_new_session_has_not_synced() {
@@ -109,6 +112,16 @@ mod tests {
         assert_eq!(view.sync, SyncState::Never);
         assert!(view.pr.is_none());
         assert!(view.files.is_empty());
+    }
+
+    #[test]
+    fn reopening_restores_persisted_threads_before_sync() {
+        let fakes = Fakes::new(10);
+        let mut snapshot = StoreSnapshot::default();
+        snapshot.registry.threads = vec![github_thread("T1", "src/a.rs")];
+        fakes.store.save(&snapshot).unwrap();
+        let view = fakes.open().view();
+        assert_eq!(view.thread_count, 1);
     }
 
     #[test]

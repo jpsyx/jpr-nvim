@@ -15,7 +15,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use review_core::ports::{ReviewStore, StoreSnapshot};
 
-pub use format::{GITHUB_VERSION, OLDEST_SESSION_VERSION, SESSION_VERSION, VIEWED_VERSION};
+pub use format::{
+    GITHUB_VERSION, OLDEST_GITHUB_VERSION, OLDEST_SESSION_VERSION, SESSION_VERSION, VIEWED_VERSION,
+};
 pub use paths::state_dir;
 
 /// The file, in a pull request's state directory, that holds the daemon and

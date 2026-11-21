@@ -6,8 +6,136 @@ use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
-use review_model::{ChangedFile, PullRequest, Thread};
+use review_model::{
+    Anchor, AnchorKind, ChangedFile, MentionCandidate, PullRequest, ReactionContent, ReviewEvent,
+    Thread,
+};
 use serde::{Deserialize, Serialize};
+
+/// How a forge write failed: transient errors can be queued and retried,
+/// while rejected requests need the reviewer to edit, retry, or delete.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ForgeWriteError {
+    /// Network timeout, offline `gh`, HTTP 5xx, or rate limit.
+    Transient(String),
+    /// Validation error (HTTP 4xx / GraphQL refusal) that retrying unchanged
+    /// will not fix.
+    Rejected(String),
+}
+
+impl std::fmt::Display for ForgeWriteError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Transient(message) | Self::Rejected(message) => formatter.write_str(message),
+        }
+    }
+}
+
+impl std::error::Error for ForgeWriteError {}
+
+/// Result of creating a new draft review thread on the forge.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CreatedReviewThread {
+    /// Node id of the pending review that owns the draft thread.
+    pub pending_review_id: String,
+    /// Created review thread with its single draft message.
+    pub thread: Thread,
+}
+
+/// Parameters for replying to an existing code review thread.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplyRequest<'a> {
+    /// Target review thread node id (`PRRT_...`).
+    pub thread_id: &'a str,
+    /// Decimal `fullDatabaseId` of the thread's first comment, for REST replies.
+    pub root_database_id: Option<&'a str>,
+    /// Existing pending review node id (`PRR_...`), when one is active.
+    pub pending_review_id: Option<&'a str>,
+    /// Markdown reply body.
+    pub body: &'a str,
+}
+
+/// An offline or transiently failed comment write held in `github.json` until
+/// the forge accepts it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "op", rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum QueuedCommentOp {
+    /// Draft review thread anchored to a file, line, or range.
+    CreateReviewThread {
+        /// Temporary optimistic thread id assigned locally (`tmp-...`).
+        temp_thread_id: String,
+        /// Temporary optimistic message id assigned locally (`tmp-...`).
+        temp_message_id: String,
+        /// Where the draft thread is attached.
+        anchor: Anchor,
+        /// Markdown comment body.
+        body: String,
+    },
+    /// Top-level pull-request conversation comment.
+    CreateConversationComment {
+        /// Temporary optimistic thread id assigned locally (`tmp-...`).
+        temp_thread_id: String,
+        /// Temporary optimistic message id assigned locally (`tmp-...`).
+        temp_message_id: String,
+        /// Markdown comment body.
+        body: String,
+    },
+    /// Reply to a code review thread.
+    ReplyToThread {
+        /// Target thread id (real `PRRT_...` or temporary id mapped via `id_map`).
+        thread_id: String,
+        /// Decimal `fullDatabaseId` of the thread's first comment, when known.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        root_database_id: Option<String>,
+        /// Temporary optimistic reply message id assigned locally (`tmp-...`).
+        temp_message_id: String,
+        /// Markdown reply body.
+        body: String,
+    },
+    /// Edit a review comment or issue comment.
+    EditMessage {
+        /// Owning thread id.
+        thread_id: String,
+        /// Whether the thread is a PR conversation comment or code review comment.
+        anchor_kind: AnchorKind,
+        /// Target message id (real node id or temporary id mapped via `id_map`).
+        message_id: String,
+        /// Updated markdown body.
+        body: String,
+    },
+    /// Delete a review comment or issue comment.
+    DeleteMessage {
+        /// Owning thread id.
+        thread_id: String,
+        /// Whether the thread is a PR conversation comment or code review comment.
+        anchor_kind: AnchorKind,
+        /// Target message id (real node id or temporary id mapped via `id_map`).
+        message_id: String,
+    },
+    /// Resolve or unresolve a code review thread.
+    SetResolved {
+        /// Target thread id (real `PRRT_...` or temporary id mapped via `id_map`).
+        thread_id: String,
+        /// Whether the thread should become resolved (`true`) or open (`false`).
+        resolved: bool,
+    },
+    /// Add or remove a reaction on a comment node.
+    SetReaction {
+        /// Target comment node id (or temporary id mapped via `id_map`).
+        subject_id: String,
+        /// Reaction kind to toggle.
+        content: ReactionContent,
+        /// Whether to add (`true`) or remove (`false`) the reaction.
+        added: bool,
+    },
+    /// Submit the pending review (or a zero-draft review).
+    SubmitReview {
+        /// Verdict (`COMMENT`, `APPROVE`, or `REQUEST_CHANGES`).
+        event: ReviewEvent,
+        /// Summary review body.
+        body: String,
+    },
+}
 
 /// What the forge reports about a pull request in one pull.
 /// [`Forge::fetch`] returns it and the session applies it on every sync.
@@ -17,10 +145,16 @@ pub struct ForgeSnapshot {
     pub head_sha: String,
     /// Whether the reviewer has a pending (unsubmitted) review.
     pub has_pending_review: bool,
-    /// Every review thread on the pull request.
+    /// Node id of the reviewer's pending review, when `has_pending_review` holds.
+    pub pending_review_id: Option<String>,
+    /// Login of the authenticated `gh` viewer, when reported.
+    pub viewer_login: Option<String>,
+    /// Every review thread and conversation comment thread on the pull request.
     pub threads: Vec<Thread>,
     /// The changed files, with the reviewer's viewed state.
     pub files: Vec<ChangedFile>,
+    /// `@mention` completion candidates, PR participants first.
+    pub mention_candidates: Vec<MentionCandidate>,
 }
 
 /// The code forge that hosts the pull request, such as GitHub. The session
@@ -75,11 +209,29 @@ pub struct SessionRecord {
 /// What the engine still owes the forge: changes made while the forge could
 /// not be reached, sent again on the next try. Saved with everything else,
 /// so a restarted engine still delivers them.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
 pub struct SyncRegistry {
     /// Viewed marks the forge has not accepted yet, by path: `true` for
     /// viewed, `false` for unviewed.
     pub queued_viewed: BTreeMap<String, bool>,
+    /// Node id of the reviewer's active pending review on GitHub, if any.
+    pub pending_review_id: Option<String>,
+    /// Login of the authenticated reviewer.
+    pub viewer_login: Option<String>,
+    /// Counter for temporary optimistic thread and message ids (`tmp-1`, ...).
+    pub next_temp_id: u64,
+    /// Temporary id to real GitHub node id mappings learned during replay.
+    pub id_map: BTreeMap<String, String>,
+    /// Last forge-confirmed body per message id, for concurrent-edit detection.
+    pub agreed_bodies: BTreeMap<String, String>,
+    /// Persisted threads (published, draft, queued, and failed) so restarts keep
+    /// optimistic state before the next sync.
+    pub threads: Vec<Thread>,
+    /// Comment operations waiting to be sent to GitHub.
+    pub queued_ops: Vec<QueuedCommentOp>,
+    /// Cached `@mention` candidates from the last sync.
+    pub mention_candidates: Vec<MentionCandidate>,
 }
 
 /// Everything the engine persists for one pull request.
