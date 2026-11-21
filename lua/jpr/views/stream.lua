@@ -175,6 +175,13 @@ function M.fill(buf, column)
             strict = false,
         })
     end
+    for _, mark in ipairs(column.eol_marks or {}) do
+        vim.api.nvim_buf_set_extmark(buf, namespace, mark.line, 0, {
+            virt_text = mark.chunks,
+            virt_text_pos = "eol",
+            strict = false,
+        })
+    end
     for win, cursor in pairs(cursors) do
         pcall(vim.api.nvim_win_set_cursor, win, { math.max(1, math.min(cursor[1], #column.lines)), 0 })
     end
@@ -202,7 +209,7 @@ function M.draw(session, stream, opts)
         return
     end
     local state = M.state(session)
-    local layout = render.create_layout_from_stream(stream)
+    local layout = render.create_layout_from_stream(stream, { expanded = session.threads_expanded == true })
     state.layout, state.key = layout, opts.key or build_stream_key(session, stream.mode or view_mode.get())
     local main_buf = get_or_create_stream_buffer(session, "main")
     local buffers = #layout.columns == 2 and { get_or_create_stream_buffer(session, "left"), main_buf } or { main_buf }
@@ -321,8 +328,9 @@ function M.close(session)
 end
 
 --- Moves the cursor to the next (`step` 1) or previous (-1) file header
---- (`kind` "files") or hunk ("hunks"). A hunk inside a closed fold (a viewed
---- file) is skipped, since the cursor would stay on the same folded line.
+--- (`kind` "files"), hunk ("hunks"), or thread ("threads"). A hunk or thread
+--- inside a closed fold (a viewed file) is skipped, since the cursor would
+--- stay on the same folded line.
 function M.jump(session, kind, step)
     local layout = session.stream and session.stream.layout
     if not layout then
@@ -333,6 +341,8 @@ function M.jump(session, kind, step)
         lines = vim.tbl_map(function(file)
             return file.line
         end, layout.files)
+    elseif kind == "threads" then
+        lines = layout.thread_lines or {}
     end
     lines = vim.tbl_filter(function(line)
         return vim.fn.foldclosed(line) == -1
@@ -341,6 +351,140 @@ function M.jump(session, kind, step)
     if target then
         vim.api.nvim_win_set_cursor(0, { target, 0 })
     end
+end
+
+local function is_left_stream_window(session, win)
+    local stream = session.stream
+    if not stream then
+        return false
+    end
+    if stream.left_win == win then
+        return true
+    end
+    local left_buf = stream.buffers and stream.buffers.left
+    return left_buf ~= nil and vim.api.nvim_win_is_valid(win) and vim.api.nvim_win_get_buf(win) == left_buf
+end
+
+--- Returns the review threads placed at `line` (or the cursor's current line
+--- in `win`), filtered to the active side in split mode.
+function M.threads_at_cursor(session, line, win)
+    local layout = session.stream and session.stream.layout
+    if not layout then
+        return {}
+    end
+    local target_win = win or vim.api.nvim_get_current_win()
+    local cursor_line = line or vim.api.nvim_win_get_cursor(target_win)[1]
+    local bucket = layout.threads_by_line[cursor_line] or {}
+    local anchor = layout.anchors[cursor_line]
+    if #bucket == 0 or layout.mode ~= "split" or (anchor and anchor.kind == "file") then
+        return bucket
+    end
+    local want_left = is_left_stream_window(session, target_win)
+    return vim.tbl_filter(function(thread)
+        local is_left_thread = thread.anchor ~= nil and thread.anchor.kind ~= "file" and thread.anchor.side == "LEFT"
+        return is_left_thread == want_left
+    end, bucket)
+end
+
+local function collect_anchor_entries(layout, first, last)
+    local entries, target_file = {}, nil
+    for row_line = first, last do
+        local entry = layout.anchors[row_line]
+        if not entry or entry.kind == "file" then
+            return nil, nil
+        end
+        if target_file and entry.file ~= target_file then
+            return nil, nil
+        end
+        target_file = entry.file
+        entries[#entries + 1] = entry
+    end
+    return target_file, entries
+end
+
+local function build_range_anchor(file, side, lines)
+    if #lines == 0 then
+        return nil
+    end
+    local start_line, end_line = lines[1], lines[1]
+    for _, line_num in ipairs(lines) do
+        start_line = math.min(start_line, line_num)
+        end_line = math.max(end_line, line_num)
+    end
+    return {
+        file = file,
+        kind = start_line == end_line and "line" or "range",
+        side = side,
+        start = start_line,
+        ["end"] = end_line,
+    }
+end
+
+local function resolve_unified_anchor(file, entries)
+    local left_lines, right_lines = {}, {}
+    local has_left_only, has_right_only = false, false
+    for _, entry in ipairs(entries) do
+        if entry.left_line then
+            left_lines[#left_lines + 1] = entry.left_line
+        end
+        if entry.right_line then
+            right_lines[#right_lines + 1] = entry.right_line
+        end
+        has_left_only = has_left_only or (entry.left_line ~= nil and entry.right_line == nil)
+        has_right_only = has_right_only or (entry.right_line ~= nil and entry.left_line == nil)
+    end
+    if has_left_only and not has_right_only and #left_lines == #entries then
+        return build_range_anchor(file, "LEFT", left_lines)
+    end
+    if not has_left_only and #right_lines == #entries then
+        return build_range_anchor(file, "RIGHT", right_lines)
+    end
+    return nil
+end
+
+local function resolve_split_anchor(file, entries, is_left_win)
+    local side = is_left_win and "LEFT" or "RIGHT"
+    local lines = {}
+    for _, entry in ipairs(entries) do
+        local line_num
+        if is_left_win then
+            line_num = entry.left_line
+        else
+            line_num = entry.right_line
+        end
+        if line_num then
+            lines[#lines + 1] = line_num
+        end
+    end
+    if #lines ~= #entries then
+        return nil
+    end
+    return build_range_anchor(file, side, lines)
+end
+
+--- Resolves an engine `Anchor` for 1-based inclusive `[line1, line2]` in
+--- stream window `win`, returning `nil` when no commentable row matches.
+function M.anchor_at_range(session, win, line1, line2)
+    local layout = session.stream and session.stream.layout
+    if not layout then
+        return nil
+    end
+    local target_win = win or vim.api.nvim_get_current_win()
+    local first_input = line1 or vim.api.nvim_win_get_cursor(target_win)[1]
+    local second_input = line2 or first_input
+    local first, last = math.min(first_input, second_input), math.max(first_input, second_input)
+    if first == last and layout.anchors[first] and layout.anchors[first].kind == "file" then
+        local file_anchor = layout.anchors[first]
+        return { file = file_anchor.file, kind = "file", side = file_anchor.side or "RIGHT" }
+    end
+    local file, entries = collect_anchor_entries(layout, first, last)
+    if not file or #entries == 0 then
+        return nil
+    end
+    if layout.mode == "split" then
+        return resolve_split_anchor(file, entries, is_left_stream_window(session, target_win))
+    end
+    return resolve_unified_anchor(file, entries)
 end
 
 --- What `line` of the current window opens: its own target or, inside a
@@ -412,10 +556,11 @@ function M.map_keys(session, buf)
     end
     map("<CR>", M.open_target, "Open the file at this line")
     map("v", M.toggle_viewed, "Toggle viewed and go to the next unviewed file")
-    map("]f", function(session) M.jump(session, "files", 1) end, "Next file")
-    map("[f", function(session) M.jump(session, "files", -1) end, "Previous file")
-    map("]h", function(session) M.jump(session, "hunks", 1) end, "Next hunk")
-    map("[h", function(session) M.jump(session, "hunks", -1) end, "Previous hunk")
+    map("]f", function(current_session) M.jump(current_session, "files", 1) end, "Next file")
+    map("[f", function(current_session) M.jump(current_session, "files", -1) end, "Previous file")
+    map("]h", function(current_session) M.jump(current_session, "hunks", 1) end, "Next hunk")
+    map("[h", function(current_session) M.jump(current_session, "hunks", -1) end, "Previous hunk")
+    require("jpr").bind_buffer_keys(buf)
 end
 
 return M

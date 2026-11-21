@@ -72,10 +72,178 @@ assert(stream.find_next_unviewed_file(unified, 9) == nil, "nothing after the las
 assert(stream.find_adjacent_line({ 2, 7 }, 2, 1) == 7 and stream.find_adjacent_line({ 2, 7 }, 7, 1) == nil, "next")
 assert(stream.find_adjacent_line({ 2, 7 }, 7, -1) == 2 and stream.find_adjacent_line({ 2, 7 }, 2, -1) == nil, "previous")
 
-local view = { pr = { headSha = "h", baseSha = "b" }, files = { { path = "a.rs", additions = 1, deletions = 1, viewed = "UNVIEWED" } } }
+local view = {
+    pr = { headSha = "h", baseSha = "b" },
+    threadCount = 1,
+    draftCount = 0,
+    queuedCount = 0,
+    files = { { path = "a.rs", additions = 1, deletions = 1, viewed = "UNVIEWED", threads = 1 } },
+}
 local key = stream.build_key_from_view(view)
 assert(stream.build_key_from_view(view) == key, "the same view, the same key")
 view.files[1].viewed = "VIEWED"
 assert(stream.build_key_from_view(view) ~= key, "a viewed change changes the key")
+
+local thread_key_base = stream.build_key_from_view(view)
+local with_more_threads = vim.deepcopy(view)
+with_more_threads.threadCount = 2
+assert(stream.build_key_from_view(with_more_threads) ~= thread_key_base, "threadCount changes key")
+
+local with_drafts = vim.deepcopy(view)
+with_drafts.draftCount = 1
+assert(stream.build_key_from_view(with_drafts) ~= thread_key_base, "draftCount changes key")
+
+local with_queued = vim.deepcopy(view)
+with_queued.queuedCount = 1
+assert(stream.build_key_from_view(with_queued) ~= thread_key_base, "queuedCount changes key")
+
+local with_file_threads = vim.deepcopy(view)
+with_file_threads.files[1].threads = 3
+assert(stream.build_key_from_view(with_file_threads) ~= thread_key_base, "file.threads changes key")
+
+local file_thread = {
+    threadId = "T_FILE",
+    anchor = { file = "a.rs", kind = "file", side = "RIGHT" },
+    displayLine = 0,
+    kind = "draft",
+    state = "open",
+    outdated = false,
+    messageCount = 1,
+    firstAuthor = "bob",
+    snippet = "file note",
+    messages = {
+        {
+            id = "M_FILE",
+            author = "bob",
+            body = "file note\nsecond line",
+            sync = "draft",
+            reactions = { { content = "THUMBS_UP", count = 1, viewerHasReacted = true } },
+        },
+    },
+}
+local left_thread = {
+    threadId = "T_LEFT",
+    anchor = { file = "a.rs", kind = "line", side = "LEFT", start = 2, ["end"] = 2 },
+    displayLine = 2,
+    kind = "failed",
+    state = "open",
+    outdated = false,
+    messageCount = 1,
+    firstAuthor = "carol",
+    snippet = "old line issue",
+    messages = {
+        { id = "M_LEFT", author = "carol", body = "old line issue", sync = "failed" },
+    },
+}
+local right_thread = {
+    threadId = "T_RIGHT",
+    anchor = { file = "a.rs", kind = "line", side = "RIGHT", start = 2, ["end"] = 2 },
+    displayLine = 2,
+    kind = "published",
+    state = "open",
+    outdated = false,
+    messageCount = 1,
+    firstAuthor = "alice",
+    snippet = "new line nit",
+    messages = {
+        { id = "M_RIGHT", author = "alice", body = "new line nit", sync = "published" },
+    },
+}
+local threaded_unified_rows = {
+    { kind = "file", path = "a.rs", additions = 1, deletions = 1, viewed = "UNVIEWED", folded = false },
+    { kind = "thread", path = "a.rs", thread = file_thread, target = 1 },
+    { kind = "hunk", path = "a.rs", header = "@@ -1,2 +1,2 @@", target = 1 },
+    { kind = "line", path = "a.rs", left = create_cell(1, "keep", "context"), right = create_cell(1, "keep", "context"), target = 1 },
+    { kind = "line", path = "a.rs", left = create_cell(2, "x = 1", "removed", x_word), target = 2, threads = { left_thread } },
+    { kind = "line", path = "a.rs", right = create_cell(2, "x = 2", "added", x_word), target = 2, threads = { right_thread } },
+}
+
+local compact_unified = stream.create_layout_from_stream({ mode = "unified", rows = threaded_unified_rows }, { expanded = false })
+local compact_col = compact_unified.columns[1]
+assert(compact_col.lines[2] == "  ✎ @bob: file note", vim.inspect(compact_col.lines))
+assert(compact_col.line_groups[2] == "JprThreadDraft", vim.inspect(compact_col.line_groups))
+assert(vim.deep_equal(compact_unified.thread_lines, { 2, 5, 6 }), vim.inspect(compact_unified.thread_lines))
+assert(compact_unified.threads_by_line[2][1].threadId == "T_FILE", vim.inspect(compact_unified.threads_by_line))
+assert(compact_unified.threads_by_line[5][1].threadId == "T_LEFT", vim.inspect(compact_unified.threads_by_line))
+assert(compact_unified.threads_by_line[6][1].threadId == "T_RIGHT", vim.inspect(compact_unified.threads_by_line))
+assert(#compact_col.eol_marks == 2, vim.inspect(compact_col.eol_marks))
+assert(compact_col.eol_marks[1].line == 4 and compact_col.eol_marks[1].chunks[1][1]:find("@carol: old line issue", 1, true), vim.inspect(compact_col.eol_marks[1]))
+assert(compact_col.eol_marks[2].line == 5 and compact_col.eol_marks[2].chunks[1][1]:find("@alice: new line nit", 1, true), vim.inspect(compact_col.eol_marks[2]))
+
+assert(vim.deep_equal(compact_unified.anchors[2], { file = "a.rs", kind = "file", side = "RIGHT" }), vim.inspect(compact_unified.anchors[2]))
+assert(vim.deep_equal(compact_unified.anchors[4], { file = "a.rs", side = "RIGHT", left_line = 1, right_line = 1 }), vim.inspect(compact_unified.anchors[4]))
+assert(vim.deep_equal(compact_unified.anchors[5], { file = "a.rs", side = "LEFT", left_line = 2 }), vim.inspect(compact_unified.anchors[5]))
+assert(vim.deep_equal(compact_unified.anchors[6], { file = "a.rs", side = "RIGHT", right_line = 2 }), vim.inspect(compact_unified.anchors[6]))
+
+local expanded_unified = stream.create_layout_from_stream({ mode = "unified", rows = threaded_unified_rows }, { expanded = true })
+local expanded_col = expanded_unified.columns[1]
+assert(#(expanded_col.eol_marks or {}) == 0, "expanded mode hides eol marks")
+assert(#expanded_col.lines > #compact_col.lines, "expanded mode emits full message lines")
+local joined_expanded = table.concat(expanded_col.lines, "\n")
+assert(joined_expanded:find("  │ @bob [draft]", 1, true), joined_expanded)
+assert(joined_expanded:find("  │   file note", 1, true), joined_expanded)
+assert(joined_expanded:find("  │   second line", 1, true), joined_expanded)
+assert(joined_expanded:find("  │   👍 1*", 1, true), joined_expanded)
+assert(joined_expanded:find("  │ @carol [failed]", 1, true), joined_expanded)
+assert(joined_expanded:find("  │ @alice", 1, true), joined_expanded)
+
+local threaded_split_rows = {
+    { kind = "file", path = "a.rs", additions = 1, deletions = 1, viewed = "UNVIEWED", folded = false },
+    { kind = "thread", path = "a.rs", thread = file_thread, target = 1 },
+    { kind = "hunk", path = "a.rs", header = "@@ -1,2 +1,2 @@", target = 1 },
+    { kind = "line", path = "a.rs", left = create_cell(1, "keep", "context"), right = create_cell(1, "keep", "context"), target = 1 },
+    {
+        kind = "line",
+        path = "a.rs",
+        left = create_cell(2, "x = 1", "removed", x_word),
+        right = create_cell(2, "x = 2", "added", x_word),
+        target = 2,
+        threads = { left_thread, right_thread },
+    },
+}
+local compact_split = stream.create_layout_from_stream({ mode = "split", rows = threaded_split_rows }, { expanded = false })
+assert(#compact_split.columns[1].lines == #compact_split.columns[2].lines, "compact split stays aligned")
+assert(#compact_split.columns[1].eol_marks == 1, vim.inspect(compact_split.columns[1].eol_marks))
+assert(compact_split.columns[1].eol_marks[1].line == 4 and compact_split.columns[1].eol_marks[1].chunks[1][1]:find("@carol: old line issue", 1, true), vim.inspect(compact_split.columns[1].eol_marks))
+assert(#compact_split.columns[2].eol_marks == 1, vim.inspect(compact_split.columns[2].eol_marks))
+assert(compact_split.columns[2].eol_marks[1].line == 4 and compact_split.columns[2].eol_marks[1].chunks[1][1]:find("@alice: new line nit", 1, true), vim.inspect(compact_split.columns[2].eol_marks))
+
+local right_only_compact_split = stream.create_layout_from_stream({
+    mode = "split",
+    rows = {
+        { kind = "file", path = "a.rs", additions = 1, deletions = 0, viewed = "UNVIEWED", folded = false },
+        { kind = "hunk", path = "a.rs", header = "@@ -1,1 +1,1 @@", target = 1 },
+        { kind = "line", path = "a.rs", left = create_cell(1, "keep", "context"), right = create_cell(1, "keep", "context"), target = 1, threads = { right_thread } },
+    },
+}, { expanded = false })
+assert(#right_only_compact_split.columns[1].eol_marks == 0, "left column has no eol_marks when only RIGHT threads exist")
+assert(#right_only_compact_split.columns[2].eol_marks == 1, "right column gets eol_marks for RIGHT threads")
+
+local expanded_split = stream.create_layout_from_stream({ mode = "split", rows = threaded_split_rows }, { expanded = true })
+local left_split, right_split = expanded_split.columns[1], expanded_split.columns[2]
+assert(#left_split.lines == #right_split.lines, "expanded split keeps identical line counts for scrollbind")
+-- File thread expands in right column (lines 3..6), so left column has JprDiffFiller lines there.
+assert(right_split.lines[3]:find("  │ @bob [draft]", 1, true), vim.inspect(right_split.lines))
+assert(left_split.lines[3] == "" and left_split.line_groups[3] == "JprDiffFiller", vim.inspect(left_split.line_groups))
+-- Line 2 has both a LEFT thread and a RIGHT thread; left has carol, right has alice.
+local left_joined = table.concat(left_split.lines, "\n")
+local right_joined = table.concat(right_split.lines, "\n")
+assert(left_joined:find("  │ @carol [failed]", 1, true), left_joined)
+assert(not left_joined:find("@alice", 1, true), left_joined)
+assert(right_joined:find("  │ @alice", 1, true), right_joined)
+assert(not right_joined:find("@carol", 1, true), right_joined)
+
+-- Single-sided thread on a split line pads the opposite column with JprDiffFiller.
+local right_only_split = stream.create_layout_from_stream({
+    mode = "split",
+    rows = {
+        { kind = "file", path = "a.rs", additions = 1, deletions = 0, viewed = "UNVIEWED", folded = false },
+        { kind = "hunk", path = "a.rs", header = "@@ -1,1 +1,1 @@", target = 1 },
+        { kind = "line", path = "a.rs", left = create_cell(1, "keep", "context"), right = create_cell(1, "keep", "context"), target = 1, threads = { right_thread } },
+    },
+}, { expanded = true })
+assert(#right_only_split.columns[1].lines == #right_only_split.columns[2].lines, "single-sided split padded")
+assert(right_only_split.columns[1].lines[4] == "" and right_only_split.columns[1].line_groups[4] == "JprDiffFiller", vim.inspect(right_only_split.columns[1]))
+assert(right_only_split.columns[2].lines[4]:find("  │ @alice", 1, true), vim.inspect(right_only_split.columns[2]))
 
 print("stream_render_spec: ok")
