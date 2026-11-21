@@ -45,8 +45,7 @@ local function close_active_submit(session)
     end
 end
 
---- Closes the active review submission modal (and any summary sub-editor)
---- for `session`, and cancels any pending `submitPreview` callback.
+--- Closes the active review submission modal and any open summary editor for `session`.
 function M.close(session)
     if not session then
         return
@@ -173,8 +172,8 @@ local function open_summary_editor(session, state)
     vim.bo[buf].buftype = "nofile"
     vim.bo[buf].bufhidden = "wipe"
     vim.bo[buf].filetype = "markdown"
-    local initial = (state.body_lines and #state.body_lines > 0) and state.body_lines or { "" }
-    vim.api.nvim_buf_set_lines(buf, 0, -1, false, initial)
+    local initial_lines = (state.body_lines and #state.body_lines > 0) and state.body_lines or { "" }
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, initial_lines)
     local width = math.min(82, math.max(52, vim.o.columns - 14))
     local height = 10
     local win = vim.api.nvim_open_win(buf, true, {
@@ -261,8 +260,7 @@ local function open_modal(session, preview)
     bind_modal_keys(session, state)
 end
 
---- Fetches `submitPreview` for `session` and opens the centered floating
---- review submission modal.
+--- Opens the centered floating review submission modal for `session`.
 function M.open(session)
     if not session or session.closing then
         return

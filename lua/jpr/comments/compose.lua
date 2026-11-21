@@ -41,7 +41,7 @@ local function insert_suggestion_fence(session, buf, anchor)
         return require("jpr").info("suggestion blocks apply to line or range comments")
     end
     local compose = session and session.compose
-    require("jpr.session").request(session, "anchoredLines", { anchor = anchor }, function(res)
+    require("jpr.session").request(session, "anchoredLines", { anchor = anchor }, function(result)
         if session.closing or session.compose ~= compose or not vim.api.nvim_buf_is_valid(buf) then
             return
         end
@@ -50,7 +50,7 @@ local function insert_suggestion_fence(session, buf, anchor)
             return
         end
         local fence = { "```suggestion" }
-        for line in ((res and res.text or "") .. "\n"):gmatch("(.-)\n") do
+        for line in ((result and result.text or "") .. "\n"):gmatch("(.-)\n") do
             fence[#fence + 1] = line
         end
         fence[#fence + 1] = "```"
@@ -94,8 +94,8 @@ local function open_editor(session, opts)
     vim.bo[buf].buftype = "nofile"
     vim.bo[buf].bufhidden = "wipe"
     vim.bo[buf].filetype = "markdown"
-    local initial = opts.initial or ""
-    vim.api.nvim_buf_set_lines(buf, 0, -1, false, vim.split(initial, "\n", { plain = true }))
+    local initial_text = opts.initial_text or ""
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, vim.split(initial_text, "\n", { plain = true }))
     local width = math.min(86, math.max(54, vim.o.columns - 12))
     local height = 12
     local win = vim.api.nvim_open_win(buf, true, {
@@ -124,11 +124,11 @@ local function open_editor(session, opts)
         end,
     })
     mentions.attach(session, buf)
-    bind_compose_keys(session, buf, initial, opts.anchor, opts.on_submit)
+    bind_compose_keys(session, buf, initial_text, opts.anchor, opts.on_submit)
     return buf
 end
 
-local function build_new_title(anchor)
+local function build_title_from_anchor(anchor)
     if anchor.kind == "pr" then
         return "[GitHub comment] PR Conversation"
     end
@@ -141,17 +141,16 @@ local function build_new_title(anchor)
     return ("[GitHub draft] %s:%d"):format(anchor.file, anchor["end"] or anchor.start or 1)
 end
 
---- Opens the floating compose buffer for a new comment at `anchor`.
---- When `opts.suggest` is true on a line/range anchor, pre-fills a GitHub
---- `suggestion` block from `anchoredLines`.
+--- Opens the floating compose buffer for a new comment at `anchor`, optionally
+--- pre-filling a GitHub suggestion block on line or range anchors (`opts.suggest`).
 function M.open_new(session, anchor, opts)
     if session.closing then
         return
     end
-    local open_with_body = function(initial)
+    local open_with_body = function(initial_text)
         open_editor(session, {
-            title = build_new_title(anchor),
-            initial = initial,
+            title = build_title_from_anchor(anchor),
+            initial_text = initial_text,
             anchor = anchor,
             on_submit = function(body)
                 require("jpr.session").request(session, "comment", { anchor = anchor, body = body }, function() end)
@@ -160,14 +159,14 @@ function M.open_new(session, anchor, opts)
     end
     if opts and opts.suggest and (anchor.kind == "line" or anchor.kind == "range") then
         local request_id = next_request_id(session)
-        return require("jpr.session").request(session, "anchoredLines", { anchor = anchor }, function(res)
+        return require("jpr.session").request(session, "anchoredLines", { anchor = anchor }, function(result)
             if session.closing or session.compose_request_id ~= request_id then
                 return
             end
             if session.tab ~= nil and not vim.api.nvim_tabpage_is_valid(session.tab) then
                 return
             end
-            open_with_body(("```suggestion\n%s\n```"):format((res and res.text) or ""))
+            open_with_body(("```suggestion\n%s\n```"):format((result and result.text) or ""))
         end)
     end
     open_with_body("")
@@ -182,7 +181,7 @@ function M.open_reply(session, thread)
     local thread_id = thread.threadId or thread.id
     open_editor(session, {
         title = badge .. " Reply",
-        initial = "",
+        initial_text = "",
         anchor = thread.anchor,
         on_submit = function(body)
             require("jpr.session").request(session, "reply", { threadId = thread_id, body = body }, function() end)
@@ -193,10 +192,10 @@ end
 --- Opens the floating compose buffer to edit `message` (pre-populating
 --- `recoverableBody` when present).
 function M.open_edit(session, message)
-    local initial = message.recoverableBody or message.body or ""
+    local initial_text = message.recoverableBody or message.body or ""
     open_editor(session, {
         title = "[Edit GitHub comment]",
-        initial = initial,
+        initial_text = initial_text,
         on_submit = function(body)
             require("jpr.session").request(session, "editMessage", { messageId = message.id, body = body }, function() end)
         end,

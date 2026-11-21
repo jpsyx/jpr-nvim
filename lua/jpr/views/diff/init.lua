@@ -2,69 +2,13 @@
 -- (unified), or Neovim's diff mode beside a read-only base buffer (split).
 -- The engine computes every diff; this only draws it and manages the base
 -- windows.
+local diff_threads = require("jpr.views.diff.threads")
 local overlay = require("jpr.render.overlay")
 local view_mode = require("jpr.view_mode")
 
 local M = {}
 
 local namespace = vim.api.nvim_create_namespace("jpr-diff")
-
---- `path` with every symlink, `.` and `..` resolved, even when its last parts
---- do not exist (a file the pull request deletes). Nil when some part of it
---- exists but does not resolve (a dangling or looping symlink), since a
---- write there would land wherever the link points.
-local function path_to_real_path(path)
-    local resolved_path = vim.uv.fs_realpath(path)
-    if resolved_path then
-        return resolved_path
-    end
-    if vim.uv.fs_lstat(path) then
-        return nil
-    end
-    local parent = vim.fs.dirname(path)
-    if parent == path then
-        return path
-    end
-    local real_parent = path_to_real_path(parent)
-    if not real_parent then
-        return nil
-    end
-    local name = vim.fs.basename(path)
-    if name == ".." then
-        return vim.fs.dirname(real_parent)
-    elseif name == "." then
-        return real_parent
-    end
-    return vim.fs.joinpath(real_parent, name)
-end
-
---- `name`'s path relative to `worktree`, or nil when it is not inside it or
---- does not resolve.
-function M.name_to_relative_path(worktree, name)
-    if name == "" then
-        return nil
-    end
-    local root = path_to_real_path((vim.fn.fnamemodify(worktree, ":p"):gsub("/+$", "")))
-    local full_path = path_to_real_path(vim.fn.fnamemodify(name, ":p"))
-    if not root or not full_path or full_path:sub(1, #root + 1) ~= root .. "/" then
-        return nil
-    end
-    return full_path:sub(#root + 2)
-end
-
---- The changed file `buf` shows, as its path in the pull request, or nil.
-function M.buffer_to_changed_path(session, buf)
-    if vim.bo[buf].buftype ~= "" then
-        return nil
-    end
-    local path = M.name_to_relative_path(session.worktree, vim.api.nvim_buf_get_name(buf))
-    for _, file in ipairs((session.view and session.view.files) or {}) do
-        if file.path == path then
-            return path
-        end
-    end
-    return nil
-end
 
 --- Whether `record` is still what `win` should draw: the session lives and
 --- the window still shows the buffer the request was made for.
@@ -84,43 +28,6 @@ local function give_up(session, win, record, path)
         session.diff.applied[win] = nil
         session.diff.failed[path] = true
     end
-end
-
---- Saves `win`'s local `signcolumn` and sets it to `"yes"` while `has_threads`
---- is true, or restores the saved value when `has_threads` is false.
-local function set_window_signcolumn(session, win, has_threads)
-    if not session.diff then
-        return
-    end
-    if not vim.api.nvim_win_is_valid(win) then
-        session.diff.saved_signcolumn[win] = nil
-        return
-    end
-    if has_threads then
-        if session.diff.saved_signcolumn[win] == nil then
-            session.diff.saved_signcolumn[win] = vim.api.nvim_get_option_value("signcolumn", { win = win, scope = "local" })
-        end
-        vim.api.nvim_set_option_value("signcolumn", "yes", { win = win, scope = "local" })
-    elseif session.diff.saved_signcolumn[win] ~= nil then
-        vim.api.nvim_set_option_value("signcolumn", session.diff.saved_signcolumn[win], { win = win, scope = "local" })
-        session.diff.saved_signcolumn[win] = nil
-    end
-end
-
---- Draws threads for unified mode on `buf` and updates `win`'s signcolumn.
-local function draw_unified_threads(session, win, buf, diff)
-    require("jpr.views.threads").draw_on_buffer(session, buf, diff.threads)
-    local list = session.buf_threads and session.buf_threads[buf]
-    set_window_signcolumn(session, win, list ~= nil and #list > 0)
-end
-
---- Draws threads for split mode on `base_buf` and `buf` and updates both signcolumns.
-local function draw_split_threads(session, base_win, win, base_buf, buf, diff)
-    require("jpr.views.threads").draw_split(session, base_buf, buf, diff)
-    local base_list = session.buf_threads and session.buf_threads[base_buf]
-    local file_list = session.buf_threads and session.buf_threads[buf]
-    set_window_signcolumn(session, base_win, base_list ~= nil and #base_list > 0)
-    set_window_signcolumn(session, win, file_list ~= nil and #file_list > 0)
 end
 
 --- Shows the file in `win` as a diff in the current mode, unless it already
@@ -150,7 +57,7 @@ function M.apply(session, win)
         require("jpr").bind_buffer_keys(buf)
         if mode == "unified" then
             M.draw_overlay(buf, diff, win)
-            draw_unified_threads(session, win, buf, diff)
+            diff_threads.draw_unified_threads(session, win, buf, diff)
         else
             M.open_base(session, win, buf, diff)
         end
@@ -223,7 +130,7 @@ function M.open_base(session, win, buf, diff)
             vim.cmd("diffthis")
         end)
     end
-    draw_split_threads(session, base_win, win, base_buf, buf, diff)
+    diff_threads.draw_split_threads(session, base_win, win, base_buf, buf, diff)
 end
 
 --- Whether some window still has a diff drawn for `buf`.
@@ -246,7 +153,7 @@ function M.clear(session, win)
     local threads = require("jpr.views.threads")
     local applied = session.diff.applied[win]
     session.diff.applied[win] = nil
-    set_window_signcolumn(session, win, false)
+    diff_threads.set_window_signcolumn(session, win, false)
     session.diff.saved_signcolumn[win] = nil
     if applied and not is_buffer_drawn(session, applied.buf) then
         if vim.api.nvim_buf_is_valid(applied.buf) then
@@ -262,7 +169,7 @@ function M.clear(session, win)
     if base_split.base_buf then
         threads.clear_buffer(session, base_split.base_buf)
     end
-    set_window_signcolumn(session, base_split.base_win, false)
+    diff_threads.set_window_signcolumn(session, base_split.base_win, false)
     session.diff.saved_signcolumn[base_split.base_win] = nil
     if vim.api.nvim_win_is_valid(base_split.base_win) then
         pcall(vim.api.nvim_win_close, base_split.base_win, true)
@@ -291,48 +198,6 @@ function M.reconcile(session)
     end
     for _, win in ipairs(vim.api.nvim_tabpage_list_wins(session.tab)) do
         M.apply(session, win)
-    end
-end
-
---- Requests `fileDiff` for `win` and redraws its thread marks in place.
-local function redraw_window_threads(session, win, applied)
-    if not is_current(session, win, applied) then
-        return
-    end
-    local path = M.buffer_to_changed_path(session, applied.buf)
-    if not path then
-        return
-    end
-    require("jpr.session").request(session, "fileDiff", { path = path }, function(diff)
-        if not is_current(session, win, applied) or type(diff) ~= "table" or diff.binary then
-            return
-        end
-        if applied.mode == "unified" then
-            return draw_unified_threads(session, win, applied.buf, diff)
-        end
-        local base_split = session.diff.splits[win]
-        if base_split and vim.api.nvim_win_is_valid(base_split.base_win) and vim.api.nvim_buf_is_valid(base_split.base_buf) then
-            return draw_split_threads(session, base_split.base_win, win, base_split.base_buf, applied.buf, diff)
-        end
-        M.clear(session, win)
-        if vim.api.nvim_win_is_valid(win) then
-            M.apply(session, win)
-        end
-    end)
-end
-
---- Redraws threads on every drawn diff window in `session` without tearing
---- down existing split windows.
-function M.redraw_threads(session)
-    if not session.diff or not session.client then
-        return
-    end
-    local targets = {}
-    for win, applied in pairs(session.diff.applied) do
-        targets[#targets + 1] = { win = win, applied = applied }
-    end
-    for _, target in ipairs(targets) do
-        redraw_window_threads(session, target.win, target.applied)
     end
 end
 
@@ -408,5 +273,8 @@ function M.detach(session)
     end
     session.diff = nil
 end
+
+require("jpr.views.diff.paths").attach(M)
+diff_threads.attach(M, is_current)
 
 return M

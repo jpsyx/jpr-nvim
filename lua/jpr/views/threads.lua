@@ -26,16 +26,12 @@ end
 --- Draws `diff.threads` for split mode: `LEFT` threads on `base_buf` at their
 --- base line, and `RIGHT` + `file` threads on `buf`.
 function M.draw_split(session, base_buf, buf, diff)
-    local left_threads, right_threads = {}, {}
-    for _, thread in ipairs(diff.threads or {}) do
-        if thread.anchor and thread.anchor.kind ~= "file" and thread.anchor.side == "LEFT" then
-            local copy = vim.deepcopy(thread)
-            copy.displayLine = thread.anchor["end"] or thread.anchor.start or 1
-            left_threads[#left_threads + 1] = copy
-        else
-            right_threads[#right_threads + 1] = thread
-        end
-    end
+    local raw_left_threads, right_threads = render.partition_threads_by_side(diff.threads)
+    local left_threads = vim.tbl_map(function(thread)
+        local copy = vim.deepcopy(thread)
+        copy.displayLine = thread.anchor["end"] or thread.anchor.start or 1
+        return copy
+    end, raw_left_threads)
     M.draw_on_buffer(session, base_buf, left_threads)
     M.draw_on_buffer(session, buf, right_threads)
 end
@@ -63,13 +59,9 @@ end
 --- threads when `line == 1`).
 function M.threads_at_cursor(session, buf, line)
     local list = (session.buf_threads and session.buf_threads[buf]) or {}
-    local matches = {}
-    for _, thread in ipairs(list) do
-        if thread.displayLine == line or (line == 1 and thread.displayLine == 0) then
-            matches[#matches + 1] = thread
-        end
-    end
-    return matches
+    return vim.tbl_filter(function(thread)
+        return thread.displayLine == line or (line == 1 and thread.displayLine == 0)
+    end, list)
 end
 
 --- Sorted unique 1-based lines holding threads in `buf`.

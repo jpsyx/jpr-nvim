@@ -19,7 +19,7 @@ impl ReviewSession {
             .iter()
             .filter_map(|op| match op {
                 QueuedCommentOp::EditMessage { message_id, .. } => {
-                    Some(self.resolve_id(message_id))
+                    Some(self.get_canonical_id_from_id(message_id))
                 }
                 _ => None,
             })
@@ -48,16 +48,16 @@ impl ReviewSession {
                     message_id,
                     ..
                 } => {
-                    let resolved_thread = self.resolve_id(&thread_id);
-                    let resolved_msg = self.resolve_id(&message_id);
-                    self.remove_message_from_threads(&resolved_thread, &resolved_msg);
+                    let canonical_thread_id = self.get_canonical_id_from_id(&thread_id);
+                    let canonical_message_id = self.get_canonical_id_from_id(&message_id);
+                    self.remove_message_from_threads(&canonical_thread_id, &canonical_message_id);
                 }
                 QueuedCommentOp::SetResolved {
                     thread_id,
                     resolved,
                 } => {
-                    let resolved_thread = self.resolve_id(&thread_id);
-                    if let Some(thread) = self.find_thread_mut(&resolved_thread) {
+                    let canonical_thread_id = self.get_canonical_id_from_id(&thread_id);
+                    if let Some(thread) = self.find_thread_mut(&canonical_thread_id) {
                         thread.state = if resolved {
                             ThreadState::Resolved
                         } else {
@@ -79,15 +79,15 @@ impl ReviewSession {
         &mut self,
         subject_id: &str,
         content: review_model::ReactionContent,
-        added: bool,
+        is_added: bool,
     ) {
-        let resolved_subject = self.resolve_id(subject_id);
-        if let Some(message) = find_message_mut(&mut self.threads, &resolved_subject) {
+        let canonical_subject_id = self.get_canonical_id_from_id(subject_id);
+        if let Some(message) = find_message_mut(&mut self.threads, &canonical_subject_id) {
             let has_reacted = message
                 .reactions
                 .iter()
                 .any(|reaction| reaction.content == content && reaction.viewer_has_reacted);
-            if added != has_reacted {
+            if is_added != has_reacted {
                 toggle_reaction_in_list(&mut message.reactions, content);
             }
         }

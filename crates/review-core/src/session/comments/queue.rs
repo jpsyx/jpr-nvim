@@ -16,7 +16,7 @@ impl ReviewSession {
         format!("tmp-{prefix}-{}", self.saved.registry.next_temp_id)
     }
 
-    pub(super) fn resolve_id(&self, id: &str) -> String {
+    pub(super) fn get_canonical_id_from_id(&self, id: &str) -> String {
         self.saved
             .registry
             .id_map
@@ -37,7 +37,7 @@ impl ReviewSession {
     }
 
     pub(super) fn update_queued_op_body(&mut self, message_id: &str, body: &str) -> bool {
-        let mut updated = false;
+        let mut was_updated = false;
         for op in &mut self.saved.registry.queued_ops {
             match op {
                 QueuedCommentOp::CreateReviewThread {
@@ -56,7 +56,7 @@ impl ReviewSession {
                     ..
                 } if temp_message_id == message_id => {
                     body.clone_into(op_body);
-                    updated = true;
+                    was_updated = true;
                 }
                 QueuedCommentOp::EditMessage {
                     message_id: op_message_id,
@@ -64,17 +64,17 @@ impl ReviewSession {
                     ..
                 } if op_message_id == message_id => {
                     body.clone_into(op_body);
-                    updated = true;
+                    was_updated = true;
                 }
                 _ => {}
             }
         }
-        updated
+        was_updated
     }
 
     pub(super) fn drop_local_message_and_ops(&mut self, thread_id: &str, message_id: &str) {
         self.remove_message_from_threads(thread_id, message_id);
-        let thread_removed = self.find_thread(thread_id).is_none();
+        let was_thread_removed = self.find_thread(thread_id).is_none();
         self.saved.registry.queued_ops.retain(|op| match op {
             QueuedCommentOp::CreateReviewThread {
                 temp_thread_id,
@@ -85,12 +85,17 @@ impl ReviewSession {
                 temp_thread_id,
                 temp_message_id,
                 ..
-            } => temp_message_id != message_id && (!thread_removed || temp_thread_id != thread_id),
+            } => {
+                temp_message_id != message_id
+                    && (!was_thread_removed || temp_thread_id != thread_id)
+            }
             QueuedCommentOp::ReplyToThread {
                 thread_id: op_thread_id,
                 temp_message_id,
                 ..
-            } => temp_message_id != message_id && (!thread_removed || op_thread_id != thread_id),
+            } => {
+                temp_message_id != message_id && (!was_thread_removed || op_thread_id != thread_id)
+            }
             QueuedCommentOp::EditMessage {
                 thread_id: op_thread_id,
                 message_id: op_message_id,
@@ -100,11 +105,11 @@ impl ReviewSession {
                 thread_id: op_thread_id,
                 message_id: op_message_id,
                 ..
-            } => op_message_id != message_id && (!thread_removed || op_thread_id != thread_id),
+            } => op_message_id != message_id && (!was_thread_removed || op_thread_id != thread_id),
             QueuedCommentOp::SetResolved {
                 thread_id: op_thread_id,
                 ..
-            } => !thread_removed || op_thread_id != thread_id,
+            } => !was_thread_removed || op_thread_id != thread_id,
             QueuedCommentOp::SetReaction { subject_id, .. } => subject_id != message_id,
             QueuedCommentOp::SubmitReview { .. } => true,
         });
@@ -157,7 +162,7 @@ impl ReviewSession {
         thread_id: &str,
         message_id: &str,
     ) {
-        let thread_removed = self.find_thread(thread_id).is_none();
+        let was_thread_removed = self.find_thread(thread_id).is_none();
         self.saved.registry.queued_ops.retain(|op| match op {
             QueuedCommentOp::EditMessage {
                 message_id: op_message_id,
@@ -167,7 +172,7 @@ impl ReviewSession {
             QueuedCommentOp::SetResolved {
                 thread_id: op_thread_id,
                 ..
-            } => !thread_removed || op_thread_id != thread_id,
+            } => !was_thread_removed || op_thread_id != thread_id,
             _ => true,
         });
     }
@@ -179,16 +184,12 @@ impl ReviewSession {
         self.threads.retain(|thread| !thread.messages.is_empty());
     }
 
-    pub(super) fn enqueue_failed_message(&mut self, message_id: &str) -> Result<()> {
-        self.enqueue_failed_message_with_body(message_id, None)
-    }
-
-    pub(super) fn enqueue_failed_message_with_body(
+    pub(super) fn enqueue_failed_message(
         &mut self,
         message_id: &str,
         new_body: Option<&str>,
     ) -> Result<()> {
-        let mut op = self.build_retry_op_for_message(message_id)?;
+        let mut op = self.create_retry_op_from_message_id(message_id)?;
         let message = find_message_mut(&mut self.threads, message_id)
             .with_context(|| format!("unknown message {message_id}"))?;
         if let Some(updated_body) = new_body {
@@ -201,7 +202,7 @@ impl ReviewSession {
         Ok(())
     }
 
-    fn build_retry_op_for_message(&self, message_id: &str) -> Result<QueuedCommentOp> {
+    fn create_retry_op_from_message_id(&self, message_id: &str) -> Result<QueuedCommentOp> {
         for thread in &self.threads {
             let Some(message) = thread.messages.iter().find(|item| item.id == message_id) else {
                 continue;
@@ -214,8 +215,10 @@ impl ReviewSession {
         bail!("unknown message {message_id}")
     }
 
-    /// Replays queued comment operations in FIFO order, stopping on transient
-    /// errors and marking rejected operations failed without wedging later ops.
+    /// Replays queued comment operations in FIFO order (stopping on transient
+    /// errors while marking rejected operations failed without wedging later
+    /// ops) and returns `true` when at least one queued operation landed or was
+    /// retired, for example during `sync`, `flush_queued`, or `retry_message`.
     pub(in super::super) fn send_queued_comments(&mut self) -> bool {
         let Some(pr) = self.saved.session.pr.clone() else {
             return false;
@@ -246,8 +249,8 @@ impl ReviewSession {
         let real_message = created_thread.messages.first().cloned();
         self.promote_optimistic_thread(temp_thread_id, temp_message_id, created_thread);
         self.record_id_mapping(temp_thread_id, &real_thread_id, remaining_ops);
-        if let Some(real_msg) = real_message {
-            self.record_id_mapping(temp_message_id, &real_msg.id, remaining_ops);
+        if let Some(created_message) = real_message {
+            self.record_id_mapping(temp_message_id, &created_message.id, remaining_ops);
         }
     }
 

@@ -174,7 +174,7 @@ fn reports_graphql_errors() {
 }
 
 #[test]
-fn pending_review_also_parses_viewer_login() {
+fn pending_review_answer_returns_viewer_login_and_viewer_authored_review_id() {
     let data = parse_data_from_answer(
         r#"{"data":{"viewer":{"login":"pablo"},"node":{"reviews":{"nodes":[
             {"id":"PRR_other","viewerDidAuthor":false},
@@ -187,7 +187,7 @@ fn pending_review_also_parses_viewer_login() {
 }
 
 #[test]
-fn thread_comments_parse_full_database_id_authorship_and_non_empty_reactions() {
+fn thread_comments_keep_digit_database_id_authorship_and_only_non_zero_reactions() {
     let data = parse_data_from_answer(
         r#"{"data":{"node":{"headRefOid":"sha1","reviewThreads":{
             "pageInfo":{"hasNextPage":false,"endCursor":null},
@@ -216,8 +216,11 @@ fn thread_comments_parse_full_database_id_authorship_and_non_empty_reactions() {
     assert_eq!(comment.reactions.len(), 1);
     assert_eq!(comment.reactions[0].count, 2);
     assert!(comment.reactions[0].viewer_has_reacted);
+}
 
-    let bad_db_id = parse_data_from_answer(
+#[test]
+fn thread_comments_reject_non_digit_full_database_id_as_none() {
+    let bad_database_id = parse_data_from_answer(
         r#"{"data":{"node":{"headRefOid":"sha1","reviewThreads":{
             "pageInfo":{"hasNextPage":false,"endCursor":null},
             "nodes":[{
@@ -235,7 +238,7 @@ fn thread_comments_parse_full_database_id_authorship_and_non_empty_reactions() {
         }}}}"#,
     )
     .unwrap();
-    let (_, bad_threads, _) = parse_threads_page(&bad_db_id).unwrap();
+    let (_, bad_threads, _) = parse_threads_page(&bad_database_id).unwrap();
     assert_eq!(bad_threads[0].messages[0].database_id, None);
 }
 

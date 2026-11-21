@@ -1,6 +1,9 @@
+mod anchor;
+
 use serde::{Deserialize, Serialize};
 
 use crate::Reaction;
+pub use anchor::{Anchor, AnchorKind, Side};
 
 /// Where a thread lives, so a frontend can tell a forge thread from one kept
 /// only on this machine.
@@ -11,161 +14,6 @@ pub enum Origin {
     Github,
     /// Only on this machine, for the agent.
     Local,
-}
-
-/// Which side of the diff a thread is anchored to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "UPPERCASE")]
-pub enum Side {
-    /// The old file.
-    Left,
-    /// The new file.
-    Right,
-}
-
-impl Side {
-    /// Parses `LEFT` or `RIGHT`.
-    #[must_use]
-    pub fn parse(value: &str) -> Option<Self> {
-        match value {
-            "LEFT" => Some(Self::Left),
-            "RIGHT" => Some(Self::Right),
-            _ => None,
-        }
-    }
-
-    /// GitHub's `DiffSide` spelling.
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Left => "LEFT",
-            Self::Right => "RIGHT",
-        }
-    }
-}
-
-/// What a thread is attached to. It decides which of an [`Anchor`]'s fields
-/// are set.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum AnchorKind {
-    /// One line of a file.
-    Line,
-    /// A run of lines of a file, from `start` to `end`.
-    Range,
-    /// A whole file, with no line.
-    File,
-    /// The pull request as a whole, with no file.
-    Pr,
-}
-
-impl AnchorKind {
-    /// Parses `line`, `range`, `file`, or `pr`.
-    #[must_use]
-    pub fn parse(value: &str) -> Option<Self> {
-        match value {
-            "line" => Some(Self::Line),
-            "range" => Some(Self::Range),
-            "file" => Some(Self::File),
-            "pr" => Some(Self::Pr),
-            _ => None,
-        }
-    }
-}
-
-/// Where a thread is attached. A frontend uses it to place the thread in the
-/// diff, and the snapshot lets a thread whose lines moved find them again.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Anchor {
-    /// The file, for every kind but `pr`.
-    pub file: Option<String>,
-    /// What the thread is attached to.
-    pub kind: AnchorKind,
-    /// Which side of the diff the lines are on.
-    pub side: Side,
-    /// The first line, for `line` and `range`.
-    pub start: Option<u64>,
-    /// The last line, for `line` and `range`.
-    pub end: Option<u64>,
-    /// The commit the line numbers refer to, when known.
-    pub commit: Option<String>,
-    /// The anchored code, used to re-anchor a thread whose lines moved.
-    pub snapshot: Option<String>,
-}
-
-impl Anchor {
-    /// A single line on the new side of `file`, with no commit or snapshot.
-    /// Use it to anchor a thread to one line, for example in a test fixture.
-    #[must_use]
-    pub fn line(file: &str, line: u64) -> Self {
-        Self::side_line(file, Side::Right, line)
-    }
-
-    /// A single line on `side` of `file`.
-    #[must_use]
-    pub fn side_line(file: &str, side: Side, line: u64) -> Self {
-        Self {
-            file: Some(file.to_owned()),
-            kind: AnchorKind::Line,
-            side,
-            start: Some(line),
-            end: Some(line),
-            commit: None,
-            snapshot: None,
-        }
-    }
-
-    /// Lines `start..=end` on `side` of `file` (collapsed to `Line` when equal).
-    #[must_use]
-    pub fn range(file: &str, side: Side, start: u64, end: u64) -> Self {
-        let (first_line, last_line) = if start <= end {
-            (start, end)
-        } else {
-            (end, start)
-        };
-        Self {
-            file: Some(file.to_owned()),
-            kind: if first_line == last_line {
-                AnchorKind::Line
-            } else {
-                AnchorKind::Range
-            },
-            side,
-            start: Some(first_line),
-            end: Some(last_line),
-            commit: None,
-            snapshot: None,
-        }
-    }
-
-    /// A file-level anchor on `file`.
-    #[must_use]
-    pub fn file(file: &str) -> Self {
-        Self {
-            file: Some(file.to_owned()),
-            kind: AnchorKind::File,
-            side: Side::Right,
-            start: None,
-            end: None,
-            commit: None,
-            snapshot: None,
-        }
-    }
-
-    /// A pull-request conversation anchor.
-    #[must_use]
-    pub const fn pr() -> Self {
-        Self {
-            file: None,
-            kind: AnchorKind::Pr,
-            side: Side::Right,
-            start: None,
-            end: None,
-            commit: None,
-            snapshot: None,
-        }
-    }
 }
 
 /// Whether a thread still needs attention, so a frontend can fold settled
@@ -322,7 +170,12 @@ pub struct ThreadPreview {
     pub messages: Vec<Message>,
 }
 
-/// Builds a [`ThreadPreview`] placed at `display_line`.
+/// Summarizes `thread` into a [`ThreadPreview`] at 1-based `display_line`
+/// (`0` for file-level threads), deriving its badge [`MarkerKind`] and
+/// first-line snippet.
+///
+/// Use it when attaching compact thread markers to diff views, for example
+/// single-file overlays or unified and split diff stream rows.
 #[must_use]
 pub fn create_thread_preview_from_thread(thread: &Thread, display_line: u64) -> ThreadPreview {
     let kind = thread_to_marker_kind(thread);
@@ -369,7 +222,13 @@ fn thread_to_marker_kind(thread: &Thread) -> MarkerKind {
     MarkerKind::Published
 }
 
-fn build_snippet_from_body(body: &str) -> String {
+/// Extracts up to 80 characters of the trimmed first non-empty line of `body`
+/// (or an empty string when `body` is blank).
+///
+/// Use it for compact one-line comment summaries, for example in diff thread
+/// previews or pending-review draft lists.
+#[must_use]
+pub fn build_snippet_from_body(body: &str) -> String {
     body.lines()
         .map(str::trim)
         .find(|line| !line.is_empty())
@@ -380,91 +239,4 @@ fn build_snippet_from_body(body: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_thread_round_trips_through_json_with_its_wire_spellings() {
-        let thread = Thread {
-            id: "T1".into(),
-            origin: Origin::Github,
-            anchor: Anchor::line("src/a.rs", 12),
-            state: ThreadState::Open,
-            outdated: false,
-            messages: vec![Message::create_with_sync(
-                "C1",
-                "bob",
-                "why?",
-                "2026-11-19T00:00:00Z",
-                Some(MessageSync::Draft),
-            )],
-        };
-        let json = serde_json::to_value(&thread).unwrap();
-        assert_eq!(json["origin"], "github");
-        assert_eq!(json["anchor"]["kind"], "line");
-        assert_eq!(json["anchor"]["side"], "RIGHT");
-        assert_eq!(json["state"], "open");
-        assert_eq!(json["messages"][0]["sync"], "draft");
-        let back: Thread = serde_json::from_value(json).unwrap();
-        assert_eq!(back, thread);
-    }
-
-    #[test]
-    fn a_local_message_omits_sync_and_outdated_defaults_to_false() {
-        let json = serde_json::json!({
-            "id": "L1", "origin": "local",
-            "anchor": { "file": null, "kind": "pr", "side": "RIGHT", "start": null, "end": null, "commit": null, "snapshot": null },
-            "state": "resolved",
-            "messages": [{ "id": "m", "author": "me", "body": "b", "created": "c", "updated": "u" }]
-        });
-        let thread: Thread = serde_json::from_value(json).unwrap();
-        assert!(!thread.outdated);
-        assert_eq!(thread.anchor.kind, AnchorKind::Pr);
-        assert_eq!(thread.messages[0].sync, None);
-        let serialized = serde_json::to_value(&thread).unwrap();
-        assert!(serialized["messages"][0].get("sync").is_none());
-    }
-
-    #[test]
-    fn anchors_and_sides_parse_and_collapse_single_line_ranges() {
-        assert_eq!(Side::parse("LEFT"), Some(Side::Left));
-        assert_eq!(AnchorKind::parse("file"), Some(AnchorKind::File));
-        let single = Anchor::range("a.rs", Side::Left, 5, 5);
-        assert_eq!(single.kind, AnchorKind::Line);
-        let span = Anchor::range("a.rs", Side::Right, 9, 4);
-        assert_eq!(
-            (span.kind, span.start, span.end),
-            (AnchorKind::Range, Some(4), Some(9))
-        );
-        assert_eq!(Anchor::file("a.rs").kind, AnchorKind::File);
-        assert_eq!(Anchor::pr().kind, AnchorKind::Pr);
-    }
-
-    #[test]
-    fn thread_preview_picks_failed_then_draft_then_published_and_trims_snippet() {
-        let mut thread = Thread {
-            id: "T1".into(),
-            origin: Origin::Github,
-            anchor: Anchor::line("src/a.rs", 7),
-            state: ThreadState::Open,
-            outdated: false,
-            messages: vec![Message::create_with_sync(
-                "M1",
-                "alice",
-                "  first line\nsecond line  ",
-                "2026-11-20T00:00:00Z",
-                Some(MessageSync::Draft),
-            )],
-        };
-        let draft = create_thread_preview_from_thread(&thread, 7);
-        assert_eq!(draft.kind, MarkerKind::Draft);
-        assert_eq!(draft.snippet, "first line");
-        assert_eq!(draft.display_line, 7);
-
-        thread.messages[0].sync = Some(MessageSync::Failed);
-        assert_eq!(
-            create_thread_preview_from_thread(&thread, 7).kind,
-            MarkerKind::Failed
-        );
-    }
-}
+mod tests;

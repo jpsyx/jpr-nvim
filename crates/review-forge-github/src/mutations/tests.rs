@@ -4,28 +4,29 @@ use review_model::{Anchor, MessageSync, Side};
 use super::*;
 
 #[test]
-fn thread_variables_cover_file_single_line_and_range_anchors() {
-    let file_vars = build_thread_variables("PR_1", "PRR_1", &Anchor::file("src/a.rs"), "hi");
-    assert_eq!(file_vars["subjectType"], "FILE");
-    assert!(file_vars.get("line").is_none());
+fn thread_variables_use_file_subject_without_lines_and_set_start_line_only_for_ranges() {
+    let file_variables = build_thread_variables("PR_1", "PRR_1", &Anchor::file("src/a.rs"), "hi");
+    assert_eq!(file_variables["subjectType"], "FILE");
+    assert!(file_variables.get("line").is_none());
 
-    let line_vars = build_thread_variables("PR_1", "PRR_1", &Anchor::line("src/a.rs", 9), "one");
-    assert_eq!(line_vars["subjectType"], "LINE");
-    assert_eq!(line_vars["line"], 9);
-    assert_eq!(line_vars["side"], "RIGHT");
-    assert!(line_vars.get("startLine").is_none());
+    let line_variables =
+        build_thread_variables("PR_1", "PRR_1", &Anchor::line("src/a.rs", 9), "one");
+    assert_eq!(line_variables["subjectType"], "LINE");
+    assert_eq!(line_variables["line"], 9);
+    assert_eq!(line_variables["side"], "RIGHT");
+    assert!(line_variables.get("startLine").is_none());
 
-    let range_vars = build_thread_variables(
+    let range_variables = build_thread_variables(
         "PR_1",
         "PRR_1",
         &Anchor::range("src/a.rs", Side::Left, 3, 6),
         "span",
     );
-    assert_eq!(range_vars["subjectType"], "LINE");
-    assert_eq!(range_vars["startLine"], 3);
-    assert_eq!(range_vars["line"], 6);
-    assert_eq!(range_vars["side"], "LEFT");
-    assert_eq!(range_vars["startSide"], "LEFT");
+    assert_eq!(range_variables["subjectType"], "LINE");
+    assert_eq!(range_variables["startLine"], 3);
+    assert_eq!(range_variables["line"], 6);
+    assert_eq!(range_variables["side"], "LEFT");
+    assert_eq!(range_variables["startSide"], "LEFT");
 }
 
 #[test]
@@ -109,7 +110,7 @@ fn rest_reply_endpoint_rejects_traversal_and_non_digit_database_ids() {
 }
 
 #[test]
-fn rest_reply_parser_reads_published_comment_fields() {
+fn rest_reply_marks_comment_published_by_viewer_with_string_database_id() {
     let raw = r#"{
         "id": 98765,
         "node_id": "PRRC_rest",
@@ -125,7 +126,10 @@ fn rest_reply_parser_reads_published_comment_fields() {
     assert_eq!(message.database_id.as_deref(), Some("98765"));
     assert_eq!(message.sync, Some(MessageSync::Published));
     assert!(message.viewer_did_author);
+}
 
+#[test]
+fn rest_reply_appends_bot_suffix_and_defaults_missing_body_to_empty() {
     let bot_raw = r#"{
         "id": 12,
         "node_id": "PRRC_bot",
@@ -133,9 +137,9 @@ fn rest_reply_parser_reads_published_comment_fields() {
         "updated_at": "2026-11-20T03:00:00Z",
         "user": {"login": "dependabot", "type": "Bot"}
     }"#;
-    let bot_msg = parse_rest_reply(bot_raw).unwrap();
-    assert_eq!(bot_msg.author, "dependabot[bot]");
-    assert_eq!(bot_msg.body, "");
+    let bot_message = parse_rest_reply(bot_raw).unwrap();
+    assert_eq!(bot_message.author, "dependabot[bot]");
+    assert_eq!(bot_message.body, "");
 }
 
 #[test]

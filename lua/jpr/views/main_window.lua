@@ -41,4 +41,14 @@ function M.edit(session, win, path, line)
     end
 end
 
+--- Shows an empty scratch buffer in every window currently displaying `buf` so
+--- wiping `buf` never closes the main window or tab.
+function M.release_windows(buf)
+    for _, win in ipairs(vim.fn.win_findbuf(buf)) do
+        local empty = vim.api.nvim_create_buf(false, true)
+        vim.bo[empty].bufhidden = "wipe"
+        pcall(vim.api.nvim_win_set_buf, win, empty)
+    end
+end
+
 return M

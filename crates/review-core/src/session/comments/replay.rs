@@ -144,31 +144,33 @@ impl ReviewSession {
         else {
             return ReplayOutcome::Landed;
         };
-        let resolved_thread_id = self.resolve_id(thread_id);
-        let fallback_db_id = self
-            .find_thread(&resolved_thread_id)
+        let canonical_thread_id = self.get_canonical_id_from_id(thread_id);
+        let fallback_database_id = self
+            .find_thread(&canonical_thread_id)
             .and_then(|thread| thread.messages.first())
             .and_then(|message| message.database_id.clone());
-        let effective_db_id = root_database_id.as_deref().or(fallback_db_id.as_deref());
+        let effective_database_id = root_database_id
+            .as_deref()
+            .or(fallback_database_id.as_deref());
         let pending_id = self.saved.registry.pending_review_id.clone();
         let request = ReplyRequest {
-            thread_id: &resolved_thread_id,
-            root_database_id: effective_db_id,
+            thread_id: &canonical_thread_id,
+            root_database_id: effective_database_id,
             pending_review_id: pending_id.as_deref(),
             body,
         };
         match self.ports.forge.reply_to_thread(pr, &request) {
-            Ok(real_msg) => {
-                if real_msg.sync == Some(MessageSync::Draft)
+            Ok(created_message) => {
+                if created_message.sync == Some(MessageSync::Draft)
                     && self.saved.registry.pending_review_id.is_none()
                 {
                     self.refresh_pending_review_id(pr);
                 }
-                let real_msg_id = real_msg.id.clone();
+                let created_message_id = created_message.id.clone();
                 if let Some(slot) = find_message_mut(&mut self.threads, temp_message_id) {
-                    *slot = real_msg;
+                    *slot = created_message;
                 }
-                self.record_id_mapping(temp_message_id, &real_msg_id, remaining_ops);
+                self.record_id_mapping(temp_message_id, &created_message_id, remaining_ops);
                 ReplayOutcome::Landed
             }
             Err(error) => self.handle_op_message_error(temp_message_id, error),
@@ -182,21 +184,21 @@ impl ReviewSession {
         message_id: &str,
         body: &str,
     ) -> ReplayOutcome {
-        let resolved_msg_id = self.resolve_id(message_id);
-        let resolved_thread_id = self.resolve_id(thread_id);
+        let canonical_message_id = self.get_canonical_id_from_id(message_id);
+        let canonical_thread_id = self.get_canonical_id_from_id(thread_id);
         match self
             .ports
             .forge
-            .edit_message(anchor_kind, &resolved_msg_id, body)
+            .edit_message(anchor_kind, &canonical_message_id, body)
         {
             Ok(updated) => {
                 self.saved
                     .registry
                     .agreed_bodies
                     .insert(updated.id.clone(), updated.body.clone());
-                if let Some(slot) = find_message_mut(&mut self.threads, &resolved_msg_id) {
+                if let Some(slot) = find_message_mut(&mut self.threads, &canonical_message_id) {
                     *slot = updated;
-                } else if let Some(thread) = self.find_thread_mut(&resolved_thread_id)
+                } else if let Some(thread) = self.find_thread_mut(&canonical_thread_id)
                     && let Some(slot) = thread
                         .messages
                         .iter_mut()
@@ -206,7 +208,7 @@ impl ReviewSession {
                 }
                 ReplayOutcome::Landed
             }
-            Err(error) => self.handle_op_message_error(&resolved_msg_id, error),
+            Err(error) => self.handle_op_message_error(&canonical_message_id, error),
         }
     }
 
@@ -216,16 +218,19 @@ impl ReviewSession {
         anchor_kind: AnchorKind,
         message_id: &str,
     ) -> ReplayOutcome {
-        let resolved_msg_id = self.resolve_id(message_id);
-        let resolved_thread_id = self.resolve_id(thread_id);
+        let canonical_message_id = self.get_canonical_id_from_id(message_id);
+        let canonical_thread_id = self.get_canonical_id_from_id(thread_id);
         match self
             .ports
             .forge
-            .delete_message(anchor_kind, &resolved_msg_id)
+            .delete_message(anchor_kind, &canonical_message_id)
         {
             Ok(()) => {
-                self.remove_message_from_threads(&resolved_thread_id, &resolved_msg_id);
-                self.saved.registry.agreed_bodies.remove(&resolved_msg_id);
+                self.remove_message_from_threads(&canonical_thread_id, &canonical_message_id);
+                self.saved
+                    .registry
+                    .agreed_bodies
+                    .remove(&canonical_message_id);
                 ReplayOutcome::Landed
             }
             Err(ForgeWriteError::Transient(_)) => ReplayOutcome::Transient,
@@ -233,12 +238,16 @@ impl ReviewSession {
         }
     }
 
-    fn replay_resolved(&mut self, thread_id: &str, resolved: bool) -> ReplayOutcome {
-        let resolved_thread_id = self.resolve_id(thread_id);
-        match self.ports.forge.set_resolved(&resolved_thread_id, resolved) {
+    fn replay_resolved(&mut self, thread_id: &str, is_resolved: bool) -> ReplayOutcome {
+        let canonical_thread_id = self.get_canonical_id_from_id(thread_id);
+        match self
+            .ports
+            .forge
+            .set_resolved(&canonical_thread_id, is_resolved)
+        {
             Ok(()) => {
-                if let Some(thread) = self.find_thread_mut(&resolved_thread_id) {
-                    thread.state = if resolved {
+                if let Some(thread) = self.find_thread_mut(&canonical_thread_id) {
+                    thread.state = if is_resolved {
                         ThreadState::Resolved
                     } else {
                         ThreadState::Open
@@ -248,8 +257,8 @@ impl ReviewSession {
             }
             Err(ForgeWriteError::Transient(_)) => ReplayOutcome::Transient,
             Err(ForgeWriteError::Rejected(_)) => {
-                if let Some(thread) = self.find_thread_mut(&resolved_thread_id) {
-                    thread.state = if resolved {
+                if let Some(thread) = self.find_thread_mut(&canonical_thread_id) {
+                    thread.state = if is_resolved {
                         ThreadState::Open
                     } else {
                         ThreadState::Resolved
@@ -264,23 +273,23 @@ impl ReviewSession {
         &mut self,
         subject_id: &str,
         content: ReactionContent,
-        added: bool,
+        is_added: bool,
     ) -> ReplayOutcome {
-        let resolved_subject_id = self.resolve_id(subject_id);
+        let canonical_subject_id = self.get_canonical_id_from_id(subject_id);
         match self
             .ports
             .forge
-            .set_reaction(&resolved_subject_id, content, added)
+            .set_reaction(&canonical_subject_id, content, is_added)
         {
             Ok(reactions) => {
-                if let Some(message) = find_message_mut(&mut self.threads, &resolved_subject_id) {
+                if let Some(message) = find_message_mut(&mut self.threads, &canonical_subject_id) {
                     message.reactions = reactions;
                 }
                 ReplayOutcome::Landed
             }
             Err(ForgeWriteError::Transient(_)) => ReplayOutcome::Transient,
             Err(ForgeWriteError::Rejected(_)) => {
-                if let Some(message) = find_message_mut(&mut self.threads, &resolved_subject_id) {
+                if let Some(message) = find_message_mut(&mut self.threads, &canonical_subject_id) {
                     toggle_reaction_in_list(&mut message.reactions, content);
                 }
                 ReplayOutcome::Rejected

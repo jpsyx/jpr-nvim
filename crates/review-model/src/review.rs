@@ -40,7 +40,8 @@ impl ReactionContent {
         Self::Eyes,
     ];
 
-    /// Parses GitHub's `ReactionContent` spelling.
+    /// Parses GitHub's `ReactionContent` spelling, returning `None` for
+    /// unknown strings, for example when decoding GraphQL or RPC reactions.
     #[must_use]
     pub fn parse(value: &str) -> Option<Self> {
         match value {
@@ -56,7 +57,8 @@ impl ReactionContent {
         }
     }
 
-    /// GitHub's GraphQL enum spelling.
+    /// Returns GitHub's GraphQL `ReactionContent` spelling, for example when
+    /// building reaction mutation variables.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -112,7 +114,8 @@ pub enum ReviewEvent {
 }
 
 impl ReviewEvent {
-    /// Parses `COMMENT`, `APPROVE`, or `REQUEST_CHANGES`.
+    /// Parses `"COMMENT"`, `"APPROVE"`, or `"REQUEST_CHANGES"`, returning
+    /// `None` otherwise, for example when reading review submission inputs.
     #[must_use]
     pub fn parse(value: &str) -> Option<Self> {
         match value {
@@ -123,7 +126,8 @@ impl ReviewEvent {
         }
     }
 
-    /// GitHub's GraphQL `PullRequestReviewEvent` spelling.
+    /// Returns GitHub's GraphQL `PullRequestReviewEvent` spelling, for example
+    /// when submitting a pull-request review mutation.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -144,7 +148,8 @@ pub struct MentionCandidate {
     pub is_participant: bool,
 }
 
-/// One draft message shown in the `:Jpr submit` summary buffer.
+/// One pending draft comment listed in a review-submission preview, for example
+/// in a confirmation dialog before publishing a review.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SubmitDraft {
@@ -152,13 +157,15 @@ pub struct SubmitDraft {
     pub thread_id: String,
     /// The draft message's id.
     pub message_id: String,
-    /// Where the draft is attached, so `<CR>` can jump to it.
+    /// Where the draft is attached, so a frontend can jump to it from the preview.
     pub anchor: Anchor,
     /// One-line snippet of the draft body.
     pub snippet: String,
 }
 
-/// What a frontend needs to render `:Jpr submit` and guard submission.
+/// Pending draft summaries and submission guards for a review-submission
+/// prompt, such as disabling approval on self-reviews or blocking while
+/// comments are still syncing.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SubmitPreview {
@@ -207,7 +214,7 @@ mod tests {
     }
 
     #[test]
-    fn submit_preview_and_mentions_use_camel_case_keys() {
+    fn submit_preview_uses_camel_case_keys() {
         let preview = SubmitPreview {
             draft_count: 1,
             drafts: vec![SubmitDraft {
@@ -226,7 +233,10 @@ mod tests {
         assert_eq!(value["drafts"][0]["snippet"], "nit: rename");
         assert_eq!(value["canApproveOrRequestChanges"], true);
         assert!(value["blockedReason"].is_null());
+    }
 
+    #[test]
+    fn mention_candidate_uses_camel_case_keys() {
         let candidate = MentionCandidate {
             login: "pablo".into(),
             is_participant: true,

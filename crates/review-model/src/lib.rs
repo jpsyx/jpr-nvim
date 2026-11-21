@@ -17,6 +17,6 @@ pub use review::{
 };
 pub use thread::{
     Anchor, AnchorKind, MarkerKind, Message, MessageSync, Origin, Side, Thread, ThreadPreview,
-    ThreadState, create_thread_preview_from_thread,
+    ThreadState, build_snippet_from_body, create_thread_preview_from_thread,
 };
 pub use view::{Event, FileRow, SessionView, SyncState, TreeRow};

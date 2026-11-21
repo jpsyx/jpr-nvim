@@ -114,7 +114,11 @@ pub fn error_message(stdout: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// Extracts GitHub's REST error message from `stdout`, when present.
+/// Extracts GitHub's human-readable REST error message from `stdout`, or
+/// `None` when `stdout` is not a JSON error payload.
+///
+/// Use it when formatting failed `gh api` REST calls, for example surfacing a
+/// 422 validation message alongside the HTTP status.
 #[must_use]
 pub fn rest_error_message(stdout: &str) -> Option<String> {
     let value: Value = serde_json::from_str(stdout).ok()?;
@@ -127,7 +131,11 @@ pub fn rest_error_message(stdout: &str) -> Option<String> {
     value["message"].as_str().map(str::to_owned)
 }
 
-/// The authenticated viewer's login in `PENDING_REVIEW`.
+/// Extracts the authenticated viewer's login from a `PENDING_REVIEW` GraphQL
+/// `data` payload, or `None` when absent.
+///
+/// Use it when building a forge snapshot, for example to guard against
+/// self-approval or attribute optimistic comments to the viewer.
 #[must_use]
 pub fn parse_viewer_login(data: &Value) -> Option<String> {
     data.pointer("/viewer/login")?.as_str().map(str::to_owned)
@@ -144,7 +152,11 @@ pub fn parse_pending_review(data: &Value) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// Parses one page of `CONVERSATION` into `AnchorKind::Pr` threads.
+/// Parses one `CONVERSATION` GraphQL page into `AnchorKind::Pr` threads and
+/// the next-page cursor (`None` on the final page).
+///
+/// Use it when paging through top-level pull-request issue comments, for
+/// example while assembling a forge snapshot alongside code review threads.
 pub fn parse_conversation_page(data: &Value) -> Result<(Vec<Thread>, Option<String>)> {
     let comments = data
         .pointer("/node/comments")
@@ -171,7 +183,11 @@ pub(crate) fn parse_issue_comment_thread(node: &Value) -> Option<Thread> {
     })
 }
 
-/// Parses `MENTIONS`, placing PR participants ahead of other assignable users.
+/// Parses a `MENTIONS` GraphQL response into deduplicated candidates, placing
+/// pull-request participants ahead of other assignable repository users.
+///
+/// Use it to populate `@mention` autocomplete lists, for example when
+/// composing review comments or replies.
 #[must_use]
 pub fn parse_mentions(data: &Value) -> Vec<MentionCandidate> {
     let mut seen = HashSet::new();
@@ -299,6 +315,25 @@ fn parse_line_anchor(node: &Value, path: String, side: Side, end: u64) -> Anchor
     }
 }
 
+pub(crate) fn build_author_display_login(login: &str, is_bot: bool) -> String {
+    if is_bot && !login.ends_with("[bot]") {
+        format!("{login}[bot]")
+    } else {
+        login.to_owned()
+    }
+}
+
+pub(crate) fn is_valid_database_id(database_id: &str) -> bool {
+    !database_id.is_empty() && database_id.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+pub(crate) fn parse_decimal_database_id(value: &Value) -> Option<String> {
+    if let Some(text) = value.as_str() {
+        return is_valid_database_id(text).then(|| text.to_owned());
+    }
+    value.as_u64().map(|database_id| database_id.to_string())
+}
+
 pub(crate) fn parse_comment(node: &Value) -> Option<Message> {
     let login = node
         .pointer("/author/login")
@@ -307,11 +342,7 @@ pub(crate) fn parse_comment(node: &Value) -> Option<Message> {
     let is_bot = node.pointer("/author/__typename").and_then(Value::as_str) == Some("Bot");
     Some(Message {
         id: node["id"].as_str()?.to_owned(),
-        author: if is_bot && !login.ends_with("[bot]") {
-            format!("{login}[bot]")
-        } else {
-            login.to_owned()
-        },
+        author: build_author_display_login(login, is_bot),
         body: node["body"].as_str().unwrap_or_default().to_owned(),
         created: node["createdAt"].as_str().unwrap_or_default().to_owned(),
         updated: node["updatedAt"].as_str().unwrap_or_default().to_owned(),
@@ -321,7 +352,7 @@ pub(crate) fn parse_comment(node: &Value) -> Option<Message> {
             MessageSync::Published
         }),
         viewer_did_author: node["viewerDidAuthor"].as_bool().unwrap_or(false),
-        database_id: parse_database_id(node),
+        database_id: parse_decimal_database_id(&node["fullDatabaseId"]),
         reactions: parse_reactions(node),
         sync_error: None,
         recoverable_body: None,
@@ -347,16 +378,6 @@ pub(crate) fn parse_reactions(node: &Value) -> Vec<Reaction> {
             })
         })
         .collect()
-}
-
-fn parse_database_id(node: &Value) -> Option<String> {
-    if let Some(text) = node["fullDatabaseId"].as_str() {
-        return (!text.is_empty() && text.bytes().all(|byte| byte.is_ascii_digit()))
-            .then(|| text.to_owned());
-    }
-    node["fullDatabaseId"]
-        .as_u64()
-        .map(|database_id| database_id.to_string())
 }
 
 fn next_cursor(connection: &Value) -> Option<String> {

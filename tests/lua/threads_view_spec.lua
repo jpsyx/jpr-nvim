@@ -2,6 +2,7 @@ local root = vim.fs.dirname(vim.fs.dirname(vim.fs.dirname(vim.fn.fnamemodify(deb
 package.path = root .. "/lua/?.lua;" .. root .. "/lua/?/init.lua;" .. package.path
 
 dofile(root .. "/plugin/jpr.lua")
+local helpers = dofile(root .. "/tests/lua/support/helpers.lua")
 
 local jpr = require("jpr")
 local session = require("jpr.session")
@@ -16,18 +17,9 @@ local worktree = vim.fn.tempname()
 vim.fn.mkdir(worktree, "p")
 vim.fn.writefile({ "hello", "new", "tail" }, worktree .. "/README.md")
 
-local function has_buf_map(buf, mode, lhs)
-    for _, mapping in ipairs(vim.api.nvim_buf_get_keymap(buf, mode)) do
-        if mapping.lhs == lhs then
-            return true
-        end
-    end
-    return false
-end
-
-local thread_ns = vim.api.nvim_create_namespace("jpr-threads")
+local thread_namespace = vim.api.nvim_create_namespace("jpr-threads")
 local function get_thread_marks(buf)
-    return vim.api.nvim_buf_get_extmarks(buf, thread_ns, 0, -1, { details = true })
+    return vim.api.nvim_buf_get_extmarks(buf, thread_namespace, 0, -1, { details = true })
 end
 
 local function find_base_window(tab)
@@ -63,11 +55,12 @@ assert(marks[1][2] == 1, "thread mark is on 0-based row 1 (displayLine 2): " .. 
 assert(marks[1][4].sign_text == "💬", "expected published sign: " .. vim.inspect(marks[1][4]))
 assert(marks[1][4].sign_hl_group == "JprThreadPublished", vim.inspect(marks[1][4]))
 assert(marks[1][4].virt_text_pos == "eol", vim.inspect(marks[1][4]))
+assert(marks[1][4].virt_lines == nil, "threads start collapsed without virt_lines")
 assert(marks[1][4].virt_text[1][1]:find("@alice: nit: rename this", 1, true), vim.inspect(marks[1][4]))
 assert(vim.wo[win].signcolumn == "yes", "signcolumn is enabled on diff window with threads")
 
 for _, lhs in ipairs({ "]t", "[t", "gc", "gC", "gf", "gt" }) do
-    assert(has_buf_map(buf, "n", lhs), "expected buffer key " .. lhs .. " on diff buffer")
+    assert(helpers.has_buf_map(buf, "n", lhs), "expected buffer key " .. lhs .. " on diff buffer")
 end
 
 -- 2. ]t and [t move the cursor to the thread's line.
@@ -81,20 +74,18 @@ session.jump_thread_current(-1)
 assert(vim.api.nvim_win_get_cursor(win)[1] == 2, "jump_thread_current(-1) moves to line 2")
 
 vim.api.nvim_win_set_cursor(win, { 1, 0 })
-vim.api.nvim_feedkeys("]t", "xt", false)
+helpers.press_key("]t")
 assert(vim.api.nvim_win_get_cursor(win)[1] == 2, "]t keymap moves to line 2")
 
 vim.api.nvim_win_set_cursor(win, { 3, 0 })
-vim.api.nvim_feedkeys("[t", "xt", false)
+helpers.press_key("[t")
 assert(vim.api.nvim_win_get_cursor(win)[1] == 2, "[t keymap moves to line 2")
 
--- 3. :Jpr expand toggles session.threads_expanded between EOL preview and virt_lines.
-assert(not review.threads_expanded, "threads start collapsed")
+-- 3. :Jpr expand toggles between compact EOL preview and inline virt_lines.
 session.expand_current()
-assert(review.threads_expanded == true, "expand_current flips threads_expanded to true")
 assert(vim.wait(3000, function()
-    local current = get_thread_marks(buf)
-    return #current == 2 and (current[1][4].virt_lines ~= nil or current[2][4].virt_lines ~= nil)
+    local current_marks = get_thread_marks(buf)
+    return #current_marks == 2 and (current_marks[1][4].virt_lines ~= nil or current_marks[2][4].virt_lines ~= nil)
 end), "expanded thread draws virt_lines: " .. vim.inspect(get_thread_marks(buf)))
 
 local expanded_marks = get_thread_marks(buf)
@@ -112,10 +103,9 @@ local expanded_text = virt_mark[4].virt_lines[1][1][1] .. "\n" .. virt_mark[4].v
 assert(expanded_text:find("@alice", 1, true) and expanded_text:find("nit: rename this", 1, true), expanded_text)
 
 session.expand_current()
-assert(review.threads_expanded == false, "second expand_current collapses back")
 assert(vim.wait(3000, function()
-    local current = get_thread_marks(buf)
-    return #current == 1 and current[1][4].virt_text ~= nil and current[1][4].virt_lines == nil
+    local current_marks = get_thread_marks(buf)
+    return #current_marks == 1 and current_marks[1][4].virt_text ~= nil and current_marks[1][4].virt_lines == nil
 end), "collapsing restores compact EOL virt_text")
 
 -- 4. Split mode places RIGHT threads on file buffer and LEFT threads on jpr://base/...
@@ -130,14 +120,14 @@ local base_buf = vim.api.nvim_win_get_buf(base_win)
 local initial_base_signcolumn = vim.api.nvim_get_option_value("signcolumn", { win = base_win, scope = "local" })
 assert(vim.b[base_buf].jpr_base_path == "README.md", "base buffer records jpr_base_path")
 for _, lhs in ipairs({ "]t", "[t", "gc", "gC", "gf", "gt" }) do
-    assert(has_buf_map(base_buf, "n", lhs), "expected buffer key " .. lhs .. " on base buffer")
+    assert(helpers.has_buf_map(base_buf, "n", lhs), "expected buffer key " .. lhs .. " on base buffer")
 end
 assert(#get_thread_marks(buf) == 1 and get_thread_marks(buf)[1][2] == 1, "RIGHT thread stays on file buffer")
 assert(#get_thread_marks(base_buf) == 0, "no LEFT threads on base buffer for RIGHT-only fixture")
 
 -- Inject a fileDiff response with both a LEFT thread (base line 1) and a RIGHT thread (head line 2)
 -- and trigger threadsChanged notification to verify split routing, cursor/focus preservation, and signcolumn.
-local orig_request = review.client.request
+local original_request = review.client.request
 local left_thread = {
     threadId = "T_LEFT",
     anchor = { file = "README.md", kind = "line", side = "LEFT", start = 1, ["end"] = 1 },
@@ -168,12 +158,12 @@ local right_thread = {
 }
 local mocked_threads = { left_thread, right_thread }
 local file_diff_calls = 0
-review.client.request = function(client_self, method, params, cb)
+review.client.request = function(client_self, method, params, callback)
     if method == "fileDiff" then
         file_diff_calls = file_diff_calls + 1
         local response_threads = vim.deepcopy(mocked_threads)
         vim.schedule(function()
-            cb(nil, {
+            callback(nil, {
                 path = "README.md",
                 binary = false,
                 baseText = "hello\nold\n",
@@ -184,7 +174,7 @@ review.client.request = function(client_self, method, params, cb)
         end)
         return
     end
-    return orig_request(client_self, method, params, cb)
+    return original_request(client_self, method, params, callback)
 end
 
 local saved_base_win = base_win
@@ -211,16 +201,18 @@ assert(vim.wo[win].signcolumn == "yes", "file window enables signcolumn when RIG
 
 -- 5. :Jpr expand in split mode preserves base_win handle, focus, and cursor.
 session.expand_current()
-assert(review.threads_expanded == true, "expand_current toggles to expanded in split mode")
 assert(find_base_window(review.tab) == saved_base_win, "expand preserves split base_win handle")
 assert(vim.api.nvim_get_current_win() == saved_base_win, "expand preserves focus on base_win")
 assert(vim.api.nvim_win_get_cursor(saved_base_win)[1] == 2, "expand preserves cursor on base_win")
 assert(vim.wait(3000, function()
-    local current = get_thread_marks(base_buf)
-    return #current == 2 and (current[1][4].virt_lines ~= nil or current[2][4].virt_lines ~= nil)
+    local current_marks = get_thread_marks(base_buf)
+    return #current_marks == 2 and (current_marks[1][4].virt_lines ~= nil or current_marks[2][4].virt_lines ~= nil)
 end), "expand draws virt_lines on split base_buf")
 session.expand_current()
-assert(review.threads_expanded == false, "second expand_current collapses in split mode")
+assert(vim.wait(3000, function()
+    local current_marks = get_thread_marks(base_buf)
+    return #current_marks == 1 and current_marks[1][4].virt_text ~= nil and current_marks[1][4].virt_lines == nil
+end), "second expand_current collapses virt_lines in split mode")
 assert(vim.api.nvim_get_current_win() == saved_base_win, "collapse preserves focus on base_win")
 assert(vim.api.nvim_win_get_cursor(saved_base_win)[1] == 2, "collapse preserves cursor on base_win")
 
@@ -249,7 +241,7 @@ assert(
     "base window restores signcolumn when threads become empty"
 )
 
--- 7. Closing base_win manually + M.clear / session.close_current cleans session.buf_threads and restores signcolumn.
+-- 7. Closing base_win manually + M.clear / session.close_current cleans thread lookup and restores signcolumn.
 mocked_threads = { left_thread, right_thread }
 calls_before = file_diff_calls
 session.on_notification(review, "event", { type = "threadsChanged", view = review.view })
@@ -265,7 +257,8 @@ assert(
     vim.api.nvim_get_option_value("signcolumn", { win = win, scope = "local" }) == "no",
     "M.clear restores file window signcolumn"
 )
-assert(next(review.buf_threads or {}) == nil, "M.clear removes both file and wiped base buffers from buf_threads")
+assert(#threads_view.threads_at_cursor(review, buf, 2) == 0, "M.clear clears file buffer threads")
+assert(#threads_view.threads_at_cursor(review, base_buf, 1) == 0, "M.clear clears wiped base buffer threads")
 
 diff_view.reconcile(review)
 assert(vim.wait(3000, function()
@@ -278,10 +271,10 @@ assert(vim.wait(3000, function()
 end), "reopened base buffer draws thread")
 vim.api.nvim_win_close(reopened_base_win, true)
 
-review.client.request = orig_request
+review.client.request = original_request
 
 session.close_current()
 assert(#get_thread_marks(buf) == 0, "closing session clears jpr-threads extmarks")
-assert(next(review.buf_threads or {}) == nil, "closing session leaves buf_threads empty after manual base_win close")
+assert(#threads_view.threads_at_cursor(review, buf, 2) == 0, "closing session clears file buffer threads")
 
 print("threads_view_spec: ok")

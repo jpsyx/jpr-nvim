@@ -2,7 +2,6 @@
 -- comments (`anchor.kind == "pr"`) in the main window beside the panel.
 local diff_view = require("jpr.views.diff")
 local main_window = require("jpr.views.main_window")
-local one_line = require("jpr.render.panel").one_line
 local render = require("jpr.render.threads")
 local stream_view = require("jpr.views.stream")
 
@@ -10,79 +9,23 @@ local M = {}
 
 local namespace = vim.api.nvim_create_namespace("jpr-conversation")
 
-local SYNC_BADGE = {
-    draft = "[draft]",
-    queued = "[queued]",
-    pending = "[sending]",
-    failed = "[failed]",
-}
-
 local function filter_pr_threads(threads)
-    local pr_threads = {}
-    for _, thread in ipairs(threads or {}) do
-        if thread.anchor and thread.anchor.kind == "pr" then
-            pr_threads[#pr_threads + 1] = thread
-        end
-    end
-    return pr_threads
+    return vim.tbl_filter(function(thread)
+        return thread.anchor ~= nil and thread.anchor.kind == "pr"
+    end, threads or {})
 end
 
 local function count_messages(threads)
-    local total = 0
+    local num_messages = 0
     for _, thread in ipairs(threads) do
-        total = total + #(thread.messages or {})
+        num_messages = num_messages + #(thread.messages or {})
     end
-    return total
+    return num_messages
 end
 
-local function append_message(layout, thread, message)
-    local start_line = #layout.lines + 1
-    local badge = SYNC_BADGE[message.sync] and (" " .. SYNC_BADGE[message.sync]) or ""
-    local edited = (message.updated and message.updated ~= message.created) and " (edited)" or ""
-    local author_line = ("@%s · %s%s%s"):format(
-        one_line(message.author or ""),
-        one_line(message.created or ""),
-        edited,
-        badge
-    )
-    layout.add(author_line, "JprAuthor")
-    if message.syncError then
-        layout.add("  error: " .. one_line(message.syncError), "JprError")
-    end
-    if message.recoverableBody then
-        layout.add("  [concurrent edit on GitHub won; press e to recover your offline text]", "JprThreadDraft")
-    end
-    for body_line in (tostring(message.body or "") .. "\n"):gmatch("(.-)\n") do
-        layout.add("  " .. body_line:gsub("\r$", ""))
-    end
-    local reaction_text = render.build_reactions_line(message.reactions)
-    if reaction_text ~= "" then
-        layout.add("  " .. reaction_text, "JprReactionActive")
-    end
-    layout.message_ranges[#layout.message_ranges + 1] = {
-        first = start_line,
-        last = #layout.lines,
-        thread_id = thread.id or thread.threadId,
-        message_id = message.id,
-        message = message,
-        thread = thread,
-    }
-end
-
-local function build_layout_from_threads(session, threads)
+local function create_layout_from_threads(session, threads)
     local pr_threads = filter_pr_threads(threads)
-    local layout = { lines = {}, highlights = {}, message_ranges = {} }
-    function layout.add(text, group)
-        layout.lines[#layout.lines + 1] = text
-        if group then
-            layout.highlights[#layout.highlights + 1] = {
-                line = #layout.lines - 1,
-                col_start = 0,
-                col_end = #text,
-                group = group,
-            }
-        end
-    end
+    local layout = render.create_message_layout()
     layout.add(("#%d PR Conversation (%d comments)"):format(session.number, count_messages(pr_threads)), "JprTitle")
     layout.add("")
     if #pr_threads == 0 then
@@ -91,7 +34,7 @@ local function build_layout_from_threads(session, threads)
     else
         for _, thread in ipairs(pr_threads) do
             for _, message in ipairs(thread.messages or {}) do
-                append_message(layout, thread, message)
+                render.append_formatted_message(layout, thread, message)
                 layout.add("")
             end
         end
@@ -173,13 +116,8 @@ local function react_to_comment(session)
     if not entry then
         return
     end
-    vim.ui.select(render.REACTION_ORDER, {
-        prompt = "Toggle reaction:",
-        format_item = function(content)
-            return ("%s  %s"):format(render.REACTION_EMOJI[content] or "", content)
-        end,
-    }, function(choice)
-        if session.closing or session.conversation ~= state or not choice then
+    require("jpr.comments.popup").pick_reaction(function(choice)
+        if session.closing or session.conversation ~= state then
             return
         end
         require("jpr.session").request(session, "toggleReaction", {
@@ -249,22 +187,14 @@ local function fetch_and_draw(session, state)
         if not vim.api.nvim_buf_is_valid(buf) then
             return
         end
-        local layout = build_layout_from_threads(session, (result and result.threads) or {})
+        local layout = create_layout_from_threads(session, (result and result.threads) or {})
         state.layout = layout
         paint_buffer(buf, layout)
     end)
 end
 
-local function release_windows(buf)
-    for _, win in ipairs(vim.fn.win_findbuf(buf)) do
-        local empty = vim.api.nvim_create_buf(false, true)
-        vim.bo[empty].bufhidden = "wipe"
-        pcall(vim.api.nvim_win_set_buf, win, empty)
-    end
-end
-
 --- Opens or focuses the PR conversation buffer (`jpr://conversation/<number>`)
---- in `session`'s main window beside the panel, clearing any diff/stream split.
+--- in `session`'s main window beside the panel.
 function M.show(session)
     if not session or session.closing then
         return
@@ -281,7 +211,7 @@ function M.show(session)
     fetch_and_draw(session, state)
 end
 
---- Re-fetches and redraws the PR conversation buffer while it is visible.
+--- Updates the PR conversation buffer when it is currently visible.
 function M.refresh(session)
     if not session or session.closing or not is_visible(session) then
         return
@@ -297,7 +227,7 @@ function M.close(session)
     end
     session.conversation = nil
     if state.buf and vim.api.nvim_buf_is_valid(state.buf) then
-        release_windows(state.buf)
+        main_window.release_windows(state.buf)
         pcall(vim.api.nvim_buf_delete, state.buf, { force = true })
     end
 end

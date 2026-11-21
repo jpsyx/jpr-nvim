@@ -17,7 +17,7 @@ function M.find_start(line_to_cursor)
     return start_idx - 1
 end
 
-local function create_completion_item(candidate)
+local function create_completion_item_from_candidate(candidate)
     local menu = "[repo]"
     if candidate.isParticipant then
         menu = "[PR]"
@@ -30,14 +30,14 @@ local function create_completion_item(candidate)
     }
 end
 
---- Builds completion items matching `base` (such as `"@pa"` or `"@"`),
+--- Creates completion items matching `base` (such as `"@pa"` or `"@"`),
 --- keeping PR participants ahead of other assignable repository users.
-function M.complete_items(candidates, base)
+function M.create_items_from_candidates(candidates, base)
     local query = (base or ""):gsub("^@", ""):lower()
     local participants, others = {}, {}
     for _, candidate in ipairs(candidates or {}) do
         if type(candidate.login) == "string" and candidate.login:lower():find(query, 1, true) == 1 then
-            local entry = create_completion_item(candidate)
+            local entry = create_completion_item_from_candidate(candidate)
             if candidate.isParticipant then
                 participants[#participants + 1] = entry
             else
@@ -58,28 +58,28 @@ function M.omnifunc(findstart, base)
     end
     local buf = vim.api.nvim_get_current_buf()
     local candidates = candidates_by_buf[buf] or active_candidates
-    return M.complete_items(candidates, base)
+    return M.create_items_from_candidates(candidates, base)
 end
 
 local cmp_registered = false
 
-local function build_cmp_items(before)
-    local start_col = M.find_start(before)
+local function create_cmp_items_from_line(line_before_cursor)
+    local start_col = M.find_start(line_before_cursor)
     if start_col < 0 then
         return {}
     end
-    local prefix = before:sub(start_col + 1)
+    local prefix = line_before_cursor:sub(start_col + 1)
     local buf = vim.api.nvim_get_current_buf()
     local candidates = candidates_by_buf[buf] or active_candidates
-    local out = {}
-    for index, item in ipairs(M.complete_items(candidates, prefix)) do
-        out[#out + 1] = {
+    local cmp_items = {}
+    for index, item in ipairs(M.create_items_from_candidates(candidates, prefix)) do
+        cmp_items[#cmp_items + 1] = {
             label = item.word,
             sortText = ("%04d"):format(index),
             detail = item.menu,
         }
     end
-    return out
+    return cmp_items
 end
 
 local function maybe_register_cmp()
@@ -99,8 +99,8 @@ local function maybe_register_cmp()
             return { "@" }
         end,
         complete = function(_, params, callback)
-            local before = params.context.cursor_before_line or ""
-            callback({ items = build_cmp_items(before), isIncomplete = false })
+            local line_before_cursor = params.context.cursor_before_line or ""
+            callback({ items = create_cmp_items_from_line(line_before_cursor), isIncomplete = false })
         end,
     })
 end
@@ -123,11 +123,11 @@ function M.attach(session, buf)
     if not session or session.closing or not session.client then
         return
     end
-    require("jpr.session").request(session, "mentions", nil, function(res)
+    require("jpr.session").request(session, "mentions", nil, function(result)
         if session.closing or not vim.api.nvim_buf_is_valid(buf) then
             return
         end
-        local candidates = (res and res.candidates) or {}
+        local candidates = (result and result.candidates) or {}
         candidates_by_buf[buf] = candidates
         active_candidates = candidates
     end, function() end)

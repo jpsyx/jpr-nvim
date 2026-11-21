@@ -44,24 +44,25 @@ impl ReviewSession {
         self.create_code_thread(&pr, anchor, body)
     }
 
-    /// Replies to `thread_id` (immediate via REST when no pending review is
-    /// active, else added to the pending review).
+    /// Appends a reply to `thread_id` (published immediately when no pending
+    /// review blocks it, or attached as a draft to the active pending review)
+    /// and returns the updated [`Thread`] and [`SessionView`].
     pub fn reply(&mut self, thread_id: &str, body: &str) -> Result<(Thread, SessionView)> {
         if body.trim().is_empty() {
             bail!("reply body cannot be empty");
         }
         let pr = self.synced_pr()?.clone();
-        let resolved_id = self.resolve_id(thread_id);
-        let root_db_id = self
-            .find_thread(&resolved_id)
+        let canonical_thread_id = self.get_canonical_id_from_id(thread_id);
+        let root_database_id = self
+            .find_thread(&canonical_thread_id)
             .with_context(|| format!("unknown thread {thread_id}"))?
             .messages
             .first()
             .and_then(|message| message.database_id.clone());
         let pending_id = self.saved.registry.pending_review_id.clone();
         let request = ReplyRequest {
-            thread_id: &resolved_id,
-            root_database_id: root_db_id.as_deref(),
+            thread_id: &canonical_thread_id,
+            root_database_id: root_database_id.as_deref(),
             pending_review_id: pending_id.as_deref(),
             body,
         };
@@ -72,11 +73,16 @@ impl ReviewSession {
                 {
                     self.refresh_pending_review_id(&pr);
                 }
-                let thread = self.push_reply_message(&resolved_id, message)?;
+                let thread = self.push_reply_message(&canonical_thread_id, message)?;
                 let view = self.save_and_announce_threads()?;
                 Ok((thread, view))
             }
-            Err(error) => self.record_failed_or_queued_reply(&resolved_id, root_db_id, body, error),
+            Err(error) => self.record_failed_or_queued_reply(
+                &canonical_thread_id,
+                root_database_id,
+                body,
+                error,
+            ),
         }
     }
 
@@ -87,31 +93,31 @@ impl ReviewSession {
             bail!("message body cannot be empty");
         }
         let _ = self.synced_pr()?;
-        let resolved_msg_id = self.resolve_id(message_id);
-        let (thread_id, anchor_kind, current_sync) = self.locate_message(&resolved_msg_id)?;
+        let canonical_message_id = self.get_canonical_id_from_id(message_id);
+        let (thread_id, anchor_kind, current_sync) = self.locate_message(&canonical_message_id)?;
         if let Some(result) =
-            self.edit_unflushed_message(&thread_id, &resolved_msg_id, current_sync, body)?
+            self.edit_unflushed_message(&thread_id, &canonical_message_id, current_sync, body)?
         {
             return Ok(result);
         }
         match self
             .ports
             .forge
-            .edit_message(anchor_kind, &resolved_msg_id, body)
+            .edit_message(anchor_kind, &canonical_message_id, body)
         {
             Ok(updated) => {
                 self.saved
                     .registry
                     .agreed_bodies
                     .insert(updated.id.clone(), updated.body.clone());
-                let thread = self.replace_message(&thread_id, &resolved_msg_id, updated)?;
+                let thread = self.replace_message(&thread_id, &canonical_message_id, updated)?;
                 let view = self.save_and_announce_threads()?;
                 Ok((thread, view))
             }
             Err(error) => self.record_failed_or_queued_edit(
                 &thread_id,
                 anchor_kind,
-                &resolved_msg_id,
+                &canonical_message_id,
                 body,
                 error,
             ),
@@ -121,33 +127,36 @@ impl ReviewSession {
     /// Deletes `message_id` (removing its thread when it was the sole message).
     pub fn delete_message(&mut self, message_id: &str) -> Result<SessionView> {
         let _ = self.synced_pr()?;
-        let resolved_msg_id = self.resolve_id(message_id);
-        let (thread_id, anchor_kind, _) = self.locate_message(&resolved_msg_id)?;
-        if resolved_msg_id.starts_with("tmp-") {
-            self.drop_local_message_and_ops(&thread_id, &resolved_msg_id);
+        let canonical_message_id = self.get_canonical_id_from_id(message_id);
+        let (thread_id, anchor_kind, _) = self.locate_message(&canonical_message_id)?;
+        if canonical_message_id.starts_with("tmp-") {
+            self.drop_local_message_and_ops(&thread_id, &canonical_message_id);
             return self.save_and_announce_threads();
         }
         match self
             .ports
             .forge
-            .delete_message(anchor_kind, &resolved_msg_id)
+            .delete_message(anchor_kind, &canonical_message_id)
         {
             Ok(()) => {
-                self.remove_message_from_threads(&thread_id, &resolved_msg_id);
-                self.drop_queued_ops_for_removed_message(&thread_id, &resolved_msg_id);
-                self.saved.registry.agreed_bodies.remove(&resolved_msg_id);
+                self.remove_message_from_threads(&thread_id, &canonical_message_id);
+                self.drop_queued_ops_for_removed_message(&thread_id, &canonical_message_id);
+                self.saved
+                    .registry
+                    .agreed_bodies
+                    .remove(&canonical_message_id);
                 self.save_and_announce_threads()
             }
             Err(ForgeWriteError::Transient(_)) => {
-                self.remove_message_from_threads(&thread_id, &resolved_msg_id);
-                self.drop_queued_ops_for_removed_message(&thread_id, &resolved_msg_id);
+                self.remove_message_from_threads(&thread_id, &canonical_message_id);
+                self.drop_queued_ops_for_removed_message(&thread_id, &canonical_message_id);
                 self.saved
                     .registry
                     .queued_ops
                     .push(QueuedCommentOp::DeleteMessage {
                         thread_id,
                         anchor_kind,
-                        message_id: resolved_msg_id,
+                        message_id: canonical_message_id,
                     });
                 self.save_and_announce_threads()
             }
@@ -159,17 +168,17 @@ impl ReviewSession {
     pub fn set_resolved(
         &mut self,
         thread_id: &str,
-        resolved: bool,
+        is_resolved: bool,
     ) -> Result<(Thread, SessionView)> {
         let _ = self.synced_pr()?;
-        let resolved_id = self.resolve_id(thread_id);
-        let target_state = if resolved {
+        let canonical_thread_id = self.get_canonical_id_from_id(thread_id);
+        let target_state = if is_resolved {
             ThreadState::Resolved
         } else {
             ThreadState::Open
         };
         let thread = self
-            .find_thread_mut(&resolved_id)
+            .find_thread_mut(&canonical_thread_id)
             .with_context(|| format!("unknown thread {thread_id}"))?;
         if thread.anchor.kind == AnchorKind::Pr {
             bail!("pull-request conversation comments cannot be resolved");
@@ -177,19 +186,23 @@ impl ReviewSession {
         let previous_state = thread.state;
         thread.state = target_state;
         let snapshot_thread = thread.clone();
-        match self.ports.forge.set_resolved(&resolved_id, resolved) {
+        match self
+            .ports
+            .forge
+            .set_resolved(&canonical_thread_id, is_resolved)
+        {
             Ok(()) => {}
             Err(ForgeWriteError::Transient(_)) => {
                 self.saved
                     .registry
                     .queued_ops
                     .push(QueuedCommentOp::SetResolved {
-                        thread_id: resolved_id,
-                        resolved,
+                        thread_id: canonical_thread_id,
+                        resolved: is_resolved,
                     });
             }
             Err(ForgeWriteError::Rejected(reason)) => {
-                if let Some(target) = self.find_thread_mut(&resolved_id) {
+                if let Some(target) = self.find_thread_mut(&canonical_thread_id) {
                     target.state = previous_state;
                 }
                 bail!("{reason}");
@@ -206,17 +219,23 @@ impl ReviewSession {
         content: ReactionContent,
     ) -> Result<(Thread, SessionView)> {
         let _ = self.synced_pr()?;
-        let resolved_msg_id = self.resolve_id(message_id);
-        let (thread_id, _, _) = self.locate_message(&resolved_msg_id)?;
-        let message =
-            find_message_mut(&mut self.threads, &resolved_msg_id).context("message disappeared")?;
+        let canonical_message_id = self.get_canonical_id_from_id(message_id);
+        let (thread_id, _, _) = self.locate_message(&canonical_message_id)?;
+        let message = find_message_mut(&mut self.threads, &canonical_message_id)
+            .context("message disappeared")?;
         let previous_reactions = message.reactions.clone();
-        let added = toggle_reaction_in_list(&mut message.reactions, content);
+        let is_added = toggle_reaction_in_list(&mut message.reactions, content);
         let result = self
             .ports
             .forge
-            .set_reaction(&resolved_msg_id, content, added);
-        self.apply_reaction_result(&resolved_msg_id, content, added, previous_reactions, result)?;
+            .set_reaction(&canonical_message_id, content, is_added);
+        self.apply_reaction_result(
+            &canonical_message_id,
+            content,
+            is_added,
+            previous_reactions,
+            result,
+        )?;
         let thread = self
             .find_thread(&thread_id)
             .context("thread disappeared")?
@@ -225,12 +244,12 @@ impl ReviewSession {
         Ok((thread, view))
     }
 
-    /// Re-queues a `MessageSync::Failed` message and immediately attempts to
-    /// flush the queue.
+    /// Retries sending a [`MessageSync::Failed`](review_model::MessageSync::Failed)
+    /// message to the forge and returns the updated [`SessionView`].
     pub fn retry_message(&mut self, message_id: &str) -> Result<SessionView> {
         let _ = self.synced_pr()?;
-        let resolved_msg_id = self.resolve_id(message_id);
-        self.enqueue_failed_message(&resolved_msg_id)?;
+        let canonical_message_id = self.get_canonical_id_from_id(message_id);
+        self.enqueue_failed_message(&canonical_message_id, None)?;
         let _ = self.send_queued_comments();
         self.save_and_announce_threads()
     }

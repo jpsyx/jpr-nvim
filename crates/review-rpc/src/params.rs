@@ -14,7 +14,9 @@ pub fn get_string_from_params<'a>(params: &'a Value, name: &str) -> Result<&'a s
         .ok_or_else(|| create_invalid_params_error(&format!("expected a string \"{name}\"")))
 }
 
-/// An optional string param `name`: returns `None` when omitted or `null`.
+/// Extracts optional string param `name`, returning `Ok(None)` when omitted or
+/// `null` and `RpcError::INVALID_PARAMS` otherwise, for example for
+/// `commentBody` or `submitReview`'s `body`.
 pub fn get_optional_string_from_params<'a>(
     params: &'a Value,
     name: &str,
@@ -35,7 +37,9 @@ pub fn get_bool_from_params(params: &Value, name: &str) -> Result<bool, RpcError
         .ok_or_else(|| create_invalid_params_error(&format!("expected a boolean \"{name}\"")))
 }
 
-/// The unsigned integer param `name`.
+/// Extracts unsigned integer param `name` or returns `RpcError::INVALID_PARAMS`
+/// when missing or non-numeric, for example for `suggestFromEdit`'s
+/// `cursorLine`.
 pub fn get_u64_from_params(params: &Value, name: &str) -> Result<u64, RpcError> {
     params
         .get(name)
@@ -54,7 +58,9 @@ pub fn get_mode_from_params(params: &Value) -> Result<ViewMode, RpcError> {
         })
 }
 
-/// The `anchor` object param, deserialized into an [`Anchor`].
+/// Deserializes the `anchor` object param into an [`Anchor`] or returns
+/// `RpcError::INVALID_PARAMS` when missing or malformed, for example in
+/// `comment` and `anchoredLines` requests.
 pub fn get_anchor_from_params(params: &Value) -> Result<Anchor, RpcError> {
     let raw = params
         .get("anchor")
@@ -64,14 +70,18 @@ pub fn get_anchor_from_params(params: &Value) -> Result<Anchor, RpcError> {
         .map_err(|error| create_invalid_params_error(&format!("invalid \"anchor\": {error}")))
 }
 
-/// The `content` reaction param, such as `THUMBS_UP` or `HEART`.
+/// Extracts and validates the `content` reaction param (such as `THUMBS_UP` or
+/// `HEART`) or returns `RpcError::INVALID_PARAMS`, for example in
+/// `toggleReaction` requests.
 pub fn get_reaction_from_params(params: &Value) -> Result<ReactionContent, RpcError> {
     let raw = get_string_from_params(params, "content")?;
     ReactionContent::parse(raw)
         .ok_or_else(|| create_invalid_params_error(&format!("unknown reaction \"{raw}\"")))
 }
 
-/// The `event` review submission param: `COMMENT`, `APPROVE`, or `REQUEST_CHANGES`.
+/// Extracts and validates the `event` review submission param (`COMMENT`,
+/// `APPROVE`, or `REQUEST_CHANGES`) or returns `RpcError::INVALID_PARAMS`, for
+/// example in `submitReview` requests.
 pub fn get_review_event_from_params(params: &Value) -> Result<ReviewEvent, RpcError> {
     let raw = get_string_from_params(params, "event")?;
     ReviewEvent::parse(raw)
@@ -84,7 +94,7 @@ fn create_invalid_params_error(message: &str) -> RpcError {
 
 #[cfg(test)]
 mod tests {
-    use review_model::ViewMode;
+    use review_model::{AnchorKind, ReactionContent, ReviewEvent, Side, ViewMode};
     use serde_json::{Value, json};
 
     use super::*;
@@ -111,36 +121,59 @@ mod tests {
     }
 
     #[test]
-    fn parses_anchor_reaction_and_review_event_params() {
+    fn anchor_extractor_deserializes_valid_anchor_and_rejects_malformed_object() {
         let anchor_params = json!({
             "anchor": { "file": "src/a.rs", "kind": "range", "side": "LEFT", "start": 2, "end": 5 },
-            "body": "nit"
         });
         let anchor = get_anchor_from_params(&anchor_params).unwrap();
-        assert_eq!(anchor.kind, review_model::AnchorKind::Range);
-        assert_eq!(anchor.side, review_model::Side::Left);
+        assert_eq!(anchor.kind, AnchorKind::Range);
+        assert_eq!(anchor.side, Side::Left);
+        assert_eq!(
+            get_anchor_from_params(&json!({ "anchor": 12 }))
+                .unwrap_err()
+                .code,
+            RpcError::INVALID_PARAMS
+        );
+    }
 
+    #[test]
+    fn reaction_and_review_event_extractors_validate_known_wire_names() {
         let react = json!({ "messageId": "C1", "content": "THUMBS_UP" });
         assert_eq!(
             get_reaction_from_params(&react).unwrap(),
-            review_model::ReactionContent::ThumbsUp
+            ReactionContent::ThumbsUp
+        );
+        assert_eq!(
+            get_reaction_from_params(&json!({ "content": "SPARKLES" }))
+                .unwrap_err()
+                .code,
+            RpcError::INVALID_PARAMS
         );
 
-        let submit = json!({ "event": "APPROVE", "body": "ship it" });
+        let submit = json!({ "event": "APPROVE" });
         assert_eq!(
             get_review_event_from_params(&submit).unwrap(),
-            review_model::ReviewEvent::Approve
+            ReviewEvent::Approve
         );
         assert_eq!(
-            get_optional_string_from_params(&submit, "body").unwrap(),
+            get_review_event_from_params(&json!({ "event": "DISMISS" }))
+                .unwrap_err()
+                .code,
+            RpcError::INVALID_PARAMS
+        );
+    }
+
+    #[test]
+    fn optional_string_and_u64_extractors_accept_null_and_unsigned_integers() {
+        let params = json!({ "body": "ship it", "cursorLine": 42 });
+        assert_eq!(
+            get_optional_string_from_params(&params, "body").unwrap(),
             Some("ship it")
         );
         assert_eq!(
             get_optional_string_from_params(&json!({ "body": null }), "body").unwrap(),
             None
         );
-
-        let suggest = json!({ "cursorLine": 42 });
-        assert_eq!(get_u64_from_params(&suggest, "cursorLine").unwrap(), 42);
+        assert_eq!(get_u64_from_params(&params, "cursorLine").unwrap(), 42);
     }
 }

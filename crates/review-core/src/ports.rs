@@ -55,8 +55,8 @@ pub struct ReplyRequest<'a> {
     pub body: &'a str,
 }
 
-/// An offline or transiently failed comment write held in `github.json` until
-/// the forge accepts it.
+/// An offline or transiently failed comment write persisted in
+/// [`SyncRegistry::queued_ops`] via [`ReviewStore`] until the forge accepts it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum QueuedCommentOp {
@@ -188,9 +188,9 @@ pub trait Forge: Send {
         body: &str,
     ) -> std::result::Result<Thread, ForgeWriteError>;
 
-    /// Replies to an existing code review thread: publishes immediately via REST
-    /// when no pending review blocks it, else adds a draft reply to the pending
-    /// review.
+    /// Replies to an existing code review thread and returns the created
+    /// [`Message`], publishing immediately when no pending review blocks it or
+    /// attaching a draft reply to the active pending review.
     fn reply_to_thread(
         &self,
         pr: &PullRequest,

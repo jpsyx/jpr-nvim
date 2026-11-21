@@ -16,7 +16,7 @@ M.REACTION_EMOJI = {
     EYES = "👀",
 }
 
---- Canonical display order for GitHub reaction pills.
+--- Canonical order of GitHub reaction choices in the reaction picker.
 M.REACTION_ORDER = {
     "THUMBS_UP",
     "THUMBS_DOWN",
@@ -34,6 +34,27 @@ local SYNC_BADGE = {
     pending = "[sending]",
     failed = "[failed]",
 }
+
+--- Whether `thread` is anchored to the base (`LEFT`) side of a code diff.
+function M.is_left_thread(thread)
+    return thread ~= nil
+        and thread.anchor ~= nil
+        and thread.anchor.kind ~= "file"
+        and thread.anchor.side == "LEFT"
+end
+
+--- Splits `threads` into `{ left_threads, right_threads }` by diff side.
+function M.partition_threads_by_side(threads)
+    local left_threads, right_threads = {}, {}
+    for _, thread in ipairs(threads or {}) do
+        if M.is_left_thread(thread) then
+            left_threads[#left_threads + 1] = thread
+        else
+            right_threads[#right_threads + 1] = thread
+        end
+    end
+    return left_threads, right_threads
+end
 
 --- Picks the highest-priority sign character and highlight group for `threads`
 --- on the same line: failed > draft > open published > resolved.
@@ -56,21 +77,22 @@ function M.pick_sign(threads)
     return "✓", "JprThreadResolved"
 end
 
---- Builds the compact end-of-line `virt_text` chunks for `threads` on one line.
-function M.build_eol_chunks(threads)
-    local first = threads and threads[1]
-    if not first then
+--- Creates the compact end-of-line `virt_text` chunks for `threads` on one line.
+function M.create_eol_chunks_from_threads(threads)
+    local first_thread = threads and threads[1]
+    if not first_thread then
         return {}
     end
     local _, group = M.pick_sign(threads)
-    local message_count = first.messageCount or #(first.messages or {})
+    local message_count = first_thread.messageCount or #(first_thread.messages or {})
     local extra_messages = message_count - 1
     local count_tag = extra_messages > 0 and (" (+%d)"):format(extra_messages) or ""
     local more_threads = #threads > 1 and (" [+%d threads]"):format(#threads - 1) or ""
-    local state_tag = first.state == "resolved" and " [resolved]" or (first.outdated and " [outdated]" or "")
+    local state_tag = first_thread.state == "resolved" and " [resolved]"
+        or (first_thread.outdated and " [outdated]" or "")
     local label = ("  @%s: %s%s%s%s"):format(
-        one_line(first.firstAuthor or ""),
-        one_line(first.snippet or ""),
+        one_line(first_thread.firstAuthor or ""),
+        one_line(first_thread.snippet or ""),
         count_tag,
         state_tag,
         more_threads
@@ -91,12 +113,12 @@ function M.build_reactions_line(reactions)
     return table.concat(parts, "  ")
 end
 
---- Builds `virt_lines` for inline expansion (`:Jpr expand`) of `threads`.
-function M.build_expanded_virt_lines(threads, above_first)
+--- Creates `virt_lines` for inline expansion (`:Jpr expand`) of `threads`.
+function M.create_expanded_virt_lines_from_threads(threads, is_above_first)
     local virt_lines = {}
     for _, thread in ipairs(threads or {}) do
         local _, group = M.pick_sign({ thread })
-        local header_tag = above_first and "[file thread] " or ""
+        local header_tag = is_above_first and "[file thread] " or ""
         local resolved_tag = thread.state == "resolved" and " [resolved]" or ""
         for index, message in ipairs(thread.messages or {}) do
             local badge = SYNC_BADGE[message.sync] and (" " .. SYNC_BADGE[message.sync]) or ""
@@ -136,7 +158,7 @@ end
 
 --- Turns `threads` on a file buffer (`line_count` lines) into extmark specs.
 function M.create_extmarks_from_threads(threads, line_count, opts)
-    local expanded = opts and opts.expanded or false
+    local is_expanded = opts and opts.expanded or false
     local grouped, ordered_lines = group_threads_by_line(threads, line_count)
     local marks = {}
     for _, display_line in ipairs(ordered_lines) do
@@ -148,7 +170,7 @@ function M.create_extmarks_from_threads(threads, line_count, opts)
                 line = 0,
                 col = 0,
                 opts = {
-                    virt_lines = M.build_expanded_virt_lines(bucket, true),
+                    virt_lines = M.create_expanded_virt_lines_from_threads(bucket, true),
                     virt_lines_above = true,
                 },
             }
@@ -159,15 +181,15 @@ function M.create_extmarks_from_threads(threads, line_count, opts)
                 opts = {
                     sign_text = sign_text,
                     sign_hl_group = sign_hl,
-                    virt_text = not expanded and M.build_eol_chunks(bucket) or nil,
-                    virt_text_pos = not expanded and "eol" or nil,
+                    virt_text = not is_expanded and M.create_eol_chunks_from_threads(bucket) or nil,
+                    virt_text_pos = not is_expanded and "eol" or nil,
                 },
             }
-            if expanded then
+            if is_expanded then
                 marks[#marks + 1] = {
                     line = row,
                     col = 0,
-                    opts = { virt_lines = M.build_expanded_virt_lines(bucket, false) },
+                    opts = { virt_lines = M.create_expanded_virt_lines_from_threads(bucket, false) },
                 }
             end
         end
@@ -175,14 +197,33 @@ function M.create_extmarks_from_threads(threads, line_count, opts)
     return marks
 end
 
-local function append_popup_message(layout, thread, message)
+--- Creates an empty `{ lines, highlights, message_ranges, add }` layout buffer.
+function M.create_message_layout()
+    local layout = { lines = {}, highlights = {}, message_ranges = {} }
+    function layout.add(text, group)
+        layout.lines[#layout.lines + 1] = text
+        if group then
+            layout.highlights[#layout.highlights + 1] = {
+                line = #layout.lines - 1,
+                col_start = 0,
+                col_end = #text,
+                group = group,
+            }
+        end
+    end
+    return layout
+end
+
+--- Appends one formatted `message` (author, sync error, recovery banner, body,
+--- reactions, and cursor range) from `thread` into `layout`.
+function M.append_formatted_message(layout, thread, message)
     local start_line = #layout.lines + 1
     local badge = SYNC_BADGE[message.sync] and (" " .. SYNC_BADGE[message.sync]) or ""
-    local updated = (message.updated and message.updated ~= message.created) and " (edited)" or ""
+    local edited_tag = (message.updated and message.updated ~= message.created) and " (edited)" or ""
     local author_line = ("@%s · %s%s%s"):format(
         one_line(message.author or ""),
         one_line(message.created or ""),
-        updated,
+        edited_tag,
         badge
     )
     layout.add(author_line, "JprAuthor")
@@ -202,36 +243,25 @@ local function append_popup_message(layout, thread, message)
     layout.message_ranges[#layout.message_ranges + 1] = {
         first = start_line,
         last = #layout.lines,
-        thread_id = thread.threadId,
+        thread_id = thread.threadId or thread.id,
         message_id = message.id,
         message = message,
         thread = thread,
     }
 end
 
---- Builds the lines, highlights, and cursor-to-message ranges for the thread popup.
-function M.build_popup(threads)
-    local layout = { lines = {}, highlights = {}, message_ranges = {} }
-    function layout.add(text, group)
-        layout.lines[#layout.lines + 1] = text
-        if group then
-            layout.highlights[#layout.highlights + 1] = {
-                line = #layout.lines - 1,
-                col_start = 0,
-                col_end = #text,
-                group = group,
-            }
-        end
-    end
+--- Creates the lines, highlights, and cursor-to-message ranges for the thread popup.
+function M.create_popup_layout_from_threads(threads)
+    local layout = M.create_message_layout()
     for index, thread in ipairs(threads or {}) do
         if index > 1 then
             layout.add(string.rep("─", 48), "JprMuted")
         end
         local status = thread.state == "resolved" and "Resolved" or "Open"
-        local outdated = thread.outdated and " · Outdated" or ""
-        layout.add(("Thread (%s%s)"):format(status, outdated), "JprTitle")
+        local outdated_tag = thread.outdated and " · Outdated" or ""
+        layout.add(("Thread (%s%s)"):format(status, outdated_tag), "JprTitle")
         for _, message in ipairs(thread.messages or {}) do
-            append_popup_message(layout, thread, message)
+            M.append_formatted_message(layout, thread, message)
             layout.add("")
         end
     end

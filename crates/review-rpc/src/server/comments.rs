@@ -25,17 +25,17 @@ pub(super) fn handle_comment_method(
         "comment" => {
             let anchor = get_anchor_from_params(params)?;
             let body = get_string_from_params(params, "body")?;
-            thread_view_result(lock(session)?.comment(anchor, body))
+            thread_view_result_to_rpc(lock(session)?.comment(anchor, body))
         }
         "reply" => {
             let thread_id = get_string_from_params(params, "threadId")?;
             let body = get_string_from_params(params, "body")?;
-            thread_view_result(lock(session)?.reply(thread_id, body))
+            thread_view_result_to_rpc(lock(session)?.reply(thread_id, body))
         }
         "editMessage" => {
             let message_id = get_string_from_params(params, "messageId")?;
             let body = get_string_from_params(params, "body")?;
-            thread_view_result(lock(session)?.edit_message(message_id, body))
+            thread_view_result_to_rpc(lock(session)?.edit_message(message_id, body))
         }
         "deleteMessage" => {
             let message_id = get_string_from_params(params, "messageId")?;
@@ -45,8 +45,8 @@ pub(super) fn handle_comment_method(
         }
         "setResolved" => {
             let thread_id = get_string_from_params(params, "threadId")?;
-            let resolved = get_bool_from_params(params, "resolved")?;
-            thread_view_result(lock(session)?.set_resolved(thread_id, resolved))
+            let is_resolved = get_bool_from_params(params, "resolved")?;
+            thread_view_result_to_rpc(lock(session)?.set_resolved(thread_id, is_resolved))
         }
         _ => handle_reaction_and_review_method(session, method, params),
     }
@@ -61,7 +61,7 @@ fn handle_reaction_and_review_method(
         "toggleReaction" => {
             let message_id = get_string_from_params(params, "messageId")?;
             let content = get_reaction_from_params(params)?;
-            thread_view_result(lock(session)?.toggle_reaction(message_id, content))
+            thread_view_result_to_rpc(lock(session)?.toggle_reaction(message_id, content))
         }
         "retryMessage" => {
             let message_id = get_string_from_params(params, "messageId")?;
@@ -107,7 +107,7 @@ fn handle_suggest_from_edit(
     Ok(json!({ "suggested": suggested, "thread": thread, "view": view }))
 }
 
-fn thread_view_result(
+fn thread_view_result_to_rpc(
     result: anyhow::Result<(review_model::Thread, review_model::SessionView)>,
 ) -> Result<Value, RpcError> {
     let (thread, view) = engine_result_to_rpc(result)?;

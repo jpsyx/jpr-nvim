@@ -21,7 +21,7 @@ fn check_write(state: &ForgeState) -> std::result::Result<(), ForgeWriteError> {
     Ok(())
 }
 
-fn build_fake_message(
+fn create_fake_message(
     state: &ForgeState,
     id: &str,
     body: &str,
@@ -64,19 +64,19 @@ fn find_thread_with_message_mut<'a>(
     })
 }
 
-fn apply_reaction(reactions: &mut Vec<Reaction>, content: ReactionContent, added: bool) {
+fn apply_reaction(reactions: &mut Vec<Reaction>, content: ReactionContent, is_added: bool) {
     if let Some(existing) = reactions
         .iter_mut()
         .find(|reaction| reaction.content == content)
     {
-        if added && !existing.viewer_has_reacted {
+        if is_added && !existing.viewer_has_reacted {
             existing.viewer_has_reacted = true;
             existing.count += 1;
-        } else if !added && existing.viewer_has_reacted {
+        } else if !is_added && existing.viewer_has_reacted {
             existing.viewer_has_reacted = false;
             existing.count = existing.count.saturating_sub(1);
         }
-    } else if added {
+    } else if is_added {
         reactions.push(Reaction {
             content,
             count: 1,
@@ -101,7 +101,7 @@ impl FakeForge {
             .map(str::to_owned)
             .or_else(|| state.snapshot.pending_review_id.clone())
             .unwrap_or_else(|| "PRR_fake".to_owned());
-        let message = build_fake_message(
+        let message = create_fake_message(
             &state,
             &format!("PRRC_fake_{seq}"),
             body,
@@ -135,7 +135,7 @@ impl FakeForge {
         state.next_id += 1;
         let seq = state.next_id;
         let id = format!("IC_fake_{seq}");
-        let message = build_fake_message(&state, &id, body, MessageSync::Published, None);
+        let message = create_fake_message(&state, &id, body, MessageSync::Published, None);
         let thread = Thread {
             id,
             origin: Origin::Github,
@@ -169,7 +169,7 @@ impl FakeForge {
         state.next_id += 1;
         let seq = state.next_id;
         let sync = resolve_reply_sync(&mut state, request);
-        let message = build_fake_message(
+        let message = create_fake_message(
             &state,
             &format!("PRRC_fake_{seq}"),
             request.body,
@@ -234,7 +234,7 @@ impl FakeForge {
     pub(super) fn set_resolved_in_memory(
         &self,
         thread_id: &str,
-        resolved: bool,
+        is_resolved: bool,
     ) -> std::result::Result<(), ForgeWriteError> {
         let mut state = self.lock();
         check_write(&state)?;
@@ -244,7 +244,7 @@ impl FakeForge {
             .iter_mut()
             .find(|thread| thread.id == thread_id)
             .ok_or_else(|| ForgeWriteError::Rejected(format!("thread not found: {thread_id}")))?;
-        thread.state = if resolved {
+        thread.state = if is_resolved {
             ThreadState::Resolved
         } else {
             ThreadState::Open
@@ -257,7 +257,7 @@ impl FakeForge {
         &self,
         subject_id: &str,
         content: ReactionContent,
-        added: bool,
+        is_added: bool,
     ) -> std::result::Result<Vec<Reaction>, ForgeWriteError> {
         let mut state = self.lock();
         check_write(&state)?;
@@ -268,7 +268,7 @@ impl FakeForge {
             .iter_mut()
             .find(|message| message.id == subject_id)
             .ok_or_else(|| ForgeWriteError::Rejected(format!("message not found: {subject_id}")))?;
-        apply_reaction(&mut message.reactions, content, added);
+        apply_reaction(&mut message.reactions, content, is_added);
         let reactions = message.reactions.clone();
         drop(state);
         Ok(reactions)

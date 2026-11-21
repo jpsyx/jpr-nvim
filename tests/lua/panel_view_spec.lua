@@ -109,24 +109,17 @@ press("v", 1)
 vim.wait(200)
 assert(#find_sent_requests("setViewed") == 2, "v on a line with no file sends nothing")
 
--- <CR> on the Conversation row opens the PR conversation instead of a file.
-local conversation_opened = false
-local main_window_edit_called = false
-local original_conversation_current = session.conversation_current
-local main_window = require("jpr.views.main_window")
-local original_main_window_edit = main_window.edit
-session.conversation_current = function()
-    conversation_opened = true
-end
-main_window.edit = function(...)
-    main_window_edit_called = true
-    return original_main_window_edit(...)
-end
+-- <CR> on the Conversation row opens the PR conversation buffer in the main window instead of a file.
 press("<CR>", 5)
-session.conversation_current = original_conversation_current
-main_window.edit = original_main_window_edit
-assert(conversation_opened, "<CR> on line 5 opens the conversation")
-assert(not main_window_edit_called, "<CR> on line 5 does not open a file")
+local conversation_win = vim.api.nvim_get_current_win()
+assert(conversation_win ~= panel_win, "<CR> on line 5 focuses the main window beside the panel")
+local conversation_buf = vim.api.nvim_win_get_buf(conversation_win)
+assert(vim.api.nvim_buf_get_name(conversation_buf) == "jpr://conversation/7", "<CR> on line 5 opens jpr://conversation/7")
+assert(vim.wait(3000, function()
+    local text = table.concat(vim.api.nvim_buf_get_lines(conversation_buf, 0, -1, false), "\n")
+    return text:find("Overall looks clean!", 1, true) ~= nil
+end), "conversation buffer renders PR comments")
+require("jpr.views.conversation").close(review)
 
 -- With the stream split, <CR> opens the file in the main window, not in the
 -- stream's left half, and adds no window.

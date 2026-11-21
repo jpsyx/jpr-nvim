@@ -28,8 +28,12 @@ pub fn create_file_diff_view_from_texts(
     create_file_diff_view_with_threads(path, base, current, &[])
 }
 
-/// Like [`create_file_diff_view_from_texts`], placing every thread on `path`
-/// at its current-file `display_line` (`0` for file-level threads).
+/// Builds a [`FileDiffView`] of `path` from `base` to `current` with every
+/// thread on `path` placed at its current-file `display_line` (`0` for
+/// file-level threads).
+///
+/// Use it for single-file diff views that also render inline comment markers
+/// and thread previews, for example on an open file buffer.
 #[must_use]
 pub fn create_file_diff_view_with_threads(
     path: &str,

@@ -192,11 +192,11 @@ impl ReviewSession {
             return Ok(Some((thread, view)));
         }
         if message_id.starts_with("tmp-") {
-            self.enqueue_failed_message_with_body(message_id, Some(body))?;
+            self.enqueue_failed_message(message_id, Some(body))?;
             let _ = self.send_queued_comments();
-            let resolved_thread_id = self.resolve_id(thread_id);
+            let canonical_thread_id = self.get_canonical_id_from_id(thread_id);
             let thread = self
-                .find_thread(&resolved_thread_id)
+                .find_thread(&canonical_thread_id)
                 .context("thread disappeared")?
                 .clone();
             let view = self.save_and_announce_threads()?;
@@ -225,16 +225,16 @@ impl ReviewSession {
         &self,
         message_id: &str,
     ) -> Result<(String, AnchorKind, Option<MessageSync>)> {
-        for thread in &self.threads {
-            if let Some(message) = thread
-                .messages
-                .iter()
-                .find(|message| message.id == message_id)
-            {
-                return Ok((thread.id.clone(), thread.anchor.kind, message.sync));
-            }
-        }
-        bail!("unknown message {message_id}")
+        self.threads
+            .iter()
+            .find_map(|thread| {
+                thread
+                    .messages
+                    .iter()
+                    .find(|message| message.id == message_id)
+                    .map(|message| (thread.id.clone(), thread.anchor.kind, message.sync))
+            })
+            .with_context(|| format!("unknown message {message_id}"))
     }
 
     pub(super) fn push_reply_message(
@@ -271,7 +271,7 @@ impl ReviewSession {
         &mut self,
         message_id: &str,
         content: review_model::ReactionContent,
-        added: bool,
+        is_added: bool,
         previous_reactions: Vec<review_model::Reaction>,
         result: std::result::Result<Vec<review_model::Reaction>, ForgeWriteError>,
     ) -> Result<()> {
@@ -289,7 +289,7 @@ impl ReviewSession {
                     .push(QueuedCommentOp::SetReaction {
                         subject_id: message_id.to_owned(),
                         content,
-                        added,
+                        added: is_added,
                     });
                 Ok(())
             }

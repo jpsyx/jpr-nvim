@@ -264,7 +264,9 @@ fn write_line<W: Write>(writer: &Mutex<W>, message: &Value) -> Result<()> {
     writer.flush().context("flushing a message")
 }
 
-/// Acquires the review session lock or turns poisoning into an RPC error.
+/// Acquires the review session guard or returns `RpcError::ENGINE_ERROR` if
+/// the mutex is poisoned, for example when servicing session and comment RPC
+/// handlers.
 pub fn lock(session: &Mutex<ReviewSession>) -> Result<MutexGuard<'_, ReviewSession>, RpcError> {
     session.lock().map_err(|_| {
         RpcError::new(
@@ -274,7 +276,9 @@ pub fn lock(session: &Mutex<ReviewSession>) -> Result<MutexGuard<'_, ReviewSessi
     })
 }
 
-/// Serializes a response value or turns serialization failure into an RPC error.
+/// Encodes `value` into a JSON [`Value`] or returns `RpcError::ENGINE_ERROR` on
+/// serialization failure, for example when building JSON-RPC responses in
+/// `server` and `server::comments`.
 pub fn to_value<T: Serialize>(value: &T) -> Result<Value, RpcError> {
     serde_json::to_value(value).map_err(|error| {
         RpcError::new(

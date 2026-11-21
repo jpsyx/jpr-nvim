@@ -77,52 +77,54 @@ session.open(7)
 assert(vim.api.nvim_get_current_tabpage() == review_tab, "a bare number refocuses")
 jpr.setup({ binary = fixture })
 
-local refreshed_conversation = false
-local closed_views = {}
-package.loaded["jpr.views.conversation"] = {
-    refresh = function(target)
-        if target == review then
-            refreshed_conversation = true
-        end
-    end,
-    close = function(target)
-        if target == review then
-            closed_views.conversation = true
-        end
-    end,
-}
-package.loaded["jpr.comments.popup"] = {
-    close = function(target)
-        if target == review then
-            closed_views.popup = true
-        end
-    end,
-}
-package.loaded["jpr.comments.compose"] = {
-    close = function(target)
-        if target == review then
-            closed_views.compose = true
-        end
-    end,
-}
-package.loaded["jpr.views.submit"] = {
-    close = function(target)
-        if target == review then
-            closed_views.submit = true
-        end
-    end,
-}
+local helpers = dofile(root .. "/tests/lua/support/helpers.lua")
+local conversation = require("jpr.views.conversation")
+local popup = require("jpr.comments.popup")
+local compose = require("jpr.comments.compose")
+local submit = require("jpr.views.submit")
+
+conversation.show(review)
+local main_win = require("jpr.views.main_window").find(review)
+local conversation_buf = vim.api.nvim_win_get_buf(main_win)
+assert(vim.api.nvim_buf_get_name(conversation_buf) == "jpr://conversation/7", "conversation buffer opens in main window")
+assert(vim.wait(3000, function()
+    local text = table.concat(vim.api.nvim_buf_get_lines(conversation_buf, 0, -1, false), "\n")
+    return text:find("Overall looks clean!", 1, true) ~= nil
+end), "conversation buffer renders initial PR comment")
+
+local tick_before_notify = vim.api.nvim_buf_get_changedtick(conversation_buf)
 session.on_notification(review, "event", { type = "threadsChanged", view = review.view })
-assert(refreshed_conversation, "threadsChanged refreshes loaded conversation view")
+assert(vim.wait(3000, function()
+    return vim.api.nvim_buf_get_changedtick(conversation_buf) > tick_before_notify
+end), "threadsChanged refreshes the visible conversation buffer")
+
+popup.open(review, {
+    {
+        threadId = "T1",
+        displayLine = 2,
+        kind = "published",
+        state = "open",
+        messages = { { id = "M1", author = "alice", body = "hi", sync = "published" } },
+    },
+})
+local popup_win = assert(helpers.find_floating_win("Review Thread"), "popup window opens")
+
+compose.open_new(review, { kind = "pr", side = "RIGHT" })
+local compose_win = assert(helpers.find_floating_win("PR Conversation"), "compose window opens")
+
+submit.open(review)
+assert(vim.wait(3000, function()
+    return helpers.find_floating_win("Submit Review") ~= nil
+end), "submit modal window opens")
+local submit_win = helpers.find_floating_win("Submit Review")
 
 local tabs = #vim.api.nvim_list_tabpages()
 session.close_current()
 assert(session.current() == nil, "closing forgets the session")
 assert(#vim.api.nvim_list_tabpages() == tabs - 1, "closing closes the tab")
-assert(closed_views.conversation and closed_views.popup and closed_views.compose and closed_views.submit, "teardown closes loaded optional M3 views")
-package.loaded["jpr.views.conversation"] = nil
-package.loaded["jpr.comments.popup"] = nil
-package.loaded["jpr.comments.compose"] = nil
-package.loaded["jpr.views.submit"] = nil
+assert(not vim.api.nvim_buf_is_valid(conversation_buf), "closing wipes the conversation buffer")
+assert(not vim.api.nvim_win_is_valid(popup_win), "closing closes the thread popup window")
+assert(not vim.api.nvim_win_is_valid(compose_win), "closing closes the comment compose window")
+assert(not vim.api.nvim_win_is_valid(submit_win), "closing closes the review submit modal")
 
 print("session_spec: ok")

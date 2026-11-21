@@ -4,13 +4,15 @@
 use std::collections::{BTreeMap, HashSet};
 
 use review_model::{
-    AnchorKind, Message, MessageSync, Reaction, ReactionContent, SubmitDraft, SubmitPreview, Thread,
+    AnchorKind, Message, MessageSync, Reaction, ReactionContent, SubmitDraft, SubmitPreview,
+    Thread, build_snippet_from_body,
 };
 
 use crate::ports::QueuedCommentOp;
 
-/// Rewrites `from_id` to `to_id` across every queued operation waiting behind
-/// a newly created thread or message.
+/// Rewrites `from_id` to `to_id` across every queued operation for
+/// `ReviewSession::record_id_mapping` so dependent replies, edits, deletes,
+/// and reactions target the canonical forge ID once a temporary ID is created.
 pub fn remap_queued_ops(ops: &mut [QueuedCommentOp], from_id: &str, to_id: &str) {
     let replace = |target: &mut String| {
         if target == from_id {
@@ -42,7 +44,10 @@ pub fn remap_queued_ops(ops: &mut [QueuedCommentOp], from_id: &str, to_id: &str)
     }
 }
 
-/// Remembers the forge-confirmed body of every published or draft message.
+/// Records the forge-confirmed body of every published or draft message into
+/// `agreed_bodies` for `ReviewSession::save_and_announce_threads` and
+/// `ReviewSession::apply_pull` so `reconcile_concurrent_edits` can detect
+/// remote edits.
 pub fn record_agreed_bodies(threads: &[Thread], agreed_bodies: &mut BTreeMap<String, String>) {
     for thread in threads {
         for message in &thread.messages {
@@ -57,7 +62,8 @@ pub fn record_agreed_bodies(threads: &[Thread], agreed_bodies: &mut BTreeMap<Str
 }
 
 /// Drops queued `EditMessage` ops whose target message changed on the forge
-/// since the edit was queued, preserving the local text in `recoverable_body`.
+/// since the edit was queued during `ReviewSession::apply_pull`, avoiding
+/// silent overwrites while preserving the local text in `recoverable_body`.
 pub fn reconcile_concurrent_edits(
     remote_threads: &mut [Thread],
     agreed_bodies: &mut BTreeMap<String, String>,
@@ -71,17 +77,17 @@ pub fn reconcile_concurrent_edits(
         else {
             return true;
         };
-        let Some(remote_msg) = find_message_mut(remote_threads, message_id) else {
+        let Some(remote_message) = find_message_mut(remote_threads, message_id) else {
             return true;
         };
         let Some(agreed) = agreed_bodies.get(message_id) else {
             return true;
         };
-        if &remote_msg.body == agreed {
+        if &remote_message.body == agreed {
             return true;
         }
-        remote_msg.recoverable_body = Some(body.clone());
-        updated_agreed.push((message_id.clone(), remote_msg.body.clone()));
+        remote_message.recoverable_body = Some(body.clone());
+        updated_agreed.push((message_id.clone(), remote_message.body.clone()));
         false
     });
     for (message_id, remote_body) in updated_agreed {
@@ -90,7 +96,8 @@ pub fn reconcile_concurrent_edits(
 }
 
 /// Re-attaches optimistic threads and messages (`Pending`, `Queued`, or `Failed`)
-/// from `local_threads` onto a freshly pulled `remote_threads` list.
+/// from `local_threads` onto `remote_threads` during `ReviewSession::apply_pull`
+/// so unsynced local work remains visible across a remote refresh.
 pub fn merge_unflushed_threads(remote_threads: &mut Vec<Thread>, local_threads: &[Thread]) {
     let known_threads: HashSet<String> = remote_threads
         .iter()
@@ -126,31 +133,35 @@ fn has_unflushed_messages(thread: &Thread) -> bool {
 }
 
 fn merge_unflushed_messages(remote: &mut Thread, local_messages: &[Message]) {
-    for local_msg in local_messages {
+    for local_message in local_messages {
         if let Some(existing) = remote
             .messages
             .iter_mut()
-            .find(|message| message.id == local_msg.id)
+            .find(|message| message.id == local_message.id)
         {
-            if is_unflushed_sync(local_msg.sync) {
+            if is_unflushed_sync(local_message.sync) {
                 let preserved_recoverable = existing.recoverable_body.take();
-                *existing = local_msg.clone();
+                *existing = local_message.clone();
                 if existing.recoverable_body.is_none() {
                     existing.recoverable_body = preserved_recoverable;
                 }
-            } else if existing.recoverable_body.is_none() && local_msg.recoverable_body.is_some() {
+            } else if existing.recoverable_body.is_none()
+                && local_message.recoverable_body.is_some()
+            {
                 existing
                     .recoverable_body
-                    .clone_from(&local_msg.recoverable_body);
+                    .clone_from(&local_message.recoverable_body);
             }
-        } else if is_unflushed_sync(local_msg.sync) {
-            remote.messages.push(local_msg.clone());
+        } else if is_unflushed_sync(local_message.sync) {
+            remote.messages.push(local_message.clone());
         }
     }
 }
 
-/// Optimistically toggles `content` in `reactions`, returning whether the
-/// reaction was added (`true`) or removed (`false`).
+/// Optimistically toggles `content` in `reactions` and returns whether the
+/// viewer's reaction is now active (`true`) or removed (`false`), for example
+/// when `ReviewSession::toggle_reaction` or `FakeForge::set_reaction` updates
+/// a comment's reaction summary.
 pub fn toggle_reaction_in_list(reactions: &mut Vec<Reaction>, content: ReactionContent) -> bool {
     if let Some(index) = reactions.iter().position(|item| item.content == content) {
         if reactions[index].viewer_has_reacted {
@@ -173,7 +184,8 @@ pub fn toggle_reaction_in_list(reactions: &mut Vec<Reaction>, content: ReactionC
     true
 }
 
-/// Builds the `:Jpr submit` preview from the current session threads.
+/// Summarizes pending draft comments, self-review eligibility, and sync
+/// blockers into a [`SubmitPreview`] for `ReviewSession::submit_preview`.
 #[must_use]
 pub fn create_submit_preview_from_threads(
     pr_author: &str,
@@ -225,17 +237,9 @@ fn collect_thread_drafts_and_blocker(
     }
 }
 
-fn build_snippet_from_body(body: &str) -> String {
-    body.lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty())
-        .unwrap_or_default()
-        .chars()
-        .take(80)
-        .collect()
-}
-
-/// Finds the message with `message_id` inside `threads`.
+/// Returns a mutable reference to the message matching `message_id` inside
+/// `threads`, for example when updating a comment's body or sync state during
+/// session mutations and pull reconciliation.
 pub fn find_message_mut<'a>(
     threads: &'a mut [Thread],
     message_id: &str,
@@ -246,7 +250,8 @@ pub fn find_message_mut<'a>(
         .find(|message| message.id == message_id)
 }
 
-/// Counts code-anchored review threads, excluding PR conversation threads.
+/// Counts code-anchored review threads (excluding PR conversation comments)
+/// for `ReviewSession::session_view`.
 #[must_use]
 pub fn count_code_threads(threads: &[Thread]) -> usize {
     threads
@@ -256,214 +261,4 @@ pub fn count_code_threads(threads: &[Thread]) -> usize {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::collections::BTreeMap;
-
-    use review_model::{
-        Anchor, AnchorKind, Message, MessageSync, Origin, Side, Thread, ThreadState,
-    };
-
-    use super::*;
-    use crate::ports::QueuedCommentOp;
-
-    fn create_line_thread(
-        thread_id: &str,
-        message_id: &str,
-        body: &str,
-        sync: Option<MessageSync>,
-    ) -> Thread {
-        Thread {
-            id: thread_id.into(),
-            origin: Origin::Github,
-            anchor: Anchor::line("src/a.rs", 4),
-            state: ThreadState::Open,
-            outdated: false,
-            messages: vec![Message::create_with_sync(
-                message_id,
-                "pablo",
-                body,
-                "2026-11-20T00:00:00Z",
-                sync,
-            )],
-        }
-    }
-
-    #[test]
-    fn remapping_rewrites_dependent_queued_ops_after_temp_ids_resolve() {
-        let mut ops = vec![
-            QueuedCommentOp::ReplyToThread {
-                thread_id: "tmp-t-1".into(),
-                root_database_id: None,
-                temp_message_id: "tmp-m-2".into(),
-                body: "follow-up".into(),
-            },
-            QueuedCommentOp::EditMessage {
-                thread_id: "tmp-t-1".into(),
-                anchor_kind: AnchorKind::Line,
-                message_id: "tmp-m-1".into(),
-                body: "edited".into(),
-            },
-        ];
-        remap_queued_ops(&mut ops, "tmp-t-1", "PRRT_9");
-        remap_queued_ops(&mut ops, "tmp-m-1", "PRRC_9");
-        assert!(matches!(
-            &ops[0],
-            QueuedCommentOp::ReplyToThread { thread_id, .. } if thread_id == "PRRT_9"
-        ));
-        assert!(matches!(
-            &ops[1],
-            QueuedCommentOp::EditMessage { thread_id, message_id, .. }
-                if thread_id == "PRRT_9" && message_id == "PRRC_9"
-        ));
-    }
-
-    #[test]
-    fn concurrent_forge_edit_drops_all_conflicting_edits_and_keeps_latest_recoverable_body() {
-        let mut remote_threads = vec![create_line_thread(
-            "PRRT_1",
-            "PRRC_1",
-            "edited on GitHub web",
-            Some(MessageSync::Published),
-        )];
-        let mut agreed = BTreeMap::from([("PRRC_1".to_owned(), "original body".to_owned())]);
-        let mut ops = vec![
-            QueuedCommentOp::EditMessage {
-                thread_id: "PRRT_1".into(),
-                anchor_kind: AnchorKind::Line,
-                message_id: "PRRC_1".into(),
-                body: "first offline edit".into(),
-            },
-            QueuedCommentOp::EditMessage {
-                thread_id: "PRRT_1".into(),
-                anchor_kind: AnchorKind::Line,
-                message_id: "PRRC_1".into(),
-                body: "second offline edit".into(),
-            },
-        ];
-
-        reconcile_concurrent_edits(&mut remote_threads, &mut agreed, &mut ops);
-
-        assert!(
-            ops.is_empty(),
-            "all conflicting EditMessage ops are dropped"
-        );
-        assert_eq!(remote_threads[0].messages[0].body, "edited on GitHub web");
-        assert_eq!(
-            remote_threads[0].messages[0].recoverable_body.as_deref(),
-            Some("second offline edit")
-        );
-        assert_eq!(
-            agreed.get("PRRC_1").map(String::as_str),
-            Some("edited on GitHub web")
-        );
-    }
-
-    #[test]
-    fn submit_preview_collects_drafts_and_disallows_self_approval() {
-        let mut thread = create_line_thread(
-            "PRRT_1",
-            "PRRC_1",
-            "nit here\nmore detail",
-            Some(MessageSync::Draft),
-        );
-        thread.anchor = Anchor::side_line("src/a.rs", Side::Right, 10);
-        let threads = [thread];
-        let own = create_submit_preview_from_threads("alice", Some("alice"), &threads);
-        assert!(!own.can_approve_or_request_changes);
-        assert_eq!(own.draft_count, 1);
-        assert_eq!(own.drafts[0].snippet, "nit here");
-        assert!(own.blocked_reason.is_none());
-
-        let peer = create_submit_preview_from_threads("alice", Some("bob"), &threads);
-        assert!(peer.can_approve_or_request_changes);
-    }
-
-    #[test]
-    fn submit_preview_prefers_failed_blocker_regardless_of_thread_order() {
-        let queued = create_line_thread("tmp-1", "tmp-2", "queued", Some(MessageSync::Queued));
-        let failed = create_line_thread("tmp-3", "tmp-4", "failed", Some(MessageSync::Failed));
-
-        let queued_only =
-            create_submit_preview_from_threads("alice", Some("bob"), std::slice::from_ref(&queued));
-        assert!(
-            queued_only
-                .blocked_reason
-                .as_deref()
-                .is_some_and(|reason| reason.contains("queued"))
-        );
-
-        let queued_then_failed =
-            create_submit_preview_from_threads("alice", Some("bob"), &[queued, failed]);
-        assert!(
-            queued_then_failed
-                .blocked_reason
-                .as_deref()
-                .is_some_and(|reason| reason.contains("failed"))
-        );
-    }
-
-    #[test]
-    fn record_agreed_bodies_stores_published_and_draft_messages() {
-        let published =
-            create_line_thread("PRRT_1", "PRRC_1", "hello", Some(MessageSync::Published));
-        let mut agreed = BTreeMap::new();
-        record_agreed_bodies(&[published], &mut agreed);
-        assert_eq!(agreed.get("PRRC_1").map(String::as_str), Some("hello"));
-    }
-
-    #[test]
-    fn merge_unflushed_threads_keeps_pending_and_preserves_recoverable_body() {
-        let mut remote_thread = create_line_thread(
-            "PRRT_1",
-            "PRRC_1",
-            "remote edit",
-            Some(MessageSync::Published),
-        );
-        remote_thread.messages[0].recoverable_body = Some("local draft recovery".into());
-
-        let mut local_thread = create_line_thread(
-            "PRRT_1",
-            "PRRC_1",
-            "pending edit",
-            Some(MessageSync::Pending),
-        );
-        local_thread.messages.push(Message::create_with_sync(
-            "tmp-m-1",
-            "bob",
-            "pending reply",
-            "2026-11-20T00:01:00Z",
-            Some(MessageSync::Pending),
-        ));
-        let local_new =
-            create_line_thread("tmp-t-1", "tmp-m-2", "failed", Some(MessageSync::Failed));
-
-        let mut remote = vec![remote_thread];
-        merge_unflushed_threads(&mut remote, &[local_thread, local_new]);
-        assert_eq!(remote.len(), 2);
-        assert_eq!(remote[0].messages.len(), 2);
-        assert_eq!(remote[0].messages[0].body, "pending edit");
-        assert_eq!(
-            remote[0].messages[0].recoverable_body.as_deref(),
-            Some("local draft recovery")
-        );
-        assert_eq!(remote[1].id, "tmp-t-1");
-    }
-
-    #[test]
-    fn toggle_reaction_adds_increments_and_removes_at_zero() {
-        let mut reactions = Vec::new();
-        assert!(toggle_reaction_in_list(
-            &mut reactions,
-            ReactionContent::ThumbsUp
-        ));
-        assert_eq!(reactions.len(), 1);
-        assert_eq!(reactions[0].count, 1);
-        assert!(reactions[0].viewer_has_reacted);
-
-        assert!(!toggle_reaction_in_list(
-            &mut reactions,
-            ReactionContent::ThumbsUp
-        ));
-        assert!(reactions.is_empty());
-    }
-}
+mod tests;

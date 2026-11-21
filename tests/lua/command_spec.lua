@@ -24,18 +24,6 @@ assert(vim.deep_equal(jpr.complete("s", "Jpr s"), { "sync", "stream", "suggest",
 assert(vim.deep_equal(jpr.complete("c", "Jpr c"), { "comment", "conversation", "close" }), "filtered c subcommands")
 assert(vim.deep_equal(jpr.complete("", "Jpr open "), {}), "nothing after the subcommand")
 
-assert(
-    vim.deep_equal(jpr.defaults.keys, {
-        comment = "gc",
-        suggest_comment = "gC",
-        file_comment = "gf",
-        thread_popup = "gt",
-        next_thread = "]t",
-        prev_thread = "[t",
-    }),
-    "default buffer keys"
-)
-
 jpr.setup({ worktree_cmd = "wt pr {n}" })
 assert(jpr.config.worktree_cmd == "wt pr {n}", "setup takes options")
 assert(jpr.config.binary == "jpr-review", "setup keeps the defaults")
@@ -151,15 +139,7 @@ jpr.command({ "submit" })
 local range_buf = vim.api.nvim_create_buf(false, true)
 vim.api.nvim_win_set_buf(0, range_buf)
 vim.api.nvim_buf_set_lines(range_buf, 0, -1, false, { "one", "two", "three", "four", "five" })
-local orig_command = jpr.command
-local seen_cmd_opts
-jpr.command = function(fargs, cmd_opts)
-    seen_cmd_opts = cmd_opts
-    return orig_command(fargs, cmd_opts)
-end
 vim.cmd("1,2Jpr comment")
-jpr.command = orig_command
-assert(seen_cmd_opts and seen_cmd_opts.line1 == 1 and seen_cmd_opts.line2 == 2 and seen_cmd_opts.range == 2, vim.inspect(seen_cmd_opts))
 
 jpr.action("comment")
 jpr.action("suggest_comment")

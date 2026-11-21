@@ -19,8 +19,9 @@ use serde_json::{Map, Value, json};
 
 use crate::GhForge;
 use crate::graphql::{
-    PENDING_REVIEW, parse_comment, parse_issue_comment_thread, parse_pending_review,
-    parse_reactions, parse_thread,
+    PENDING_REVIEW, build_author_display_login, is_valid_database_id, parse_comment,
+    parse_decimal_database_id, parse_issue_comment_thread, parse_pending_review, parse_reactions,
+    parse_thread,
 };
 
 fn build_thread_variables(pr_id: &str, review_id: &str, anchor: &Anchor, body: &str) -> Value {
@@ -67,13 +68,9 @@ fn is_safe_path_segment(segment: &str) -> bool {
         })
 }
 
-fn is_valid_database_id(database_id: &str) -> bool {
-    !database_id.is_empty() && database_id.bytes().all(|byte| byte.is_ascii_digit())
-}
-
 fn build_rest_reply_endpoint(
     pr: &PullRequest,
-    root_db_id: &str,
+    root_database_id: &str,
 ) -> std::result::Result<String, ForgeWriteError> {
     if !is_safe_path_segment(&pr.owner) || !is_safe_path_segment(&pr.repo) {
         return Err(ForgeWriteError::Rejected(format!(
@@ -81,13 +78,13 @@ fn build_rest_reply_endpoint(
             pr.owner, pr.repo
         )));
     }
-    if !is_valid_database_id(root_db_id) {
+    if !is_valid_database_id(root_database_id) {
         return Err(ForgeWriteError::Rejected(format!(
-            "invalid pull request comment database id: {root_db_id}"
+            "invalid pull request comment database id: {root_database_id}"
         )));
     }
     Ok(format!(
-        "repos/{}/{}/pulls/{}/comments/{root_db_id}/replies",
+        "repos/{}/{}/pulls/{}/comments/{root_database_id}/replies",
         pr.owner, pr.repo, pr.number
     ))
 }
@@ -138,25 +135,15 @@ fn parse_rest_reply(stdout: &str) -> Result<Message> {
         .and_then(Value::as_str)
         .unwrap_or("ghost");
     let is_bot = node.pointer("/user/type").and_then(Value::as_str) == Some("Bot");
-    let database_id = node["id"].as_u64().map(|num| num.to_string()).or_else(|| {
-        node["id"]
-            .as_str()
-            .filter(|text| is_valid_database_id(text))
-            .map(str::to_owned)
-    });
     Ok(Message {
         id,
-        author: if is_bot && !login.ends_with("[bot]") {
-            format!("{login}[bot]")
-        } else {
-            login.to_owned()
-        },
+        author: build_author_display_login(login, is_bot),
         body: node["body"].as_str().unwrap_or_default().to_owned(),
         created: node["created_at"].as_str().unwrap_or_default().to_owned(),
         updated: node["updated_at"].as_str().unwrap_or_default().to_owned(),
         sync: Some(MessageSync::Published),
         viewer_did_author: true,
-        database_id,
+        database_id: parse_decimal_database_id(&node["id"]),
         reactions: Vec::new(),
         sync_error: None,
         recoverable_body: None,
@@ -172,12 +159,12 @@ impl GhForge {
         if let Some(review_id) = existing {
             return Ok(review_id.to_owned());
         }
-        let vars = json!({
+        let variables = json!({
             "pr": pr.node_id,
             "commit": (!pr.head_sha.is_empty()).then_some(pr.head_sha.as_str()),
         });
         let data = self
-            .graphql(ADD_PENDING_REVIEW, &vars)
+            .graphql(ADD_PENDING_REVIEW, &variables)
             .map_err(|err| classify_write_error(&err))?;
         data.pointer("/addPullRequestReview/pullRequestReview/id")
             .and_then(Value::as_str)
@@ -235,8 +222,8 @@ impl GhForge {
         if let Some(review_id) = request.pending_review_id {
             return self.reply_in_pending_review(review_id, request.thread_id, request.body);
         }
-        if let Some(root_db_id) = request.root_database_id {
-            return self.reply_via_rest(pr, root_db_id, request.thread_id, request.body);
+        if let Some(root_database_id) = request.root_database_id {
+            return self.reply_via_rest(pr, root_database_id, request.thread_id, request.body);
         }
         self.reply_in_fetched_pending_review(pr, request.thread_id, request.body)
     }
@@ -258,11 +245,11 @@ impl GhForge {
     fn reply_via_rest(
         &self,
         pr: &PullRequest,
-        root_db_id: &str,
+        root_database_id: &str,
         thread_id: &str,
         body: &str,
     ) -> std::result::Result<Message, ForgeWriteError> {
-        let endpoint = build_rest_reply_endpoint(pr, root_db_id)?;
+        let endpoint = build_rest_reply_endpoint(pr, root_database_id)?;
         match self.gh.run(
             &["api", &endpoint, "--method", "POST", "--input", "-"],
             Some(&json!({ "body": body })),
@@ -281,9 +268,9 @@ impl GhForge {
         thread_id: &str,
         body: &str,
     ) -> std::result::Result<Message, ForgeWriteError> {
-        let vars = json!({ "review": review_id, "thread": thread_id, "body": body });
+        let variables = json!({ "review": review_id, "thread": thread_id, "body": body });
         let data = self
-            .graphql(ADD_THREAD_REPLY, &vars)
+            .graphql(ADD_THREAD_REPLY, &variables)
             .map_err(|err| classify_write_error(&err))?;
         data.pointer("/addPullRequestReviewThreadReply/comment")
             .and_then(parse_comment)
@@ -353,9 +340,9 @@ impl GhForge {
         } else {
             (REMOVE_REACTION, "/removeReaction")
         };
-        let vars = json!({ "id": subject_id, "content": content.as_str() });
+        let variables = json!({ "id": subject_id, "content": content.as_str() });
         let data = self
-            .graphql(mutation, &vars)
+            .graphql(mutation, &variables)
             .map_err(|err| classify_write_error(&err))?;
         let container = data
             .pointer(pointer)
@@ -370,24 +357,24 @@ impl GhForge {
         event: ReviewEvent,
         body: &str,
     ) -> std::result::Result<(), ForgeWriteError> {
-        let body_opt = (!body.trim().is_empty()).then_some(body);
+        let optional_body = (!body.trim().is_empty()).then_some(body);
         if let Some(review_id) = pending_review_id {
-            let vars = json!({
+            let variables = json!({
                 "pr": pr.node_id,
                 "review": review_id,
                 "event": event.as_str(),
-                "body": body_opt,
+                "body": optional_body,
             });
-            self.graphql(SUBMIT_PENDING_REVIEW, &vars)
+            self.graphql(SUBMIT_PENDING_REVIEW, &variables)
                 .map_err(|err| classify_write_error(&err))?;
         } else {
-            let vars = json!({
+            let variables = json!({
                 "pr": pr.node_id,
                 "commit": (!pr.head_sha.is_empty()).then_some(pr.head_sha.as_str()),
                 "event": event.as_str(),
-                "body": body_opt,
+                "body": optional_body,
             });
-            self.graphql(SUBMIT_DIRECT_REVIEW, &vars)
+            self.graphql(SUBMIT_DIRECT_REVIEW, &variables)
                 .map_err(|err| classify_write_error(&err))?;
         }
         Ok(())

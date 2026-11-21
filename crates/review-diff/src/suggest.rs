@@ -9,8 +9,12 @@ use crate::lines::{
     Block, create_diff_operations_from_lines, diff_operations_to_blocks, line_index_to_number,
 };
 
-/// Turns the edited hunk at 1-based `cursor_line` of `edited_text` (compared
-/// against `head_text`) into a GitHub suggestion block and the reverted text.
+/// Turns the edited hunk touching 1-based `cursor_line` of `edited_text`
+/// (compared against `head_text`) into a [`SuggestedEdit`].
+///
+/// Returns `None` when `head_text` is empty, `cursor_line` is out of bounds,
+/// or no changed hunk touches `cursor_line`, for example when a reviewer edits
+/// a working buffer to propose a fenced suggestion while restoring `head_text`.
 #[must_use]
 pub fn create_suggestion_from_edit(
     path: &str,
@@ -43,7 +47,7 @@ pub fn create_suggestion_from_edit(
     }
     .ends_with('\n');
     Some(SuggestedEdit {
-        anchor: build_head_anchor(path, &old_span),
+        anchor: create_head_anchor(path, &old_span),
         suggestion_body,
         reverted_text: build_reverted_text(
             &head_lines,
@@ -55,7 +59,7 @@ pub fn create_suggestion_from_edit(
     })
 }
 
-fn build_head_anchor(path: &str, old_span: &Range<usize>) -> Anchor {
+fn create_head_anchor(path: &str, old_span: &Range<usize>) -> Anchor {
     Anchor::range(
         path,
         Side::Right,
@@ -89,8 +93,11 @@ fn span_touches_cursor(new_span: &Range<usize>, cursor_index: usize) -> bool {
     }
 }
 
-/// Ensures `old_span` covers at least one line of `head_lines`, since GitHub
-/// cannot attach a suggestion to zero lines.
+/// Returns `(old_span, new_span)` widened onto an adjacent line when
+/// `old_span` is empty, or `None` when `head_len` has no line to anchor to.
+///
+/// Called by `create_suggestion_from_edit` because GitHub suggestions must
+/// replace at least one existing head line.
 fn anchorable_spans(
     old_span: Range<usize>,
     new_span: Range<usize>,

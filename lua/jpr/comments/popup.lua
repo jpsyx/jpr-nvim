@@ -34,18 +34,27 @@ local function current_entry(session)
     return render.find_message_at_line(popup.layout, cursor_line), popup
 end
 
-local function pick_reaction(session)
-    local entry, popup = current_entry(session)
-    if not entry then
-        return
-    end
+--- Prompts the user to pick a GitHub reaction and passes the chosen content to `on_select`.
+function M.pick_reaction(on_select)
     vim.ui.select(render.REACTION_ORDER, {
         prompt = "Toggle reaction:",
         format_item = function(content)
             return ("%s  %s"):format(render.REACTION_EMOJI[content] or "", content)
         end,
     }, function(choice)
-        if session.popup ~= popup or not choice then
+        if choice then
+            on_select(choice)
+        end
+    end)
+end
+
+local function toggle_popup_reaction(session)
+    local entry, popup = current_entry(session)
+    if not entry then
+        return
+    end
+    M.pick_reaction(function(choice)
+        if session.popup ~= popup then
             return
         end
         require("jpr.session").request(session, "toggleReaction", {
@@ -140,7 +149,7 @@ local function bind_popup_keys(session, buf)
     map("q", function() M.close(session) end, "Close thread popup")
     map("<Esc>", function() M.close(session) end, "Close thread popup")
     map("R", function() toggle_resolved(session) end, "Resolve or unresolve thread")
-    map("+", function() pick_reaction(session) end, "Toggle reaction on message")
+    map("+", function() toggle_popup_reaction(session) end, "Toggle reaction on message")
     map("d", function() delete_current_message(session) end, "Delete own message")
     map("X", function() retry_current_message(session) end, "Retry failed message")
     map("r", function() open_reply(session) end, "Reply to thread")
@@ -148,7 +157,7 @@ local function bind_popup_keys(session, buf)
 end
 
 local function paint_popup(popup, threads)
-    local layout = render.build_popup(threads)
+    local layout = render.create_popup_layout_from_threads(threads)
     popup.threads, popup.layout = threads, layout
     vim.bo[popup.buf].modifiable = true
     vim.api.nvim_buf_set_lines(popup.buf, 0, -1, false, layout.lines)
@@ -165,13 +174,13 @@ end
 
 local function merge_updated_thread(item, updated_thread)
     local updated_messages = updated_thread.messages or {}
-    local outdated = item.outdated
+    local is_outdated = item.outdated
     if updated_thread.outdated ~= nil then
-        outdated = updated_thread.outdated
+        is_outdated = updated_thread.outdated
     end
     return vim.tbl_extend("force", item, {
         state = updated_thread.state,
-        outdated = outdated,
+        outdated = is_outdated,
         messages = updated_messages,
         messageCount = #updated_messages,
     })
@@ -192,16 +201,16 @@ function M.refresh_from_thread(session, updated_thread)
         return
     end
     local target_id = updated_thread.id or updated_thread.threadId
-    local updated_list, matched = {}, false
+    local updated_list, was_matched = {}, false
     for _, item in ipairs(popup.threads or {}) do
         if item.threadId == target_id then
-            matched = true
+            was_matched = true
             updated_list[#updated_list + 1] = merge_updated_thread(item, updated_thread)
         else
             updated_list[#updated_list + 1] = item
         end
     end
-    if not matched then
+    if not was_matched then
         return
     end
     local saved_cursor = vim.api.nvim_win_get_cursor(popup.win)

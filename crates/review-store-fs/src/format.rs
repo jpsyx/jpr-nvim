@@ -18,11 +18,12 @@ pub const SESSION_VERSION: u32 = 2;
 pub const OLDEST_SESSION_VERSION: u32 = 1;
 /// The `viewed.json` shape this build reads and writes.
 pub const VIEWED_VERSION: u32 = 1;
-/// The `github.json` shape this build writes. Version 2 adds persisted threads,
-/// queued comment operations, pending review metadata, and mention candidates.
+/// The `github.json` shape this build writes: `queuedViewed`, persisted
+/// threads, queued comment operations, pending review metadata, and mention
+/// candidates.
 pub const GITHUB_VERSION: u32 = 2;
-/// The oldest `github.json` shape this build still reads: version 1 only held
-/// `queuedViewed`.
+/// The oldest `github.json` shape this build reads: version 1 holds only
+/// `queuedViewed`, and all other `SyncRegistry` fields default to empty.
 pub const OLDEST_GITHUB_VERSION: u32 = 1;
 
 /// Just the version, read before anything else in a file.

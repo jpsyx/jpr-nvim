@@ -81,43 +81,31 @@ local function append_virt_line_to_column(column, virt_line)
     add_line(column, chunk[1], group)
 end
 
-local function partition_threads_by_side(threads)
-    local left_threads, right_threads = {}, {}
-    for _, thread in ipairs(threads) do
-        if thread.anchor and thread.anchor.kind ~= "file" and thread.anchor.side == "LEFT" then
-            left_threads[#left_threads + 1] = thread
-        else
-            right_threads[#right_threads + 1] = thread
-        end
-    end
-    return left_threads, right_threads
-end
-
 local function append_expanded_threads(columns, threads)
     if #columns == 1 then
-        for _, virt_line in ipairs(threads_render.build_expanded_virt_lines(threads, false)) do
+        for _, virt_line in ipairs(threads_render.create_expanded_virt_lines_from_threads(threads, false)) do
             append_virt_line_to_column(columns[1], virt_line)
         end
         return
     end
-    local left_threads, right_threads = partition_threads_by_side(threads)
-    local left_virt = threads_render.build_expanded_virt_lines(left_threads, false)
-    local right_virt = threads_render.build_expanded_virt_lines(right_threads, false)
-    local total = math.max(#left_virt, #right_virt)
-    for index = 1, total do
-        append_virt_line_to_column(columns[1], left_virt[index])
-        append_virt_line_to_column(columns[2], right_virt[index])
+    local left_threads, right_threads = threads_render.partition_threads_by_side(threads)
+    local left_virt_lines = threads_render.create_expanded_virt_lines_from_threads(left_threads, false)
+    local right_virt_lines = threads_render.create_expanded_virt_lines_from_threads(right_threads, false)
+    local max_virt_lines = math.max(#left_virt_lines, #right_virt_lines)
+    for index = 1, max_virt_lines do
+        append_virt_line_to_column(columns[1], left_virt_lines[index])
+        append_virt_line_to_column(columns[2], right_virt_lines[index])
     end
 end
 
-local function add_thread_row(layout, row, line, expanded)
+local function add_thread_row(layout, row, line, is_expanded)
     local sign, group = threads_render.pick_sign({ row.thread })
     local badge = ("  %s @%s: %s"):format(sign, one_line(row.thread.firstAuthor or ""), one_line(row.thread.snippet or ""))
     add_line_to_all_columns(layout.columns, badge, group)
     layout.threads_by_line[line] = { row.thread }
     layout.thread_lines[#layout.thread_lines + 1] = line
     layout.anchors[line] = { file = row.path, kind = "file", side = "RIGHT" }
-    if expanded then
+    if is_expanded then
         append_expanded_threads(layout.columns, { row.thread })
     end
 end
@@ -128,11 +116,11 @@ local function append_eol_mark(column, line, threads)
     end
     column.eol_marks[#column.eol_marks + 1] = {
         line = line - 1,
-        chunks = threads_render.build_eol_chunks(threads),
+        chunks = threads_render.create_eol_chunks_from_threads(threads),
     }
 end
 
-local function add_line_threads(layout, row, line, expanded)
+local function add_line_threads(layout, row, line, is_expanded)
     layout.anchors[line] = {
         file = row.path,
         side = (row.left and not row.right) and "LEFT" or "RIGHT",
@@ -145,13 +133,13 @@ local function add_line_threads(layout, row, line, expanded)
     end
     layout.threads_by_line[line] = row_threads
     layout.thread_lines[#layout.thread_lines + 1] = line
-    if expanded then
+    if is_expanded then
         return append_expanded_threads(layout.columns, row_threads)
     end
     if #layout.columns == 1 then
         return append_eol_mark(layout.columns[1], line, row_threads)
     end
-    local left_threads, right_threads = partition_threads_by_side(row_threads)
+    local left_threads, right_threads = threads_render.partition_threads_by_side(row_threads)
     append_eol_mark(layout.columns[1], line, left_threads)
     append_eol_mark(layout.columns[2], line, right_threads)
 end
@@ -164,14 +152,14 @@ local function close_fold(layout, first_line, last_line)
 end
 
 --- Adds a hunk, note, thread or line row as line `line`.
-local function add_body_row(layout, row, line, expanded)
+local function add_body_row(layout, row, line, is_expanded)
     if row.kind == "hunk" then
         add_line_to_all_columns(layout.columns, row.header, "JprHunk")
         layout.hunks[#layout.hunks + 1] = line
     elseif row.kind == "note" then
         add_line_to_all_columns(layout.columns, "  " .. one_line(row.text), "JprMuted")
     elseif row.kind == "thread" then
-        add_thread_row(layout, row, line, expanded)
+        add_thread_row(layout, row, line, is_expanded)
     else
         if #layout.columns == 2 then
             add_split_cell(layout.columns[1], row.left)
@@ -179,7 +167,7 @@ local function add_body_row(layout, row, line, expanded)
         else
             add_unified_row(layout.columns[1], row)
         end
-        add_line_threads(layout, row, line, expanded)
+        add_line_threads(layout, row, line, is_expanded)
     end
     if row.target then
         layout.targets[line] = { path = row.path, line = row.target }
@@ -194,7 +182,7 @@ end
 --- `opts.expanded` renders full indented thread messages across columns.
 function M.create_layout_from_stream(stream, opts)
     local is_split = stream.mode == "split"
-    local expanded = opts and opts.expanded == true
+    local is_expanded = opts and opts.expanded == true
     local layout = {
         mode = stream.mode,
         columns = is_split and { create_column(), create_column() } or { create_column() },
@@ -216,7 +204,7 @@ function M.create_layout_from_stream(stream, opts)
             layout.files[#layout.files + 1] = { line = line, path = row.path, viewed = row.viewed }
             layout.targets[line] = { path = row.path, line = 1 }
         else
-            add_body_row(layout, row, line, expanded)
+            add_body_row(layout, row, line, is_expanded)
         end
     end
     close_fold(layout, fold_start, #layout.columns[1].lines)
