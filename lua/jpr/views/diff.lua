@@ -86,6 +86,43 @@ local function give_up(session, win, record, path)
     end
 end
 
+--- Saves `win`'s local `signcolumn` and sets it to `"yes"` while `has_threads`
+--- is true, or restores the saved value when `has_threads` is false.
+local function set_window_signcolumn(session, win, has_threads)
+    if not session.diff then
+        return
+    end
+    if not vim.api.nvim_win_is_valid(win) then
+        session.diff.saved_signcolumn[win] = nil
+        return
+    end
+    if has_threads then
+        if session.diff.saved_signcolumn[win] == nil then
+            session.diff.saved_signcolumn[win] = vim.api.nvim_get_option_value("signcolumn", { win = win, scope = "local" })
+        end
+        vim.api.nvim_set_option_value("signcolumn", "yes", { win = win, scope = "local" })
+    elseif session.diff.saved_signcolumn[win] ~= nil then
+        vim.api.nvim_set_option_value("signcolumn", session.diff.saved_signcolumn[win], { win = win, scope = "local" })
+        session.diff.saved_signcolumn[win] = nil
+    end
+end
+
+--- Draws threads for unified mode on `buf` and updates `win`'s signcolumn.
+local function draw_unified_threads(session, win, buf, diff)
+    require("jpr.views.threads").draw_on_buffer(session, buf, diff.threads)
+    local list = session.buf_threads and session.buf_threads[buf]
+    set_window_signcolumn(session, win, list ~= nil and #list > 0)
+end
+
+--- Draws threads for split mode on `base_buf` and `buf` and updates both signcolumns.
+local function draw_split_threads(session, base_win, win, base_buf, buf, diff)
+    require("jpr.views.threads").draw_split(session, base_buf, buf, diff)
+    local base_list = session.buf_threads and session.buf_threads[base_buf]
+    local file_list = session.buf_threads and session.buf_threads[buf]
+    set_window_signcolumn(session, base_win, base_list ~= nil and #base_list > 0)
+    set_window_signcolumn(session, win, file_list ~= nil and #file_list > 0)
+end
+
 --- Shows the file in `win` as a diff in the current mode, unless it already
 --- does or its last `fileDiff` failed.
 function M.apply(session, win)
@@ -110,8 +147,10 @@ function M.apply(session, win)
         if diff.binary then
             return require("jpr").info(("%s is a binary file; it has no diff"):format(path))
         end
+        require("jpr").bind_buffer_keys(buf)
         if mode == "unified" then
             M.draw_overlay(buf, diff, win)
+            draw_unified_threads(session, win, buf, diff)
         else
             M.open_base(session, win, buf, diff)
         end
@@ -174,14 +213,17 @@ function M.open_base(session, win, buf, diff)
     vim.bo[base_buf].bufhidden = "wipe"
     vim.bo[base_buf].modifiable = false
     vim.bo[base_buf].filetype = vim.bo[buf].filetype
+    vim.b[base_buf].jpr_base_path = diff.path
+    require("jpr").bind_buffer_keys(base_buf)
     local base_win = vim.api.nvim_open_win(base_buf, false, { split = "left", win = win })
     vim.w[base_win].jpr_side = true
-    session.diff.splits[win] = { base_win = base_win }
+    session.diff.splits[win] = { base_win = base_win, base_buf = base_buf }
     for _, diff_win in ipairs({ base_win, win }) do
         vim.api.nvim_win_call(diff_win, function()
             vim.cmd("diffthis")
         end)
     end
+    draw_split_threads(session, base_win, win, base_buf, buf, diff)
 end
 
 --- Whether some window still has a diff drawn for `buf`.
@@ -201,16 +243,27 @@ function M.clear(session, win)
     if not session.diff then
         return
     end
+    local threads = require("jpr.views.threads")
     local applied = session.diff.applied[win]
     session.diff.applied[win] = nil
-    if applied and vim.api.nvim_buf_is_valid(applied.buf) and not is_buffer_drawn(session, applied.buf) then
-        vim.api.nvim_buf_clear_namespace(applied.buf, namespace, 0, -1)
+    set_window_signcolumn(session, win, false)
+    session.diff.saved_signcolumn[win] = nil
+    if applied and not is_buffer_drawn(session, applied.buf) then
+        if vim.api.nvim_buf_is_valid(applied.buf) then
+            vim.api.nvim_buf_clear_namespace(applied.buf, namespace, 0, -1)
+        end
+        threads.clear_buffer(session, applied.buf)
     end
     local base_split = session.diff.splits[win]
     session.diff.splits[win] = nil
     if not base_split then
         return
     end
+    if base_split.base_buf then
+        threads.clear_buffer(session, base_split.base_buf)
+    end
+    set_window_signcolumn(session, base_split.base_win, false)
+    session.diff.saved_signcolumn[base_split.base_win] = nil
     if vim.api.nvim_win_is_valid(base_split.base_win) then
         pcall(vim.api.nvim_win_close, base_split.base_win, true)
     end
@@ -238,6 +291,48 @@ function M.reconcile(session)
     end
     for _, win in ipairs(vim.api.nvim_tabpage_list_wins(session.tab)) do
         M.apply(session, win)
+    end
+end
+
+--- Requests `fileDiff` for `win` and redraws its thread marks in place.
+local function redraw_window_threads(session, win, applied)
+    if not is_current(session, win, applied) then
+        return
+    end
+    local path = M.buffer_to_changed_path(session, applied.buf)
+    if not path then
+        return
+    end
+    require("jpr.session").request(session, "fileDiff", { path = path }, function(diff)
+        if not is_current(session, win, applied) or type(diff) ~= "table" or diff.binary then
+            return
+        end
+        if applied.mode == "unified" then
+            return draw_unified_threads(session, win, applied.buf, diff)
+        end
+        local base_split = session.diff.splits[win]
+        if base_split and vim.api.nvim_win_is_valid(base_split.base_win) and vim.api.nvim_buf_is_valid(base_split.base_buf) then
+            return draw_split_threads(session, base_split.base_win, win, base_split.base_buf, applied.buf, diff)
+        end
+        M.clear(session, win)
+        if vim.api.nvim_win_is_valid(win) then
+            M.apply(session, win)
+        end
+    end)
+end
+
+--- Redraws threads on every drawn diff window in `session` without tearing
+--- down existing split windows.
+function M.redraw_threads(session)
+    if not session.diff or not session.client then
+        return
+    end
+    local targets = {}
+    for win, applied in pairs(session.diff.applied) do
+        targets[#targets + 1] = { win = win, applied = applied }
+    end
+    for _, target in ipairs(targets) do
+        redraw_window_threads(session, target.win, target.applied)
     end
 end
 
@@ -280,7 +375,7 @@ function M.attach(session)
     local group = vim.api.nvim_create_augroup(("jpr-diff-%d"):format(session.tab), { clear = true })
     -- applied: window to the { buf, mode } it is drawn for; splits: window
     -- to its base window; failed: paths whose fileDiff failed.
-    session.diff = { applied = {}, splits = {}, failed = {}, group = group }
+    session.diff = { applied = {}, splits = {}, failed = {}, saved_signcolumn = {}, group = group }
     vim.api.nvim_create_autocmd({ "BufWinEnter", "BufEnter", "WinClosed" }, {
         group = group,
         callback = function()

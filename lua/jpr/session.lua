@@ -297,7 +297,10 @@ function M.on_notification(session, method, params)
     if method == "event" and params and (params.type == "synced" or params.type == "viewedChanged") then
         M.show(session, params.view)
     elseif method == "event" and params and params.type == "threadsChanged" then
-        M.show(session, params.view)
+        session.view = params.view
+        panel.render(session, params.view)
+        require("jpr.views.diff").redraw_threads(session)
+        require("jpr.views.stream").refresh(session, true)
         local conversation = package.loaded["jpr.views.conversation"]
         if conversation and conversation.refresh then
             conversation.refresh(session)
@@ -360,6 +363,36 @@ function M.stream_current()
         return jpr().error("no pull request is open in this tab")
     end
     require("jpr.views.stream").show(session, { focus = true })
+end
+
+--- `:Jpr expand`: toggles inline thread expansion across diff and stream buffers.
+function M.expand_current()
+    local session = M.current()
+    if not session then
+        return jpr().error("no pull request is open in this tab")
+    end
+    session.threads_expanded = not session.threads_expanded
+    require("jpr.views.threads").redraw_all(session)
+    require("jpr.views.stream").refresh(session, true)
+end
+
+local function is_stream_buffer(session, buf)
+    local buffers = session.stream and session.stream.buffers
+    return buffers ~= nil and (buf == buffers.main or buf == buffers.left)
+end
+
+--- Jumps to the next (`step == 1`) or previous (`step == -1`) review thread in
+--- the active diff or stream buffer.
+function M.jump_thread_current(step)
+    local session = M.current()
+    if not session then
+        return jpr().error("no pull request is open in this tab")
+    end
+    local buf = vim.api.nvim_get_current_buf()
+    if is_stream_buffer(session, buf) then
+        return require("jpr.views.stream").jump(session, "threads", step)
+    end
+    require("jpr.views.threads").jump(session, step)
 end
 
 return M
