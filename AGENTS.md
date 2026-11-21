@@ -85,35 +85,48 @@ When in doubt, write the test.
 
 ## Plan completion & phase status checklist
 
-### Mandatory code review after implementing a plan
+### Mandatory code review and diff-review after implementing a plan
 
-- Whenever you finish implementing a plan (and resolving any loose ends), you
-  **must** automatically run `/avandar-code-review` (`avandar-code-review`
-  skill) across the branch before reporting back to the user.
-- Fix every violation surfaced by the review, run `just check` to verify the
-  workspace is completely green, and **commit the review changes** on the
-  working branch.
+1. **Run `/avandar-code-review`:** Whenever you finish implementing a plan and
+   resolving all loose ends, automatically run `/avandar-code-review`
+   (`avandar-code-review` skill) across the branch. Fix every violation
+   surfaced by the review, run `just check` to verify the workspace is
+   completely green, and **commit the review changes** on the working branch.
+2. **Run full `/diff-review` and archive the walkthrough:** Immediately after
+   `/avandar-code-review` is committed and green, automatically run the **full**
+   `/diff-review` skill (`diff-review` skill in Initial mode - **never**
+   walkthrough-only mode `/diff-review walkthrough`) so it produces both the
+   full difit review with explainer comments/guides in `.difit/` **and** the
+   walkthrough markdown file (`.difit/<stem>-walkthrough.md`).
+3. **Copy and commit the walkthrough under `docs/code-walkthroughs/`:** Copy the
+   generated `.difit/<stem>-walkthrough.md` to `docs/code-walkthroughs/` named
+   with a date prefix, the milestone number (when the plan belongs to one), and
+   a short plan slug:
+   - With a milestone: `docs/code-walkthroughs/{YYYY-MM-DD}_m{N}-{short-plan-title}.md`
+     (for example `docs/code-walkthroughs/2026-11-21_m0-server-foundations.md`).
+   - Without a milestone: `docs/code-walkthroughs/{YYYY-MM-DD}_{short-plan-title}.md`.
+   Commit the copied walkthrough file on the working branch before reporting
+   ready for full-branch human review.
 
 ### Phase status checklist
 
 At the end of **every phase of work** (writing a spec, writing a plan,
-finishing implementation, resolving loose ends, or completing
-`/avandar-code-review`), include this status checklist at the bottom of your
-response so the user can immediately see where the work stands when returning
-to a session:
+finishing implementation, resolving loose ends, completing
+`/avandar-code-review`, or completing `/diff-review` and saving the
+walkthrough), include this status checklist at the bottom of your response so
+the user can immediately see where the work stands when returning to a session:
 
 - Use `- [ ]` for phases that are not done yet.
 - Use a green check (`- ✅`) for completed phases.
 - Keep the final `"Ready for full-branch review, awaiting approval"` item
   marked with a red X (`- ❌`) until **every** previous item is checked off
   with `✅`.
-- Once all five preceding items are `✅`, switch that final item from `❌` to
+- Once all six preceding items are `✅`, switch that final item from `❌` to
   `👍`.
-- **Readiness invariant:** `"Finished avandar code review"` may only be checked
-  off (`✅`) when all prior items are `✅`, `/avandar-code-review` fixes are
-  committed, and `just check` passes. Checking off `"Finished avandar code
-  review"` must always mean the branch is ready for full-branch review and
-  awaiting approval (`👍`).
+- **Readiness gate:** Do not ask for a full-branch human review until both
+  `/avandar-code-review` and the full `/diff-review` (including copying and
+  committing the walkthrough in `docs/code-walkthroughs/`) are finished and
+  checked off (`✅`), and `just check` passes.
 
 In-progress example (after writing the plan):
 
@@ -123,11 +136,12 @@ In-progress example (after writing the plan):
 - [ ] Full plan implemented
 - [ ] Resolved loose ends
 - [ ] Finished avandar code review
+- [ ] Finished diff-review and code walkthrough
 - ❌ Ready for full-branch review, awaiting approval
 ```
 
-Ready-for-review example (after `/avandar-code-review` fixes are committed and
-verified):
+Ready-for-review example (after `/avandar-code-review`, full `/diff-review`, and
+saving the walkthrough to `docs/code-walkthroughs/` are committed and verified):
 
 ```markdown
 - ✅ Spec written
@@ -135,6 +149,7 @@ verified):
 - ✅ Full plan implemented
 - ✅ Resolved loose ends
 - ✅ Finished avandar code review
+- ✅ Finished diff-review and code walkthrough
 - 👍 Ready for full-branch review, awaiting approval
 ```
 
