@@ -7,8 +7,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 use review_model::{
-    Anchor, AnchorKind, ChangedFile, MentionCandidate, PullRequest, ReactionContent, ReviewEvent,
-    Thread,
+    Anchor, AnchorKind, ChangedFile, MentionCandidate, Message, PullRequest, Reaction,
+    ReactionContent, ReviewEvent, Thread,
 };
 use serde::{Deserialize, Serialize};
 
@@ -170,6 +170,73 @@ pub trait Forge: Send {
     /// Marks `path` viewed (`true`) or unviewed (`false`) for the reviewer on
     /// the forge, at once.
     fn set_viewed(&self, pr: &PullRequest, path: &str, viewed: bool) -> Result<()>;
+
+    /// Creates a draft review thread in `pending_review_id` (creating a pending
+    /// review on `pr.head_sha` first when `None`).
+    fn create_review_thread(
+        &self,
+        pr: &PullRequest,
+        pending_review_id: Option<&str>,
+        anchor: &Anchor,
+        body: &str,
+    ) -> std::result::Result<CreatedReviewThread, ForgeWriteError>;
+
+    /// Publishes a top-level pull-request conversation comment (`AnchorKind::Pr`).
+    fn create_conversation_comment(
+        &self,
+        pr: &PullRequest,
+        body: &str,
+    ) -> std::result::Result<Thread, ForgeWriteError>;
+
+    /// Replies to an existing code review thread: publishes immediately via REST
+    /// when no pending review blocks it, else adds a draft reply to the pending
+    /// review.
+    fn reply_to_thread(
+        &self,
+        pr: &PullRequest,
+        request: &ReplyRequest<'_>,
+    ) -> std::result::Result<Message, ForgeWriteError>;
+
+    /// Updates the body of a review comment or issue comment.
+    fn edit_message(
+        &self,
+        anchor_kind: AnchorKind,
+        message_id: &str,
+        body: &str,
+    ) -> std::result::Result<Message, ForgeWriteError>;
+
+    /// Deletes a review comment or issue comment.
+    fn delete_message(
+        &self,
+        anchor_kind: AnchorKind,
+        message_id: &str,
+    ) -> std::result::Result<(), ForgeWriteError>;
+
+    /// Resolves or unresolves a code review thread.
+    fn set_resolved(
+        &self,
+        thread_id: &str,
+        resolved: bool,
+    ) -> std::result::Result<(), ForgeWriteError>;
+
+    /// Adds (`added == true`) or removes (`added == false`) a reaction on
+    /// `subject_id`, returning the updated non-empty reactions.
+    fn set_reaction(
+        &self,
+        subject_id: &str,
+        content: ReactionContent,
+        added: bool,
+    ) -> std::result::Result<Vec<Reaction>, ForgeWriteError>;
+
+    /// Submits `pending_review_id` (or creates and submits a new review on
+    /// `pr.head_sha` when `pending_review_id` is `None`).
+    fn submit_review(
+        &self,
+        pr: &PullRequest,
+        pending_review_id: Option<&str>,
+        event: ReviewEvent,
+        body: &str,
+    ) -> std::result::Result<(), ForgeWriteError>;
 }
 
 /// The reviewer's checkout of the pull request.

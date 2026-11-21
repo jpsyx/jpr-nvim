@@ -2,6 +2,7 @@
 //! fake is a cheap handle: clones share state, so a test can keep one and give
 //! another to the session.
 
+mod comments;
 mod workspace;
 
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -9,11 +10,14 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use anyhow::{Result, anyhow};
 use review_model::{
-    Anchor, ChangedFile, Message, MessageSync, Origin, PullRequest, Thread, ThreadState,
-    ViewedState,
+    Anchor, AnchorKind, ChangedFile, Message, MessageSync, Origin, PullRequest, Reaction,
+    ReactionContent, ReviewEvent, Thread, ThreadState, ViewedState,
 };
 
-use crate::ports::{Clock, Forge, ForgeSnapshot, Ports, ReviewStore, StoreSnapshot};
+use crate::ports::{
+    Clock, CreatedReviewThread, Forge, ForgeSnapshot, ForgeWriteError, Ports, ReplyRequest,
+    ReviewStore, StoreSnapshot,
+};
 
 pub use workspace::{FAKE_MERGE_BASE, FakeWorkspace};
 
@@ -76,6 +80,8 @@ struct ForgeState {
     fetches: usize,
     read_failure: Option<String>,
     write_failure: Option<String>,
+    rejected_write_failure: Option<String>,
+    next_id: u64,
     viewed_calls: Vec<(String, bool)>,
 }
 
@@ -121,6 +127,12 @@ impl FakeForge {
     /// refuses writes is how a queued change is tested.
     pub fn fail_writes_with(&self, message: Option<&str>) {
         self.lock().write_failure = message.map(str::to_owned);
+    }
+
+    /// Makes every later comment/review write fail with a rejected error
+    /// (`ForgeWriteError::Rejected`), or lets writes succeed again with `None`.
+    pub fn reject_writes_with(&self, message: Option<&str>) {
+        self.lock().rejected_write_failure = message.map(str::to_owned);
     }
 
     /// Makes every later read fail with `message` while writes still work, or
@@ -177,6 +189,76 @@ impl Forge for FakeForge {
         }
         drop(state);
         Ok(())
+    }
+
+    fn create_review_thread(
+        &self,
+        _pr: &PullRequest,
+        pending_review_id: Option<&str>,
+        anchor: &Anchor,
+        body: &str,
+    ) -> std::result::Result<CreatedReviewThread, ForgeWriteError> {
+        self.create_review_thread_in_memory(pending_review_id, anchor, body)
+    }
+
+    fn create_conversation_comment(
+        &self,
+        _pr: &PullRequest,
+        body: &str,
+    ) -> std::result::Result<Thread, ForgeWriteError> {
+        self.create_conversation_comment_in_memory(body)
+    }
+
+    fn reply_to_thread(
+        &self,
+        _pr: &PullRequest,
+        request: &ReplyRequest<'_>,
+    ) -> std::result::Result<Message, ForgeWriteError> {
+        self.reply_to_thread_in_memory(request)
+    }
+
+    fn edit_message(
+        &self,
+        anchor_kind: AnchorKind,
+        message_id: &str,
+        body: &str,
+    ) -> std::result::Result<Message, ForgeWriteError> {
+        self.edit_message_in_memory(anchor_kind, message_id, body)
+    }
+
+    fn delete_message(
+        &self,
+        anchor_kind: AnchorKind,
+        message_id: &str,
+    ) -> std::result::Result<(), ForgeWriteError> {
+        self.delete_message_in_memory(anchor_kind, message_id)
+    }
+
+    fn set_resolved(
+        &self,
+        thread_id: &str,
+        resolved: bool,
+    ) -> std::result::Result<(), ForgeWriteError> {
+        self.set_resolved_in_memory(thread_id, resolved)
+    }
+
+    fn set_reaction(
+        &self,
+        subject_id: &str,
+        content: ReactionContent,
+        added: bool,
+    ) -> std::result::Result<Vec<Reaction>, ForgeWriteError> {
+        self.set_reaction_in_memory(subject_id, content, added)
+    }
+
+    fn submit_review(
+        &self,
+        _pr: &PullRequest,
+        _pending_review_id: Option<&str>,
+        event: ReviewEvent,
+        body: &str,
+    ) -> std::result::Result<(), ForgeWriteError> {
+        self.submit_review_in_memory(event, body)
     }
 }
 
@@ -283,5 +365,113 @@ mod tests {
         assert!(forge.set_viewed(&sample_pr(), "a.rs", false).is_err());
         assert!(forge.fetch(&sample_pr()).is_ok(), "reads still work");
         assert_eq!(forge.viewed_calls().len(), 1);
+    }
+
+    #[test]
+    fn the_fake_forge_tracks_threads_replies_reactions_and_review_submission() {
+        let pr = sample_pr();
+        let existing = github_thread("T_pub", "src/a.rs");
+        let forge = FakeForge::new(
+            pr.clone(),
+            ForgeSnapshot {
+                threads: vec![existing],
+                ..ForgeSnapshot::default()
+            },
+        );
+        let immediate = forge
+            .reply_to_thread(
+                &pr,
+                &ReplyRequest {
+                    thread_id: "T_pub",
+                    root_database_id: Some("10"),
+                    pending_review_id: None,
+                    body: "immediate",
+                },
+            )
+            .unwrap();
+        assert_eq!(immediate.sync, Some(MessageSync::Published));
+
+        let created = forge
+            .create_review_thread(&pr, None, &Anchor::line("src/a.rs", 5), "draft")
+            .unwrap();
+        assert_eq!(created.pending_review_id, "PRR_fake");
+        assert_eq!(created.thread.messages[0].sync, Some(MessageSync::Draft));
+
+        let reactions = forge
+            .set_reaction(
+                &created.thread.messages[0].id,
+                ReactionContent::ThumbsUp,
+                true,
+            )
+            .unwrap();
+        assert_eq!(reactions.len(), 1);
+        assert_eq!(reactions[0].count, 1);
+
+        forge.set_resolved(&created.thread.id, true).unwrap();
+        forge
+            .submit_review(&pr, Some("PRR_fake"), ReviewEvent::Comment, "lgtm")
+            .unwrap();
+        let fetched = forge.fetch(&pr).unwrap();
+        assert!(!fetched.has_pending_review);
+        assert_eq!(fetched.threads[1].state, ThreadState::Resolved);
+        assert_eq!(
+            fetched.threads[1].messages[0].sync,
+            Some(MessageSync::Published)
+        );
+    }
+
+    #[test]
+    fn the_fake_forge_separates_transient_and_rejected_write_failures() {
+        let pr = sample_pr();
+        let forge = FakeForge::new(pr.clone(), ForgeSnapshot::default());
+        forge.fail_writes_with(Some("timeout"));
+        assert!(matches!(
+            forge.create_conversation_comment(&pr, "hi"),
+            Err(ForgeWriteError::Transient(_))
+        ));
+        forge.reject_writes_with(Some("validation failed"));
+        assert!(matches!(
+            forge.create_conversation_comment(&pr, "hi"),
+            Err(ForgeWriteError::Rejected(_))
+        ));
+    }
+
+    #[test]
+    fn the_fake_forge_creates_draft_reply_when_root_database_id_is_missing_and_checks_anchor_kind()
+    {
+        let pr = sample_pr();
+        let review_thread = github_thread("T_rev", "src/a.rs");
+        let forge = FakeForge::new(
+            pr.clone(),
+            ForgeSnapshot {
+                threads: vec![review_thread],
+                ..ForgeSnapshot::default()
+            },
+        );
+        let conv = forge.create_conversation_comment(&pr, "top").unwrap();
+        let draft_reply = forge
+            .reply_to_thread(
+                &pr,
+                &ReplyRequest {
+                    thread_id: "T_rev",
+                    root_database_id: None,
+                    pending_review_id: None,
+                    body: "needs pending review",
+                },
+            )
+            .unwrap();
+        assert_eq!(draft_reply.sync, Some(MessageSync::Draft));
+        let snapshot = forge.fetch(&pr).unwrap();
+        assert!(snapshot.has_pending_review);
+        assert_eq!(snapshot.pending_review_id.as_deref(), Some("PRR_fake"));
+
+        assert!(matches!(
+            forge.edit_message(AnchorKind::Pr, &draft_reply.id, "oops"),
+            Err(ForgeWriteError::Rejected(_))
+        ));
+        assert!(matches!(
+            forge.delete_message(AnchorKind::Line, &conv.messages[0].id),
+            Err(ForgeWriteError::Rejected(_))
+        ));
     }
 }

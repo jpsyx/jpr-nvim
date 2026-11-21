@@ -216,6 +216,27 @@ fn thread_comments_parse_full_database_id_authorship_and_non_empty_reactions() {
     assert_eq!(comment.reactions.len(), 1);
     assert_eq!(comment.reactions[0].count, 2);
     assert!(comment.reactions[0].viewer_has_reacted);
+
+    let bad_db_id = parse_data_from_answer(
+        r#"{"data":{"node":{"headRefOid":"sha1","reviewThreads":{
+            "pageInfo":{"hasNextPage":false,"endCursor":null},
+            "nodes":[{
+                "id":"PRRT_2","isResolved":false,"isOutdated":false,
+                "subjectType":"LINE","path":"src/a.rs","line":4,"startLine":null,
+                "diffSide":"RIGHT","originalLine":4,"originalStartLine":null,
+                "comments":{"nodes":[{
+                    "id":"PRRC_2","fullDatabaseId":"123/evil","body":"hi",
+                    "createdAt":"2026-11-20T01:00:00Z","updatedAt":"2026-11-20T01:00:00Z",
+                    "state":"SUBMITTED","viewerDidAuthor":false,
+                    "author":{"login":"bob","__typename":"User"},
+                    "reactionGroups":[]
+                }]}
+            }]
+        }}}}"#,
+    )
+    .unwrap();
+    let (_, bad_threads, _) = parse_threads_page(&bad_db_id).unwrap();
+    assert_eq!(bad_threads[0].messages[0].database_id, None);
 }
 
 #[test]

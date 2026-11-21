@@ -114,6 +114,19 @@ pub fn error_message(stdout: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// Extracts GitHub's REST error message from `stdout`, when present.
+#[must_use]
+pub fn rest_error_message(stdout: &str) -> Option<String> {
+    let value: Value = serde_json::from_str(stdout).ok()?;
+    if let Some(detail) = value.pointer("/errors/0/message").and_then(Value::as_str) {
+        return Some(detail.to_owned());
+    }
+    if let Some(detail) = value.pointer("/errors/0").and_then(Value::as_str) {
+        return Some(detail.to_owned());
+    }
+    value["message"].as_str().map(str::to_owned)
+}
+
 /// The authenticated viewer's login in `PENDING_REVIEW`.
 #[must_use]
 pub fn parse_viewer_login(data: &Value) -> Option<String> {
@@ -338,7 +351,8 @@ pub(crate) fn parse_reactions(node: &Value) -> Vec<Reaction> {
 
 fn parse_database_id(node: &Value) -> Option<String> {
     if let Some(text) = node["fullDatabaseId"].as_str() {
-        return Some(text.to_owned());
+        return (!text.is_empty() && text.bytes().all(|byte| byte.is_ascii_digit()))
+            .then(|| text.to_owned());
     }
     node["fullDatabaseId"]
         .as_u64()

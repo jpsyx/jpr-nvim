@@ -48,13 +48,28 @@ impl Gh {
         let output = wait_with_timeout(child, GH_TIMEOUT)?;
         let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
         if !output.status.success() {
-            if let Some(message) = graphql::error_message(&stdout) {
-                bail!("{message}");
-            }
-            bail!("{}", String::from_utf8_lossy(&output.stderr).trim());
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            bail!("{}", format_gh_failure(&stdout, &stderr));
         }
         Ok(stdout)
     }
+}
+
+fn format_gh_failure(stdout: &str, stderr: &str) -> String {
+    let stderr_trimmed = stderr.trim();
+    if let Some(message) = graphql::error_message(stdout) {
+        if stderr_trimmed.is_empty() {
+            return message;
+        }
+        return format!("{stderr_trimmed}: {message}");
+    }
+    if let Some(rest_detail) = graphql::rest_error_message(stdout) {
+        if stderr_trimmed.is_empty() {
+            return rest_detail;
+        }
+        return format!("{stderr_trimmed}: {rest_detail}");
+    }
+    stderr_trimmed.to_owned()
 }
 
 /// Waits for `child` like [`Child::wait_with_output`], killing it once
@@ -125,5 +140,20 @@ mod tests {
         assert!(output.status.success());
         assert_eq!(String::from_utf8_lossy(&output.stdout), "out\n");
         assert_eq!(String::from_utf8_lossy(&output.stderr), "err\n");
+    }
+
+    #[test]
+    fn failure_formatting_preserves_stderr_status_alongside_graphql_and_rest_errors() {
+        let gql = r#"{"errors":[{"message":"Something went wrong"}]}"#;
+        assert_eq!(format_gh_failure(gql, ""), "Something went wrong");
+        assert_eq!(
+            format_gh_failure(gql, "gh: HTTP 502 Bad Gateway\n"),
+            "gh: HTTP 502 Bad Gateway: Something went wrong"
+        );
+        let rest = r#"{"message":"Validation Failed","errors":["pending review"]}"#;
+        assert_eq!(
+            format_gh_failure(rest, "gh: HTTP 422"),
+            "gh: HTTP 422: pending review"
+        );
     }
 }

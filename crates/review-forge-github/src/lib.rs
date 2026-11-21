@@ -3,13 +3,18 @@
 
 mod gh;
 pub mod graphql;
+mod mutations;
 pub mod pr;
 
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use review_core::ports::{Forge, ForgeSnapshot};
-use review_model::PullRequest;
+use review_core::ports::{
+    CreatedReviewThread, Forge, ForgeSnapshot, ForgeWriteError, ReplyRequest,
+};
+use review_model::{
+    Anchor, AnchorKind, Message, PullRequest, Reaction, ReactionContent, ReviewEvent, Thread,
+};
 use serde_json::{Value, json};
 
 pub use gh::{GH_TIMEOUT, Gh};
@@ -121,6 +126,76 @@ impl Forge for GhForge {
         )
         .with_context(|| format!("marking {path} {mark} on GitHub"))?;
         Ok(())
+    }
+
+    fn create_review_thread(
+        &self,
+        pr: &PullRequest,
+        pending_review_id: Option<&str>,
+        anchor: &Anchor,
+        body: &str,
+    ) -> std::result::Result<CreatedReviewThread, ForgeWriteError> {
+        self.create_review_thread_impl(pr, pending_review_id, anchor, body)
+    }
+
+    fn create_conversation_comment(
+        &self,
+        pr: &PullRequest,
+        body: &str,
+    ) -> std::result::Result<Thread, ForgeWriteError> {
+        self.create_conversation_comment_impl(pr, body)
+    }
+
+    fn reply_to_thread(
+        &self,
+        pr: &PullRequest,
+        request: &ReplyRequest<'_>,
+    ) -> std::result::Result<Message, ForgeWriteError> {
+        self.reply_to_thread_impl(pr, request)
+    }
+
+    fn edit_message(
+        &self,
+        anchor_kind: AnchorKind,
+        message_id: &str,
+        body: &str,
+    ) -> std::result::Result<Message, ForgeWriteError> {
+        self.edit_message_impl(anchor_kind, message_id, body)
+    }
+
+    fn delete_message(
+        &self,
+        anchor_kind: AnchorKind,
+        message_id: &str,
+    ) -> std::result::Result<(), ForgeWriteError> {
+        self.delete_message_impl(anchor_kind, message_id)
+    }
+
+    fn set_resolved(
+        &self,
+        thread_id: &str,
+        resolved: bool,
+    ) -> std::result::Result<(), ForgeWriteError> {
+        self.set_resolved_impl(thread_id, resolved)
+    }
+
+    fn set_reaction(
+        &self,
+        subject_id: &str,
+        content: ReactionContent,
+        added: bool,
+    ) -> std::result::Result<Vec<Reaction>, ForgeWriteError> {
+        self.set_reaction_impl(subject_id, content, added)
+    }
+
+    fn submit_review(
+        &self,
+        pr: &PullRequest,
+        pending_review_id: Option<&str>,
+        event: ReviewEvent,
+        body: &str,
+    ) -> std::result::Result<(), ForgeWriteError> {
+        self.submit_review_impl(pr, pending_review_id, event, body)
     }
 }
 
