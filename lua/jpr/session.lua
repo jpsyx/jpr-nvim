@@ -487,4 +487,24 @@ function M.comment_current(opts)
     require("jpr.comments.compose").open_new(session, anchor, { suggest = comment_opts.suggest == true })
 end
 
+--- `:Jpr conversation`: opens the pull request's top-level conversation
+--- buffer in the main window beside the panel.
+function M.conversation_current()
+    local session = M.current()
+    if not session then
+        return jpr().error("no pull request is open in this tab")
+    end
+    require("jpr.views.conversation").show(session)
+end
+
+--- `:Jpr suggest`: turns the local edit at the cursor line into a GitHub
+--- draft suggestion comment and reverts just that hunk.
+function M.suggest_current()
+    local session = M.current()
+    if not session then
+        return jpr().error("no pull request is open in this tab")
+    end
+    require("jpr.comments.suggest").run(session)
+end
+
 return M
