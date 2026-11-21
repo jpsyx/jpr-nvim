@@ -3,6 +3,7 @@
 
 mod diff;
 mod pr;
+mod review;
 mod thread;
 mod view;
 
@@ -11,5 +12,8 @@ pub use diff::{
     StreamView, ViewMode, WordRange,
 };
 pub use pr::{ChangedFile, PullRequest, ViewedState};
+pub use review::{
+    MentionCandidate, Reaction, ReactionContent, ReviewEvent, SubmitDraft, SubmitPreview,
+};
 pub use thread::{Anchor, AnchorKind, Message, MessageSync, Origin, Side, Thread, ThreadState};
 pub use view::{Event, FileRow, SessionView, SyncState, TreeRow};

@@ -73,6 +73,12 @@ pub struct SessionView {
     pub viewed_count: usize,
     /// How many threads the pull request has, across every file.
     pub thread_count: usize,
+    /// How many pending draft messages the reviewer has on this pull request.
+    #[serde(default)]
+    pub draft_count: usize,
+    /// How many pull-request conversation messages exist.
+    #[serde(default)]
+    pub conversation_count: usize,
     /// Viewed marks waiting to reach the forge.
     pub queued_count: usize,
     /// When the session last talked to the forge, and how it went.
@@ -100,6 +106,11 @@ pub enum Event {
     /// forge.
     ViewedChanged {
         /// The new state.
+        view: Box<SessionView>,
+    },
+    /// Threads changed (comment added, edited, deleted, resolved, or reacted).
+    ThreadsChanged {
+        /// The updated view with refreshed counts.
         view: Box<SessionView>,
     },
 }
@@ -142,18 +153,27 @@ mod tests {
             tree: Vec::new(),
             viewed_count: 1,
             thread_count: 3,
+            draft_count: 1,
+            conversation_count: 2,
             queued_count: 2,
             sync: SyncState::Never,
         };
         let json = serde_json::to_value(Event::Synced {
-            view: Box::new(view),
+            view: Box::new(view.clone()),
         })
         .unwrap();
         assert_eq!(json["type"], "synced");
         assert_eq!(json["view"]["viewedCount"], 1);
         assert_eq!(json["view"]["threadCount"], 3);
+        assert_eq!(json["view"]["draftCount"], 1);
+        assert_eq!(json["view"]["conversationCount"], 2);
         assert_eq!(json["view"]["queuedCount"], 2);
         assert_eq!(json["view"]["files"][0]["viewed"], "VIEWED");
+        let threads_changed = serde_json::to_value(Event::ThreadsChanged {
+            view: Box::new(view),
+        })
+        .unwrap();
+        assert_eq!(threads_changed["type"], "threadsChanged");
         let failed = serde_json::to_value(Event::SyncFailed {
             message: "offline".into(),
         })

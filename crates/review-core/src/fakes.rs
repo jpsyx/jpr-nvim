@@ -58,14 +58,13 @@ pub fn github_thread(id: &str, path: &str) -> Thread {
         anchor: Anchor::line(path, 1),
         state: ThreadState::Open,
         outdated: false,
-        messages: vec![Message {
-            id: format!("{id}-c1"),
-            author: "bob".into(),
-            body: "why?".into(),
-            created: "2026-11-19T00:00:00Z".into(),
-            updated: "2026-11-19T00:00:00Z".into(),
-            sync: Some(MessageSync::Published),
-        }],
+        messages: vec![Message::create_with_sync(
+            &format!("{id}-c1"),
+            "bob",
+            "why?",
+            "2026-11-19T00:00:00Z",
+            Some(MessageSync::Published),
+        )],
     }
 }
 

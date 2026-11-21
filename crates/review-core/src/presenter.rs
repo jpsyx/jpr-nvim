@@ -39,6 +39,8 @@ pub fn session_view(
             .filter(|file| file.viewed == ViewedState::Viewed)
             .count(),
         thread_count: threads.len(),
+        draft_count: 0,
+        conversation_count: 0,
         queued_count,
         sync: sync.clone(),
     }

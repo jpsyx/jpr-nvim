@@ -219,6 +219,11 @@ fn parse_comment(node: &Value) -> Option<Message> {
         } else {
             MessageSync::Published
         }),
+        viewer_did_author: false,
+        database_id: None,
+        reactions: Vec::new(),
+        sync_error: None,
+        recoverable_body: None,
     })
 }
 

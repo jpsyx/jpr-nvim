@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::Reaction;
+
 /// Where a thread lives, so a frontend can tell a forge thread from one kept
 /// only on this machine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -21,6 +23,27 @@ pub enum Side {
     Right,
 }
 
+impl Side {
+    /// Parses `LEFT` or `RIGHT`.
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "LEFT" => Some(Self::Left),
+            "RIGHT" => Some(Self::Right),
+            _ => None,
+        }
+    }
+
+    /// GitHub's `DiffSide` spelling.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Left => "LEFT",
+            Self::Right => "RIGHT",
+        }
+    }
+}
+
 /// What a thread is attached to. It decides which of an [`Anchor`]'s fields
 /// are set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -34,6 +57,20 @@ pub enum AnchorKind {
     File,
     /// The pull request as a whole, with no file.
     Pr,
+}
+
+impl AnchorKind {
+    /// Parses `line`, `range`, `file`, or `pr`.
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "line" => Some(Self::Line),
+            "range" => Some(Self::Range),
+            "file" => Some(Self::File),
+            "pr" => Some(Self::Pr),
+            _ => None,
+        }
+    }
 }
 
 /// Where a thread is attached. A frontend uses it to place the thread in the
@@ -62,12 +99,69 @@ impl Anchor {
     /// Use it to anchor a thread to one line, for example in a test fixture.
     #[must_use]
     pub fn line(file: &str, line: u64) -> Self {
+        Self::side_line(file, Side::Right, line)
+    }
+
+    /// A single line on `side` of `file`.
+    #[must_use]
+    pub fn side_line(file: &str, side: Side, line: u64) -> Self {
         Self {
             file: Some(file.to_owned()),
             kind: AnchorKind::Line,
-            side: Side::Right,
+            side,
             start: Some(line),
             end: Some(line),
+            commit: None,
+            snapshot: None,
+        }
+    }
+
+    /// Lines `start..=end` on `side` of `file` (collapsed to `Line` when equal).
+    #[must_use]
+    pub fn range(file: &str, side: Side, start: u64, end: u64) -> Self {
+        let (first_line, last_line) = if start <= end {
+            (start, end)
+        } else {
+            (end, start)
+        };
+        Self {
+            file: Some(file.to_owned()),
+            kind: if first_line == last_line {
+                AnchorKind::Line
+            } else {
+                AnchorKind::Range
+            },
+            side,
+            start: Some(first_line),
+            end: Some(last_line),
+            commit: None,
+            snapshot: None,
+        }
+    }
+
+    /// A file-level anchor on `file`.
+    #[must_use]
+    pub fn file(file: &str) -> Self {
+        Self {
+            file: Some(file.to_owned()),
+            kind: AnchorKind::File,
+            side: Side::Right,
+            start: None,
+            end: None,
+            commit: None,
+            snapshot: None,
+        }
+    }
+
+    /// A pull-request conversation anchor.
+    #[must_use]
+    pub const fn pr() -> Self {
+        Self {
+            file: None,
+            kind: AnchorKind::Pr,
+            side: Side::Right,
+            start: None,
+            end: None,
             commit: None,
             snapshot: None,
         }
@@ -120,6 +214,48 @@ pub struct Message {
     /// local message.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sync: Option<MessageSync>,
+    /// Whether the current reviewer authored this message.
+    #[serde(default)]
+    pub viewer_did_author: bool,
+    /// Numeric GitHub comment id as a decimal string, for the REST replies API.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub database_id: Option<String>,
+    /// Reactions with at least one reactor.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reactions: Vec<Reaction>,
+    /// Forge error message when `sync` is `Failed`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sync_error: Option<String>,
+    /// Local edit text preserved when a concurrent forge edit won.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recoverable_body: Option<String>,
+}
+
+impl Message {
+    /// Creates a message with `sync` and default metadata, for tests and local
+    /// optimistic placeholders.
+    #[must_use]
+    pub fn create_with_sync(
+        id: &str,
+        author: &str,
+        body: &str,
+        timestamp: &str,
+        sync: Option<MessageSync>,
+    ) -> Self {
+        Self {
+            id: id.to_owned(),
+            author: author.to_owned(),
+            body: body.to_owned(),
+            created: timestamp.to_owned(),
+            updated: timestamp.to_owned(),
+            sync,
+            viewer_did_author: false,
+            database_id: None,
+            reactions: Vec::new(),
+            sync_error: None,
+            recoverable_body: None,
+        }
+    }
 }
 
 /// A review conversation attached to an [`Anchor`].
@@ -157,14 +293,13 @@ mod tests {
             anchor: Anchor::line("src/a.rs", 12),
             state: ThreadState::Open,
             outdated: false,
-            messages: vec![Message {
-                id: "C1".into(),
-                author: "bob".into(),
-                body: "why?".into(),
-                created: "2026-11-19T00:00:00Z".into(),
-                updated: "2026-11-19T00:00:00Z".into(),
-                sync: Some(MessageSync::Draft),
-            }],
+            messages: vec![Message::create_with_sync(
+                "C1",
+                "bob",
+                "why?",
+                "2026-11-19T00:00:00Z",
+                Some(MessageSync::Draft),
+            )],
         };
         let json = serde_json::to_value(&thread).unwrap();
         assert_eq!(json["origin"], "github");
@@ -190,5 +325,20 @@ mod tests {
         assert_eq!(thread.messages[0].sync, None);
         let serialized = serde_json::to_value(&thread).unwrap();
         assert!(serialized["messages"][0].get("sync").is_none());
+    }
+
+    #[test]
+    fn anchors_and_sides_parse_and_collapse_single_line_ranges() {
+        assert_eq!(Side::parse("LEFT"), Some(Side::Left));
+        assert_eq!(AnchorKind::parse("file"), Some(AnchorKind::File));
+        let single = Anchor::range("a.rs", Side::Left, 5, 5);
+        assert_eq!(single.kind, AnchorKind::Line);
+        let span = Anchor::range("a.rs", Side::Right, 9, 4);
+        assert_eq!(
+            (span.kind, span.start, span.end),
+            (AnchorKind::Range, Some(4), Some(9))
+        );
+        assert_eq!(Anchor::file("a.rs").kind, AnchorKind::File);
+        assert_eq!(Anchor::pr().kind, AnchorKind::Pr);
     }
 }
