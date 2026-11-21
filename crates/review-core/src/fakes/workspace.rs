@@ -13,7 +13,7 @@ pub const FAKE_MERGE_BASE: &str = "merge000";
 
 #[derive(Debug, Default)]
 struct WorkspaceState {
-    base: HashMap<String, Vec<u8>>,
+    commits: HashMap<String, HashMap<String, Vec<u8>>>,
     disk: HashMap<String, Vec<u8>>,
     renames: Vec<(String, String)>,
     merge_base_calls: usize,
@@ -33,8 +33,15 @@ pub struct FakeWorkspace {
 impl FakeWorkspace {
     /// Puts `text` at `path` in the merge base.
     pub fn put_base(&self, path: &str, text: &str) {
+        self.put_at(FAKE_MERGE_BASE, path, text);
+    }
+
+    /// Puts `text` at `path` for `commit`.
+    pub fn put_at(&self, commit: &str, path: &str, text: &str) {
         self.lock()
-            .base
+            .commits
+            .entry(commit.to_owned())
+            .or_default()
             .insert(path.to_owned(), text.as_bytes().to_vec());
     }
 
@@ -82,10 +89,18 @@ impl Workspace for FakeWorkspace {
     }
 
     fn file_at(&self, commit: &str, path: &str) -> Result<Option<Vec<u8>>> {
-        if commit != FAKE_MERGE_BASE {
-            bail!("the fake workspace has no commit {commit}");
+        let found = self
+            .lock()
+            .commits
+            .get(commit)
+            .map(|files| files.get(path).cloned());
+        if let Some(bytes) = found {
+            return Ok(bytes);
         }
-        Ok(self.lock().base.get(path).cloned())
+        if commit == FAKE_MERGE_BASE {
+            return Ok(None);
+        }
+        bail!("the fake workspace has no commit {commit}");
     }
 
     fn file_on_disk(&self, path: &str) -> Result<Option<Vec<u8>>> {

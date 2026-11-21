@@ -72,7 +72,7 @@ impl ReviewSession {
     /// The base and current text of `path`, which must be a file the pull
     /// request changes: the forge's list is the only way in, so a path
     /// from anywhere else is refused before the disk is touched.
-    fn file_texts(&mut self, path: &str) -> Result<(FileText, FileText)> {
+    pub(super) fn file_texts(&mut self, path: &str) -> Result<(FileText, FileText)> {
         if !self.saved.files.iter().any(|file| file.path == path) {
             bail!("{path} is not a file this pull request changes");
         }

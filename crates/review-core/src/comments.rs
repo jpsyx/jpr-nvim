@@ -175,10 +175,6 @@ pub fn toggle_reaction_in_list(reactions: &mut Vec<Reaction>, content: ReactionC
 
 /// Builds the `:Jpr submit` preview from the current session threads.
 #[must_use]
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "wired into ReviewSession in subsequent tasks")
-)]
 pub fn create_submit_preview_from_threads(
     pr_author: &str,
     viewer_login: Option<&str>,
@@ -199,10 +195,6 @@ pub fn create_submit_preview_from_threads(
     }
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "wired into ReviewSession in subsequent tasks")
-)]
 fn collect_thread_drafts_and_blocker(
     thread: &Thread,
     drafts: &mut Vec<SubmitDraft>,
@@ -233,10 +225,6 @@ fn collect_thread_drafts_and_blocker(
     }
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "wired into ReviewSession in subsequent tasks")
-)]
 fn build_snippet_from_body(body: &str) -> String {
     body.lines()
         .map(str::trim)

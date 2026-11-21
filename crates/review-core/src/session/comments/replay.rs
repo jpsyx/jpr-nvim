@@ -296,13 +296,7 @@ impl ReviewSession {
             .submit_review(pr, pending_id.as_deref(), event, body)
         {
             Ok(()) => {
-                for thread in &mut self.threads {
-                    for message in &mut thread.messages {
-                        if message.sync == Some(MessageSync::Draft) {
-                            message.sync = Some(MessageSync::Published);
-                        }
-                    }
-                }
+                self.mark_drafts_published();
                 self.saved.registry.pending_review_id = None;
                 ReplayOutcome::Landed
             }

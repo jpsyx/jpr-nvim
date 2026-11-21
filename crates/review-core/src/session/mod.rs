@@ -4,6 +4,7 @@
 
 mod comments;
 mod diffs;
+mod submit;
 mod sync;
 #[cfg(test)]
 mod test_support;
