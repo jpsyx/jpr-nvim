@@ -479,3 +479,34 @@ resend marks that already landed, which is harmless.
 
 **Revisit when.** A store error needs to reach the reviewer: add an event for
 it.
+
+## Immediate thread replies use GitHub REST and fall back to pending-review GraphQL
+
+**Decision.** When no pending review is active (`pendingReviewId` is absent)
+and the thread's root comment carries a numeric `databaseId`, `GhForge::reply_to_thread`
+posts an immediate published reply via GitHub REST
+(`POST repos/{owner}/{repo}/pulls/{number}/comments/{id}/replies`). When a
+pending review is already active, `databaseId` is missing, or the REST endpoint
+rejects with an HTTP 422 / `"Validation Failed"` conflict mentioning a
+`"pending review"`, `GhForge` queries (or creates) the active pending review
+and falls back to GraphQL `addPullRequestReviewThreadReply`.
+
+**Why.** GitHub's GraphQL `addPullRequestReviewThreadReply` mutation requires a
+`pullRequestReviewId`. Creating a pending review just to send a reply turns a
+quick answer on an existing thread into an unsubmitted draft hidden from
+everyone else until `:Jpr submit`. REST `POST .../comments/{id}/replies`
+publishes a single reply immediately when no pending review is open, while
+GitHub still refuses that REST endpoint with HTTP 422 if a pending review is
+already active on the pull request (for example one opened on GitHub web
+since the last sync), requiring the reply to join that pending review via
+GraphQL.
+
+**Consequences.** Thread replies publish immediately when no pending review
+exists, and join the pending review as drafts when one does. When the 422
+fallback discovers a pending review created outside `jpr-review`,
+`ReviewSession` refreshes `pending_review_id` from the forge so subsequent
+drafts and `:Jpr submit` stay in sync.
+
+**Revisit when.** GitHub's GraphQL `addPullRequestReviewThreadReply` supports
+immediate replies without a `pullRequestReviewId`, or reviewers want an explicit
+toggle to hold replies as pending drafts even when no pending review exists.

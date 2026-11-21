@@ -173,7 +173,7 @@ checksum = "3bd1574e617a9a6c1f8f8181bd7e841e1f20e4277607ef28945765188d6284d4"
 
 [[package]]
 name = "jpr-review"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -242,7 +242,7 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "review-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "review-diff",
@@ -252,7 +252,7 @@ dependencies = [
 
 [[package]]
 name = "review-diff"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "review-model",
  "similar",
@@ -260,7 +260,7 @@ dependencies = [
 
 [[package]]
 name = "review-forge-github"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "review-core",
@@ -270,7 +270,7 @@ dependencies = [
 
 [[package]]
 name = "review-model"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -278,7 +278,7 @@ dependencies = [
 
 [[package]]
 name = "review-rpc"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "review-core",
@@ -289,7 +289,7 @@ dependencies = [
 
 [[package]]
 name = "review-store-fs"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "review-core",
@@ -301,7 +301,7 @@ dependencies = [
 
 [[package]]
 name = "review-workspace-git"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "review-core",

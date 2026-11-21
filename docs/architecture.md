@@ -36,13 +36,13 @@ read models the engine returns.
 
 | Crate | Responsibility |
 | --- | --- |
-| `review-model` | Domain types (pull requests, changed files, threads, anchors, messages) and read models (`SessionView` with its file tree, `FileDiffView`, `StreamView`, `Event`). Pure data. |
-| `review-diff` | Line diffs (Histogram) and word diffs (Myers) between two texts through `similar`, and the builders of `FileDiffView` and `StreamView`. Pure functions. |
-| `review-core` | The ports (`Forge`, `ReviewStore`, `Workspace`, `Clock`), bundled as one `Ports` value a session opens on, the `ReviewSession` facade (one module per use case under `session/`), the viewed rules, and the presenter that builds `SessionView`. The `fakes` feature adds in-memory fakes, `create_fake_ports`, and the port contract tests. |
+| `review-model` | Domain types (pull requests, changed files, threads, anchors, messages, reactions, review events, mention candidates, submit previews) and read models (`SessionView` with its file tree, `FileDiffView`, `StreamView`, `SuggestedEdit`, `ThreadPreview`, `Event`). Pure data. |
+| `review-diff` | Line diffs (Histogram) and word diffs (Myers) between two texts through `similar`, suggestion extraction from local edits (`suggest.rs`), and the builders of `FileDiffView` and `StreamView` (with attached `ThreadPreview`s). Pure functions. |
+| `review-core` | The ports (`Forge`, `ReviewStore`, `Workspace`, `Clock`), bundled as one `Ports` value a session opens on, the `ReviewSession` facade (one module per use case under `session/`), pure viewed and comment reconciliation rules, and the presenter that builds `SessionView`. The `fakes` feature adds in-memory fakes, `create_fake_ports`, and the port contract tests. |
 | `review-store-fs` | The `ReviewStore` adapter: one directory per PR, three versioned JSON files written atomically (see "State on disk"). |
-| `review-forge-github` | The `Forge` adapter: `gh pr view` and `gh api graphql` (queries, and the `markFileAsViewed` / `unmarkFileAsViewed` mutations with the pull request id and path sent as GraphQL variables on stdin), with a 30 second timeout per call. Adapted from dif. |
+| `review-forge-github` | The `Forge` adapter: `gh pr view`, `gh api graphql` (queries and mutations for viewed marks, pending reviews, review threads, PR comments, edits, deletions, resolution, reactions, and review submission), and `gh api` REST immediate thread replies with pending-review GraphQL fallback, with a 30 second timeout per call. Adapted from dif. |
 | `review-workspace-git` | Checks a PR out into a worktree: the default (`git worktree add` plus `gh pr checkout`) or a custom command that prints the path. `GitWorkspace` is the `Workspace` adapter, opened at the worktree's root (`git rev-parse --show-toplevel`) so paths stay root-relative even when `serve` starts in a subdirectory: the merge base, a file at a commit (`git cat-file --batch`), a file on disk, and renames (`git diff-index`). A missing base commit is fetched with a 90 second deadline. |
-| `review-rpc` | The JSON-RPC protocol and a server over any line-based transport, with a background poller that syncs and retries refused viewed marks. |
+| `review-rpc` | The JSON-RPC protocol and a server over any line-based transport, with a background poller that syncs and retries refused viewed marks and queued comment operations. |
 
 ### Inside the crates
 
@@ -51,34 +51,38 @@ The modules worth knowing before changing a crate. Test fixtures
 
 | Module | Responsibility |
 | --- | --- |
-| `review-model` `pr.rs`, `thread.rs` | The pull request (with its base and head commits), its changed files with their viewed state, and review threads with their anchors and messages |
-| `review-model` `view.rs` | `SessionView` (files, the file tree, counts, the queue count, the sync state) and the `Event`s that announce a change |
-| `review-model` `diff.rs` | The diff read models: `FileDiffView` for one file, `StreamView` and its rows for the stream, and `ViewMode` |
+| `review-model` `pr.rs`, `thread.rs`, `review.rs` | The pull request (with its base and head commits), changed files with viewed state, review threads (`Anchor`, `Message`, `MessageSync`, `ThreadPreview`), and review metadata (`Reaction`, `ReactionContent`, `ReviewEvent`, `MentionCandidate`, `SubmitPreview`) |
+| `review-model` `view.rs` | `SessionView` (files, file tree, viewed/thread/draft/conversation/queue counts, sync state) and the `Event`s (`Synced`, `SyncFailed`, `ViewedChanged`, `ThreadsChanged`) |
+| `review-model` `diff.rs` | The diff read models: `FileDiffView` (with `threads`), `StreamView` (with `StreamRow::Thread` and per-line `threads`), `SuggestedEdit`, and `ViewMode` |
 | `review-diff` `text.rs` | `FileText`: one side of a diff as missing, binary (a NUL in the first 8000 bytes, as git decides) or text split into lines without their endings |
 | `review-diff` `lines.rs` | The line diff as blocks of equal and changed lines, with a 2 second deadline, and the pairing of a changed block's lines for word highlights |
 | `review-diff` `words.rs` | The changed words inside a pair of lines, or none when fewer than half the tokens match |
-| `review-diff` `overlay.rs` | `create_file_diff_view_from_texts`: the added lines and the removed blocks to draw above them |
-| `review-diff` `stream.rs` | `create_stream_view_from_inputs`: each file's header, then its hunks with 3 lines of context or a note, as unified or split rows |
-| `review-core` `ports.rs` | The port traits, the `Ports` bundle, and what the store keeps (`SessionRecord`, `SyncRegistry` with the viewed queue, `StoreSnapshot`) |
+| `review-diff` `overlay.rs` | `create_file_diff_view_from_texts` and `create_file_diff_view_with_threads`: added lines, removed blocks above them, and `ThreadPreview`s placed at `display_line` |
+| `review-diff` `stream.rs` | `create_stream_view_from_inputs`: each file's header, unplaced/file `StreamRow::Thread` banners, then hunks with 3 lines of context (and line-attached `ThreadPreview`s) or a note, as unified or split rows |
+| `review-diff` `suggest.rs` | `create_suggestion_from_edit`: diffs local edits around the cursor against `head_sha` to build a fenced GitHub `suggestion` block and `reverted_text` for only that hunk |
+| `review-core` `ports.rs` | The port traits (`Forge`, `Workspace`, `ReviewStore`, `Clock`), `QueuedCommentOp`, `ForgeWriteError`, and what the store keeps (`SessionRecord`, `SyncRegistry`, `StoreSnapshot`) |
 | `review-core` `session/mod.rs` | `ReviewSession`: opening on `Ports`, the state the use cases share, and the event channel |
-| `review-core` `session/sync.rs` | `sync`: resend the queue, pull, let queued marks win over the pull, save, announce |
+| `review-core` `session/sync.rs` | `sync`: resend queued viewed marks, pull, reconcile concurrent edits and unflushed threads, replay queued comment ops, save, announce |
 | `review-core` `session/diffs.rs` | `file_diff` and `stream`: the two sides of each diff, the base cache (merge base, renames and base texts, per base commit) and the 4 MiB size limit |
-| `review-core` `session/viewed.rs` | `set_viewed` and `flush_queued`: a mark changes at once, and a mark the forge refuses is queued |
+| `review-core` `session/viewed.rs` | `set_viewed` and `flush_queued`: a mark changes at once, queued marks and comment ops are flushed between syncs |
+| `review-core` `session/comments.rs` (with `session/comments/` `helpers.rs`, `queue.rs`, `reconcile.rs`, `replay.rs`) | Comment creation, replies, edits, deletions, resolution, reactions, `retry_message`, optimistic `tmp-*` IDs, FIFO queue replay, ID remapping (`id_map`), and `threadsChanged` announcements |
+| `review-core` `session/submit.rs` | `anchored_lines`, `suggest_from_edit`, `submit_preview`, and `submit_review` (blocking self-approval and queued/failed comments) |
+| `review-core` `comments.rs` | Pure comment transitions: `remap_queued_ops`, `record_agreed_bodies`, `reconcile_concurrent_edits`, `merge_unflushed_threads`, `toggle_reaction_in_list`, `create_submit_preview_from_threads`, `count_code_threads` |
 | `review-core` `viewed.rs` | Pure viewed rules: what a mark means, a queued mark winning over a pull or a stale save, and dropping marks for files no longer changed |
 | `review-core` `tree.rs` | Pure: the changed paths as `TreeRow`s, directories first, a directory holding only one directory joined to it |
 | `review-core` `presenter.rs` | `session_view`: the `SessionView` every frontend draws |
-| `review-core` `fakes.rs` (with `fakes/workspace.rs`), `contract.rs` | The `fakes` feature: in-memory fakes of every port, `create_fake_ports`, and the contract every `ReviewStore` adapter passes |
-| `review-store-fs` `format.rs`, `atomic.rs`, `paths.rs` | The versioned on-disk shapes, crash-safe replaces, and where a pull request's state lives |
-| `review-forge-github` `gh.rs`, `pr.rs`, `graphql.rs` | Running `gh` with a timeout, reading `gh pr view`, and the GraphQL documents with pure parsing of their answers |
+| `review-core` `fakes.rs` (with `fakes/workspace.rs`, `fakes/comments.rs`), `contract.rs` | The `fakes` feature: in-memory fakes of every port, `create_fake_ports`, and the contract every `ReviewStore` adapter passes |
+| `review-store-fs` `format.rs`, `atomic.rs`, `paths.rs` | The versioned on-disk shapes (`session.json` v2, `viewed.json` v1, `github.json` v2 with v1 compatibility), crash-safe replaces, and where a pull request's state lives |
+| `review-forge-github` `gh.rs`, `pr.rs`, `graphql.rs`, `mutations.rs` (with `mutations/documents.rs`) | Running `gh` with a timeout, reading `gh pr view`, GraphQL queries/mutations (threads, PR comments, pending reviews, mentions, reactions, review submission), REST immediate replies with 422 GraphQL fallback, and transient vs rejected error classification |
 | `review-workspace-git` `checkout.rs`, `default_checkout.rs`, `custom.rs`, `repo.rs` | Checking a pull request out: the default worktree, a custom command, and finding the main checkout |
 | `review-workspace-git` `workspace.rs` | `GitWorkspace`, the `Workspace` adapter |
 | `review-workspace-git` `worktree_path.rs` | Reading a file the pull request names without leaving the worktree |
 | `review-workspace-git` `git_output.rs` | Pure guards for what reaches git (commit ids, batch requests) and readers of its output (`cat-file --batch`, renames) |
 | `review-workspace-git` `process.rs` | Running git, gh and custom commands, optionally with input on stdin, with git's repository variables cleared |
 | `review-workspace-git` `unattended.rs` | Running a command nobody watches (the base fetch): no prompts, a deadline, a process group when there is a terminal, and a bounded wait for its output |
-| `review-rpc` `protocol.rs` | The wire format and the protocol version |
-| `review-rpc` `params.rs` | Reading request params; a missing or mistyped one is an invalid-params error |
-| `review-rpc` `server.rs` | Routing requests to the session, writing events before responses, and the poller (`get_poll_step_from_elapsed` decides whether a wake-up syncs, retries or waits) |
+| `review-rpc` `protocol.rs` | The wire format and the protocol version (`PROTOCOL_VERSION = 3`) |
+| `review-rpc` `params.rs` | Reading request params (`path`, `viewed`, `mode`, `anchor`, `content`, `event`, `cursorLine`, etc.); a missing or mistyped one is an invalid-params error |
+| `review-rpc` `server.rs`, `server/comments.rs` | Routing requests to the session (including the 13 comment, suggestion, and review submission methods), writing events before responses, and the poller (`get_poll_step_from_elapsed` decides whether a wake-up syncs, retries or waits) |
 
 ## Patterns
 
@@ -86,9 +90,10 @@ The modules worth knowing before changing a crate. Test fixtures
   traits in `review_core::ports`. The store adapter passes the shared contract
   test for its port (`review_core::contract`).
 - **Facade.** Frontends talk only to `ReviewSession`.
-- **Command/query split.** `sync` and `set_viewed` change state; `view`,
-  `file_diff` and `stream` read it. The RPC methods follow the same split
-  (`sync` and `setViewed`; `snapshot`, `fileDiff` and `stream`).
+- **Command/query split.** `sync`, `set_viewed`, comment mutations, and
+  `submit_review` change state; `view`, `threads`, `mentions`, `anchored_lines`,
+  `submit_preview`, `file_diff`, and `stream` read it. The RPC methods follow
+  the same split.
 - **Observer.** `ReviewSession::subscribe` returns a channel of `Event`s; the
   RPC server forwards them as `event` notifications.
 - **Presenter.** `review_core::session_view` builds the `SessionView` every
@@ -110,10 +115,10 @@ handshake it asks for a `snapshot` (what was saved last) and then a `sync`.
 
 The server reads requests on stdin, writes responses and notifications on
 stdout, and syncs with GitHub in the background every 60 seconds (`--poll`).
-Between syncs the poller wakes every 20 seconds and, when viewed marks are
-queued, resends them; a pure `get_poll_step_from_elapsed` decides whether
-a wake-up syncs, retries or waits. A sync failure keeps the last view and is announced as an
-event. The reader loop and a poller thread share one `Mutex<ReviewSession>`,
+Between syncs the poller wakes every 20 seconds and, when viewed marks or
+comment operations are queued, resends them; a pure `get_poll_step_from_elapsed`
+decides whether a wake-up syncs, retries or waits. A sync failure keeps the last
+view and is announced as an event. The reader loop and a poller thread share one `Mutex<ReviewSession>`,
 and whichever one syncs writes the events it caused before doing anything
 else; there is no async runtime. On `shutdown` or end of input the server
 stops and joins the poller, writes any event still pending, and only then
@@ -157,17 +162,28 @@ hex commit ids (see `docs/decisions.md`).
 The engine computes the unified overlay and the stream. The split view of a
 single file is Neovim's own `diff` mode against the engine's base text.
 
-### Viewed marks
+### Viewed marks and comment operations
 
 `setViewed` changes the mark at once and sends it to GitHub at once. A mark
 GitHub refuses stands, is saved in `github.json`, and is counted in the view's
-`queuedCount`. Every sync first resends the queue (stopping at the first
-failure), drops queued marks for files the pull request no longer changes,
-and lets the rest win over what it pulled; while the server polls, it also
-resends the queue every 20 seconds between syncs. Every `setViewed`, and
-every retry that gets a queued mark through, is announced with
-`viewedChanged`. GitHub stays the authority: when a push changes a viewed
-file, the next sync reports it `DISMISSED`.
+`queuedCount`. Every sync first resends the viewed queue (stopping at the first
+failure), pulls, reconciles concurrent comment edits and unflushed threads,
+replays `queuedOps` in FIFO order, drops queued marks for files the pull
+request no longer changes, and lets the rest win over what it pulled; while the
+server polls, `flush_queued` also resends both queues every 20 seconds between
+syncs. Every `setViewed`, and every retry that gets a queued mark through, is
+announced with `viewedChanged`; every comment write or background retry that
+progresses `queuedOps` announces `threadsChanged`. GitHub stays the authority:
+when a push changes a viewed file, the next sync reports it `DISMISSED`.
+
+For comments, transient forge failures queue the operation in `queuedOps` with
+optimistic `tmp-*` ids (`nextTempId`, resolved later via `idMap`), while
+validation rejections on `comment`, `reply`, or `editMessage` mark the message
+`failed` with `syncError` so the reviewer can edit, retry (`retryMessage`), or
+delete it without blocking subsequent queued operations. `agreedBodies` records
+the last forge-confirmed body per message so an offline edit whose remote body
+changed on GitHub preserves the local edit in `recoverableBody` instead of
+overwriting the remote edit.
 
 ## State on disk
 
@@ -181,7 +197,7 @@ rejected.
 | --- | --- |
 | `session.json` | `{"version":2,"pid","worktree","pr","lastSyncedAt"}`: the daemon's pid, the worktree, the pull request (with its `baseSha`), the last successful sync (Unix seconds). Version 1 still loads, with an empty `baseSha` |
 | `viewed.json` | `{"version":1,"files":[{"path","additions","deletions","viewed"}]}`: the changed files with their counts and viewed state |
-| `github.json` | `{"version":1,"queuedViewed":{"<path>":true}}`: viewed marks GitHub has not accepted yet. Later milestones add the comment queues here |
+| `github.json` | `{"version":2,"queuedViewed","pendingReviewId","viewerLogin","nextTempId","idMap","agreedBodies","threads","queuedOps","mentionCandidates"}`: queued viewed marks, active pending review node id, authenticated viewer login, optimistic `tmp-*` id counter and `idMap`, `agreedBodies` for concurrent-edit detection, persisted `threads` (published, draft, queued, and failed), queued comment operations (`queuedOps`), and cached `@mention` candidates. Version 1 (`queuedViewed` only) still loads with defaults for the version 2 fields |
 
 - **Versioned envelopes.** A file without a `version` is rejected as corrupt.
   A file with a newer version is refused and never overwritten, so an older
@@ -198,8 +214,7 @@ rejected.
   session applies the queue to the saved files, which a crash can leave
   behind it.
 
-Later milestones add local threads, the comment queues in `github.json` and
-agent rounds.
+Later milestones add local threads and agent rounds.
 
 ## The binary
 
@@ -213,18 +228,27 @@ semantic colors. `serve` takes only flags, because its stdin is the protocol.
 
 | Module | Responsibility |
 | --- | --- |
-| `plugin/jpr.lua` | Defines `:Jpr` |
-| `jpr` | Config, highlight groups, argument parsing, subcommand dispatch |
+| `plugin/jpr.lua` | Defines `:Jpr` (with range support) and the `<Plug>(jpr-*)` mappings |
+| `jpr` | Config (including `keys`), highlight groups, argument parsing, subcommand dispatch, buffer keybinding (`bind_buffer_keys`), and `<Plug>(jpr-*)` action dispatch |
 | `jpr.rpc` | JSON-RPC client over `jobstart` |
-| `jpr.session` | One review per tab: checkout, engine process, requests, redraws of the panel, the stream and the diffs, `:Jpr toggle` and `:Jpr stream`, and the one teardown path |
+| `jpr.session` | One review per tab: checkout, engine process, requests, redraws of the panel, the stream, the diffs, and the PR conversation view, `:Jpr toggle`, `:Jpr stream`, `:Jpr comment`, `:Jpr suggest`, `:Jpr expand`, `:Jpr conversation`, `:Jpr submit`, `threadsChanged` handling, and the one teardown path |
 | `jpr.view_mode` | The global view mode (unified or split): the one remembered in `stdpath("state")/jpr/view-mode`, else `setup({ view = ... })`'s |
-| `jpr.render.panel` | Pure: `SessionView` to lines, highlights and paths. Draws the engine's `tree` (directories muted with a trailing `/`, files indented under them; a view without a tree lists each file at the top level) and adds `· N waiting for GitHub` to the counts line while viewed marks are queued |
+| `jpr.render.panel` | Pure: `SessionView` to lines, highlights, `paths`, and `conversation_line`. Draws the engine's `tree` (directories muted with a trailing `/`, files indented under them; a view without a tree lists each file at the top level), the Conversation row with count, and adds `drafts N` / `N waiting for GitHub` to the counts line |
 | `jpr.render.overlay` | Pure: `FileDiffView` to extmark specs (added lines and their changed words highlighted, removed lines as virtual lines with their tabs expanded), and a base text to buffer lines |
-| `jpr.render.stream` | Pure: `StreamView` to one column (unified) or two aligned columns (split), with each line's target, the file and hunk lines for navigation, the folds of viewed files, and the key that says when the stream must be fetched again |
-| `jpr.views.panel` | The panel window, with its options local to it so windows split from it do not inherit them. `<CR>` opens a file only through `jpr.views.main_window`, `v` toggles viewed for the file under the cursor |
+| `jpr.render.stream` | Pure: `StreamView` to one column (unified) or two aligned columns (split), with each line's target, file/hunk/thread navigation lines, inline thread EOL badges or expanded thread lines, commentable row anchors, folds of viewed files, and the key that says when the stream must be fetched again |
+| `jpr.render.threads` | Pure: `ThreadPreview` lists to sign + EOL extmarks (`!` failed, `✎` draft, `💬` open published, `✓` resolved), expanded virtual lines (`:Jpr expand`), reaction pills, and floating popup message layouts |
+| `jpr.render.submit` | Pure: `SubmitPreview`, selected `ReviewEvent`, and summary body to lines, highlights, and cursor-to-draft anchors for `:Jpr submit` |
+| `jpr.views.panel` | The panel window, with its options local to it so windows split from it do not inherit them. `<CR>` opens the PR conversation view on the Conversation row or a file through `jpr.views.main_window`; `v` toggles viewed for the file under the cursor |
 | `jpr.views.main_window` | The window beside the panel where files open; side windows (`vim.w.jpr_side`) never count. Only a plain path inside the worktree opens: `..`, `.`, an absolute path or any symlink that resolves elsewhere (dangling and looping ones included) is refused, so a save never writes outside it |
-| `jpr.views.diff` | Every window in the review's tab that shows a changed file gets its `fileDiff`: extmark overlays (unified) or a read-only `jpr://base/...` window with `diffthis` (split). A window that moves to another buffer is cleared (the overlay stays while another window shows the buffer); a toggle or a moved head redraws all, a save redraws that buffer. A failed `fileDiff` is asked for again only after a toggle or moved commits |
-| `jpr.views.stream` | `jpr://stream/<n>` in the main window: opened once the pull request first syncs (never over a file the reviewer opened), fetched again when its key (the view and the mode) changes, after a save and on a toggle; a toggle while a request is in flight fetches it again in the new mode. Split adds a scroll- and cursor-bound `jpr://stream/<n>/base` window on the left, wiped with its window; once the reviewer opens their own buffer there, that window is theirs (no longer a side window, never reused as the left half) and the next draw opens a new left half. Only the answer to the latest `stream` request is drawn, recorded as the view it was asked for. `<CR>` opens a file only through `jpr.views.main_window` (on a viewed file's closed fold, at the file's top; a refused path leaves the stream as it was), `v` toggles viewed and moves on only when the redraw it caused arrives, `]f` `[f` `]h` `[h` move between files and hunks (skipping hunks in closed folds). An answer that arrives after the review closed is dropped |
+| `jpr.views.diff` | Every window in the review's tab that shows a changed file gets its `fileDiff`: extmark overlays plus thread signs/previews (unified) or a read-only `jpr://base/...` window with `diffthis` and side-split thread markers (split). Manages window `signcolumn` when threads exist and redraws threads on `threadsChanged`. A window that moves to another buffer is cleared (the overlay stays while another window shows the buffer); a toggle or a moved head redraws all, a save redraws that buffer. A failed `fileDiff` is asked for again only after a toggle or moved commits |
+| `jpr.views.stream` | `jpr://stream/<n>` in the main window: opened once the pull request first syncs (never over a file the reviewer opened), fetched again when its key (the view and the mode) changes, after a save, on `threadsChanged`, and on a toggle; a toggle while a request is in flight fetches it again in the new mode. Split adds a scroll- and cursor-bound `jpr://stream/<n>/base` window on the left, wiped with its window; once the reviewer opens their own buffer there, that window is theirs (no longer a side window, never reused as the left half) and the next draw opens a new left half. Only the answer to the latest `stream` request is drawn, recorded as the view it was asked for. `<CR>` opens a file only through `jpr.views.main_window` (on a viewed file's closed fold, at the file's top; a refused path leaves the stream as it was), `v` toggles viewed and moves on only when the redraw it caused arrives, `]f` `[f` `]h` `[h` `]t` `[t` move between files, hunks, and threads (skipping hunks and threads in closed folds), and buffer comment keys (`gc`, `gC`, `gf`, `gt`) resolve anchors/threads per active side. An answer that arrives after the review closed is dropped |
+| `jpr.views.threads` | Places thread signs, EOL previews, and expanded blocks on diff buffers (`LEFT` threads on the base buffer in split mode, `RIGHT` and `file` threads on the file buffer) and handles `gt`, `]t` / `[t`, and `:Jpr expand` |
+| `jpr.views.conversation` | `jpr://conversation/<n>` in the main window beside the panel: lists top-level PR comments (`anchor.kind == "pr"`) with `c` (new comment), `e` (edit), `d` (delete), `+` (react), `X` (retry), and `q` (close), refreshing on `threadsChanged` |
+| `jpr.views.submit` | Centered floating `:Jpr submit` modal (`1`/`2`/`3` review event, `e` summary sub-editor, `<CR>` jump to draft or submit, `<C-s>` submit, `q`/`<Esc>` cancel) |
+| `jpr.comments.popup` | Floating thread inspector at the cursor (`r` reply, `e` edit, `d` delete, `R` resolve/unresolve, `+` reaction picker, `X` retry, `q`/`<Esc>` close) |
+| `jpr.comments.compose` | Floating markdown compose buffer for new comments, replies, edits, and `<C-g>s` suggestion fences (`<C-s>` submits, `q`/`<Esc>` cancels) |
+| `jpr.comments.mentions` | `@mention` completion via `<C-x><C-o>` (`omnifunc`) and an optional `nvim-cmp` source (`jpr_mentions`) backed by `mentions` |
+| `jpr.comments.suggest` | `:Jpr suggest`: turns the local edit around the cursor into a GitHub draft `suggestion` comment via `suggestFromEdit` and reverts only that hunk in the buffer (and on disk when already saved) |
 
 The panel, a split view's base window and the stream's left half are side
 windows (the panel by its window id, the others by the window variable
@@ -249,8 +273,11 @@ own, so a callback that raises cannot swallow the messages after it.
   adapters, the protocol over in-memory streams, and the dependency rule.
 - `./scripts/test-lua.sh`: headless Neovim specs against
   `tests/lua/fixtures/fake_engine.sh` (and `crashing_engine.sh`, an engine
-  that dies at startup). The fake engine speaks protocol 2, answers
-  `fileDiff`, `stream` and `setViewed`, and logs the requests it gets. The
-  script points `XDG_STATE_HOME` at a temporary directory, so specs never
-  touch the real remembered view mode.
+  that dies at startup). The fake engine speaks protocol 3, answers all v3
+  requests (`fileDiff`, `stream`, `setViewed`, `threads`, `mentions`, `comment`,
+  `reply`, `editMessage`, `deleteMessage`, `setResolved`, `toggleReaction`,
+  `retryMessage`, `anchoredLines`, `suggestFromEdit`, `submitPreview`,
+  `submitReview`), and logs the requests it gets. The script points
+  `XDG_STATE_HOME` at a temporary directory, so specs never touch the real
+  remembered view mode.
 - `just check` runs both plus formatting and clippy.
