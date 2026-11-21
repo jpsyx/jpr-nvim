@@ -368,7 +368,7 @@ mod tests {
     }
 
     #[test]
-    fn the_fake_forge_tracks_threads_replies_reactions_and_review_submission() {
+    fn the_fake_forge_publishes_immediate_replies_with_root_database_id() {
         let pr = sample_pr();
         let existing = github_thread("T_pub", "src/a.rs");
         let forge = FakeForge::new(
@@ -390,7 +390,12 @@ mod tests {
             )
             .unwrap();
         assert_eq!(immediate.sync, Some(MessageSync::Published));
+    }
 
+    #[test]
+    fn the_fake_forge_tracks_draft_threads_reactions_and_review_submission() {
+        let pr = sample_pr();
+        let forge = FakeForge::new(pr.clone(), ForgeSnapshot::default());
         let created = forge
             .create_review_thread(&pr, None, &Anchor::line("src/a.rs", 5), "draft")
             .unwrap();
@@ -413,9 +418,9 @@ mod tests {
             .unwrap();
         let fetched = forge.fetch(&pr).unwrap();
         assert!(!fetched.has_pending_review);
-        assert_eq!(fetched.threads[1].state, ThreadState::Resolved);
+        assert_eq!(fetched.threads[0].state, ThreadState::Resolved);
         assert_eq!(
-            fetched.threads[1].messages[0].sync,
+            fetched.threads[0].messages[0].sync,
             Some(MessageSync::Published)
         );
     }
