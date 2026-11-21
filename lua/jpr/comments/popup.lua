@@ -1,0 +1,254 @@
+-- Floating thread inspector at the cursor: renders full messages and dispatches
+-- reply (r), edit (e), delete (d), resolve (R), reaction (+), and retry (X).
+local render = require("jpr.render.threads")
+
+local M = {}
+
+local namespace = vim.api.nvim_create_namespace("jpr-popup")
+
+local function clamp_popup_height(line_count)
+    return math.min(22, math.max(6, line_count))
+end
+
+--- Closes the active floating thread popup for `session`, if any.
+function M.close(session)
+    local popup = session and session.popup
+    if not popup then
+        return
+    end
+    session.popup = nil
+    if vim.api.nvim_win_is_valid(popup.win) then
+        pcall(vim.api.nvim_win_close, popup.win, true)
+    end
+    if vim.api.nvim_buf_is_valid(popup.buf) then
+        pcall(vim.api.nvim_buf_delete, popup.buf, { force = true })
+    end
+end
+
+local function current_entry(session)
+    local popup = session.popup
+    if not popup or not popup.win or not vim.api.nvim_win_is_valid(popup.win) then
+        return nil
+    end
+    local cursor_line = vim.api.nvim_win_get_cursor(popup.win)[1]
+    return render.find_message_at_line(popup.layout, cursor_line), popup
+end
+
+local function pick_reaction(session)
+    local entry, popup = current_entry(session)
+    if not entry then
+        return
+    end
+    vim.ui.select(render.REACTION_ORDER, {
+        prompt = "Toggle reaction:",
+        format_item = function(content)
+            return ("%s  %s"):format(render.REACTION_EMOJI[content] or "", content)
+        end,
+    }, function(choice)
+        if session.popup ~= popup or not choice then
+            return
+        end
+        require("jpr.session").request(session, "toggleReaction", {
+            messageId = entry.message_id,
+            content = choice,
+        }, function(result)
+            if session.popup ~= popup then
+                return
+            end
+            if result and result.thread then
+                M.refresh_from_thread(session, result.thread)
+            end
+        end)
+    end)
+end
+
+local function toggle_resolved(session)
+    local entry, popup = current_entry(session)
+    if not entry then
+        return
+    end
+    local next_resolved = entry.thread.state ~= "resolved"
+    require("jpr.session").request(session, "setResolved", {
+        threadId = entry.thread_id,
+        resolved = next_resolved,
+    }, function(result)
+        if session.popup ~= popup then
+            return
+        end
+        if result and result.thread then
+            M.refresh_from_thread(session, result.thread)
+        end
+    end)
+end
+
+local function delete_current_message(session)
+    local entry, popup = current_entry(session)
+    if not entry then
+        return
+    end
+    if not entry.message.viewerDidAuthor then
+        return require("jpr").error("you can only delete your own comments")
+    end
+    if vim.fn.confirm("Delete this comment?", "&Yes\n&No", 2) ~= 1 or session.popup ~= popup then
+        return
+    end
+    require("jpr.session").request(session, "deleteMessage", { messageId = entry.message_id }, function()
+        if session.popup ~= popup then
+            return
+        end
+        M.close(session)
+    end)
+end
+
+local function retry_current_message(session)
+    local entry, popup = current_entry(session)
+    if not entry or entry.message.sync ~= "failed" then
+        return require("jpr").info("this message is not in a failed state")
+    end
+    require("jpr.session").request(session, "retryMessage", { messageId = entry.message_id }, function()
+        if session.popup ~= popup then
+            return
+        end
+        M.close(session)
+    end)
+end
+
+local function open_reply(session)
+    local entry = current_entry(session)
+    if entry then
+        M.close(session)
+        require("jpr.comments.compose").open_reply(session, entry.thread)
+    end
+end
+
+local function open_edit(session)
+    local entry = current_entry(session)
+    if not entry then
+        return
+    end
+    if not entry.message.viewerDidAuthor then
+        return require("jpr").error("you can only edit your own comments")
+    end
+    M.close(session)
+    require("jpr.comments.compose").open_edit(session, entry.message)
+end
+
+local function bind_popup_keys(session, buf)
+    local map = function(lhs, handler, desc)
+        vim.keymap.set("n", lhs, handler, { buffer = buf, nowait = true, silent = true, desc = desc })
+    end
+    map("q", function() M.close(session) end, "Close thread popup")
+    map("<Esc>", function() M.close(session) end, "Close thread popup")
+    map("R", function() toggle_resolved(session) end, "Resolve or unresolve thread")
+    map("+", function() pick_reaction(session) end, "Toggle reaction on message")
+    map("d", function() delete_current_message(session) end, "Delete own message")
+    map("X", function() retry_current_message(session) end, "Retry failed message")
+    map("r", function() open_reply(session) end, "Reply to thread")
+    map("e", function() open_edit(session) end, "Edit own message")
+end
+
+local function paint_popup(popup, threads)
+    local layout = render.build_popup(threads)
+    popup.threads, popup.layout = threads, layout
+    vim.bo[popup.buf].modifiable = true
+    vim.api.nvim_buf_set_lines(popup.buf, 0, -1, false, layout.lines)
+    vim.bo[popup.buf].modifiable = false
+    vim.api.nvim_buf_clear_namespace(popup.buf, namespace, 0, -1)
+    for _, highlight in ipairs(layout.highlights) do
+        vim.api.nvim_buf_set_extmark(popup.buf, namespace, highlight.line, highlight.col_start, {
+            end_col = highlight.col_end,
+            hl_group = highlight.group,
+            strict = false,
+        })
+    end
+end
+
+local function merge_updated_thread(item, updated_thread)
+    local updated_messages = updated_thread.messages or {}
+    local outdated = item.outdated
+    if updated_thread.outdated ~= nil then
+        outdated = updated_thread.outdated
+    end
+    return vim.tbl_extend("force", item, {
+        state = updated_thread.state,
+        outdated = outdated,
+        messages = updated_messages,
+        messageCount = #updated_messages,
+    })
+end
+
+--- Updates the open popup in place when `updated_thread` changes, clamping the
+--- window height and cursor position if the rendered line count shrinks.
+function M.refresh_from_thread(session, updated_thread)
+    local popup = session and session.popup
+    if
+        not popup
+        or not updated_thread
+        or not popup.buf
+        or not vim.api.nvim_buf_is_valid(popup.buf)
+        or not popup.win
+        or not vim.api.nvim_win_is_valid(popup.win)
+    then
+        return
+    end
+    local target_id = updated_thread.id or updated_thread.threadId
+    local updated_list, matched = {}, false
+    for _, item in ipairs(popup.threads or {}) do
+        if item.threadId == target_id then
+            matched = true
+            updated_list[#updated_list + 1] = merge_updated_thread(item, updated_thread)
+        else
+            updated_list[#updated_list + 1] = item
+        end
+    end
+    if not matched then
+        return
+    end
+    local saved_cursor = vim.api.nvim_win_get_cursor(popup.win)
+    paint_popup(popup, updated_list)
+    if vim.api.nvim_win_is_valid(popup.win) then
+        pcall(vim.api.nvim_win_set_height, popup.win, clamp_popup_height(#popup.layout.lines))
+        local clamped_line = math.max(1, math.min(saved_cursor[1], #popup.layout.lines))
+        pcall(vim.api.nvim_win_set_cursor, popup.win, { clamped_line, saved_cursor[2] })
+    end
+end
+
+--- Opens the floating thread popup displaying `threads` at the cursor.
+function M.open(session, threads)
+    if not threads or #threads == 0 then
+        return require("jpr").info("no review thread on this line")
+    end
+    M.close(session)
+    local buf = vim.api.nvim_create_buf(false, true)
+    vim.bo[buf].buftype = "nofile"
+    vim.bo[buf].bufhidden = "wipe"
+    vim.bo[buf].filetype = "markdown"
+    local popup = { buf = buf, threads = threads }
+    paint_popup(popup, threads)
+    local width = math.min(84, math.max(52, vim.o.columns - 12))
+    popup.win = vim.api.nvim_open_win(buf, true, {
+        relative = "cursor",
+        row = 1,
+        col = 0,
+        width = width,
+        height = clamp_popup_height(#popup.layout.lines),
+        style = "minimal",
+        border = "rounded",
+        title = " Review Thread ",
+        title_pos = "center",
+    })
+    vim.api.nvim_set_option_value("wrap", true, { win = popup.win, scope = "local" })
+    session.popup = popup
+    vim.api.nvim_create_autocmd("BufWipeout", {
+        buffer = buf,
+        once = true,
+        callback = function()
+            if session.popup == popup then
+                session.popup = nil
+            end
+        end,
+    })
+    bind_popup_keys(session, buf)
+end
+
+return M

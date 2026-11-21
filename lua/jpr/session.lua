@@ -395,4 +395,23 @@ function M.jump_thread_current(step)
     require("jpr.views.threads").jump(session, step)
 end
 
+--- Opens the floating thread popup for the review thread(s) at the cursor
+--- in the active diff or stream buffer.
+function M.popup_current()
+    local session = M.current()
+    if not session then
+        return jpr().error("no pull request is open in this tab")
+    end
+    local win = vim.api.nvim_get_current_win()
+    local buf = vim.api.nvim_win_get_buf(win)
+    local line = vim.api.nvim_win_get_cursor(win)[1]
+    local threads
+    if is_stream_buffer(session, buf) then
+        threads = require("jpr.views.stream").threads_at_cursor(session, line, win)
+    else
+        threads = require("jpr.views.threads").threads_at_cursor(session, buf, line)
+    end
+    require("jpr.comments.popup").open(session, threads)
+end
+
 return M
