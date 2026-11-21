@@ -172,3 +172,96 @@ fn reports_graphql_errors() {
         1
     );
 }
+
+#[test]
+fn pending_review_also_parses_viewer_login() {
+    let data = parse_data_from_answer(
+        r#"{"data":{"viewer":{"login":"pablo"},"node":{"reviews":{"nodes":[
+            {"id":"PRR_other","viewerDidAuthor":false},
+            {"id":"PRR_mine","viewerDidAuthor":true}
+        ]}}}}"#,
+    )
+    .unwrap();
+    assert_eq!(parse_pending_review(&data).as_deref(), Some("PRR_mine"));
+    assert_eq!(parse_viewer_login(&data).as_deref(), Some("pablo"));
+}
+
+#[test]
+fn thread_comments_parse_full_database_id_authorship_and_non_empty_reactions() {
+    let data = parse_data_from_answer(
+        r#"{"data":{"node":{"headRefOid":"sha1","reviewThreads":{
+            "pageInfo":{"hasNextPage":false,"endCursor":null},
+            "nodes":[{
+                "id":"PRRT_1","isResolved":false,"isOutdated":false,
+                "subjectType":"LINE","path":"src/a.rs","line":4,"startLine":null,
+                "diffSide":"RIGHT","originalLine":4,"originalStartLine":null,
+                "comments":{"nodes":[{
+                    "id":"PRRC_1","fullDatabaseId":"123456789","body":"looks good",
+                    "createdAt":"2026-11-20T01:00:00Z","updatedAt":"2026-11-20T01:05:00Z",
+                    "state":"SUBMITTED","viewerDidAuthor":true,
+                    "author":{"login":"pablo","__typename":"User"},
+                    "reactionGroups":[
+                        {"content":"THUMBS_UP","viewerHasReacted":true,"reactors":{"totalCount":2}},
+                        {"content":"EYES","viewerHasReacted":false,"reactors":{"totalCount":0}}
+                    ]
+                }]}
+            }]
+        }}}}"#,
+    )
+    .unwrap();
+    let (_, threads, _) = parse_threads_page(&data).unwrap();
+    let comment = &threads[0].messages[0];
+    assert!(comment.viewer_did_author);
+    assert_eq!(comment.database_id.as_deref(), Some("123456789"));
+    assert_eq!(comment.reactions.len(), 1);
+    assert_eq!(comment.reactions[0].count, 2);
+    assert!(comment.reactions[0].viewer_has_reacted);
+}
+
+#[test]
+fn conversation_page_wraps_each_issue_comment_as_a_pr_anchored_thread() {
+    let data = parse_data_from_answer(
+        r#"{"data":{"node":{"comments":{
+            "pageInfo":{"hasNextPage":false,"endCursor":null},
+            "nodes":[{
+                "id":"IC_9","body":"top-level thought",
+                "createdAt":"2026-11-20T02:00:00Z","updatedAt":"2026-11-20T02:00:00Z",
+                "viewerDidAuthor":false,
+                "author":{"login":"alice","__typename":"User"},
+                "reactionGroups":[]
+            }]
+        }}}}"#,
+    )
+    .unwrap();
+    let (threads, next_cursor) = parse_conversation_page(&data).unwrap();
+    assert!(next_cursor.is_none());
+    assert_eq!(threads.len(), 1);
+    assert_eq!(threads[0].id, "IC_9");
+    assert_eq!(threads[0].anchor.kind, review_model::AnchorKind::Pr);
+    assert_eq!(threads[0].messages[0].body, "top-level thought");
+}
+
+#[test]
+fn mentions_put_participants_first_and_deduplicate_assignable_users() {
+    let data = parse_data_from_answer(
+        r#"{"data":{"node":{
+            "participants":{"nodes":[{"login":"bob"},{"login":"alice"}]},
+            "repository":{"assignableUsers":{"nodes":[{"login":"carol"},{"login":"bob"},{"login":"dave"}]}}
+        }}}"#,
+    )
+    .unwrap();
+    let candidates = parse_mentions(&data);
+    let pairs: Vec<(&str, bool)> = candidates
+        .iter()
+        .map(|item| (item.login.as_str(), item.is_participant))
+        .collect();
+    assert_eq!(
+        pairs,
+        [
+            ("bob", true),
+            ("alice", true),
+            ("carol", false),
+            ("dave", false),
+        ]
+    );
+}

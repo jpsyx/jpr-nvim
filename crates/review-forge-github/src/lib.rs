@@ -89,24 +89,27 @@ impl Forge for GhForge {
 
     fn fetch(&self, pr: &PullRequest) -> Result<ForgeSnapshot> {
         let mut head_sha = pr.head_sha.clone();
-        let threads = self.paged(graphql::THREADS, pr, |data| {
-            let (page_head_sha, threads, next_cursor) = graphql::parse_threads_page(data)?;
+        let mut threads = self.paged(graphql::THREADS, pr, |data| {
+            let (page_head_sha, page_threads, next_cursor) = graphql::parse_threads_page(data)?;
             if !page_head_sha.is_empty() {
                 head_sha = page_head_sha;
             }
-            Ok((threads, next_cursor))
+            Ok((page_threads, next_cursor))
         })?;
+        threads.extend(self.paged(graphql::CONVERSATION, pr, graphql::parse_conversation_page)?);
         let files = self.paged(graphql::FILES, pr, graphql::parse_files_page)?;
-        let pending_review = graphql::parse_pending_review(
-            &self.graphql(graphql::PENDING_REVIEW, &json!({ "pr": pr.node_id }))?,
-        );
+        let pending_data = self.graphql(graphql::PENDING_REVIEW, &json!({ "pr": pr.node_id }))?;
+        let pending_review_id = graphql::parse_pending_review(&pending_data);
+        let viewer_login = graphql::parse_viewer_login(&pending_data);
+        let mentions_data = self.graphql(graphql::MENTIONS, &json!({ "pr": pr.node_id }))?;
         Ok(ForgeSnapshot {
             head_sha,
-            has_pending_review: pending_review.is_some(),
-            pending_review_id: pending_review,
+            has_pending_review: pending_review_id.is_some(),
+            pending_review_id,
+            viewer_login,
             threads,
             files,
-            ..ForgeSnapshot::default()
+            mention_candidates: graphql::parse_mentions(&mentions_data),
         })
     }
 

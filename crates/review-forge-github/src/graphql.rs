@@ -1,15 +1,18 @@
 //! The GitHub GraphQL documents the forge sends, and pure parsing of the
 //! answers. Queries address the pull request by its node id.
 
+use std::collections::HashSet;
+
 use anyhow::{Context, Result, anyhow};
 use review_model::{
-    Anchor, AnchorKind, ChangedFile, Message, MessageSync, Origin, Side, Thread, ThreadState,
-    ViewedState,
+    Anchor, AnchorKind, ChangedFile, MentionCandidate, Message, MessageSync, Origin, Reaction,
+    ReactionContent, Side, Thread, ThreadState, ViewedState,
 };
 use serde_json::Value;
 
-/// The reviewer's pending review on a pull request, if any.
+/// The authenticated viewer's login and pending review on a pull request, if any.
 pub const PENDING_REVIEW: &str = r"query($pr: ID!) {
+  viewer { login }
   node(id: $pr) { ... on PullRequest {
     reviews(states: PENDING, first: 20) { nodes { id viewerDidAuthor } }
   } }
@@ -24,10 +27,36 @@ pub const THREADS: &str = r"query($pr: ID!, $after: String) {
       nodes {
         id isResolved isOutdated subjectType path line startLine diffSide originalLine originalStartLine
         comments(first: 100) {
-          nodes { id body url createdAt updatedAt state viewerDidAuthor author { login __typename } }
+          nodes {
+            id fullDatabaseId body url createdAt updatedAt state viewerDidAuthor
+            author { login __typename }
+            reactionGroups { content viewerHasReacted reactors { totalCount } }
+          }
         }
       }
     }
+  } }
+}";
+
+/// One page of top-level pull-request conversation comments.
+pub const CONVERSATION: &str = r"query($pr: ID!, $after: String) {
+  node(id: $pr) { ... on PullRequest {
+    comments(first: 100, after: $after) {
+      pageInfo { hasNextPage endCursor }
+      nodes {
+        id body createdAt updatedAt viewerDidAuthor
+        author { login __typename }
+        reactionGroups { content viewerHasReacted reactors { totalCount } }
+      }
+    }
+  } }
+}";
+
+/// Pull-request participants and repository assignable users for `@mention` completion.
+pub const MENTIONS: &str = r"query($pr: ID!) {
+  node(id: $pr) { ... on PullRequest {
+    participants(first: 100) { nodes { login } }
+    repository { assignableUsers(first: 100) { nodes { login } } }
   } }
 }";
 
@@ -85,6 +114,12 @@ pub fn error_message(stdout: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// The authenticated viewer's login in `PENDING_REVIEW`.
+#[must_use]
+pub fn parse_viewer_login(data: &Value) -> Option<String> {
+    data.pointer("/viewer/login")?.as_str().map(str::to_owned)
+}
+
 /// The viewer's pending review id among `PENDING_REVIEW`'s nodes.
 #[must_use]
 pub fn parse_pending_review(data: &Value) -> Option<String> {
@@ -94,6 +129,59 @@ pub fn parse_pending_review(data: &Value) -> Option<String> {
         .find(|review| review["viewerDidAuthor"] == Value::Bool(true))
         .and_then(|review| review["id"].as_str())
         .map(str::to_owned)
+}
+
+/// Parses one page of `CONVERSATION` into `AnchorKind::Pr` threads.
+pub fn parse_conversation_page(data: &Value) -> Result<(Vec<Thread>, Option<String>)> {
+    let comments = data
+        .pointer("/node/comments")
+        .context("GitHub returned no pull request conversation comments")?;
+    let threads = comments["nodes"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+        .iter()
+        .filter_map(parse_issue_comment_thread)
+        .collect();
+    Ok((threads, next_cursor(comments)))
+}
+
+pub(crate) fn parse_issue_comment_thread(node: &Value) -> Option<Thread> {
+    let message = parse_comment(node)?;
+    Some(Thread {
+        id: message.id.clone(),
+        origin: Origin::Github,
+        anchor: Anchor::pr(),
+        state: ThreadState::Open,
+        outdated: false,
+        messages: vec![message],
+    })
+}
+
+/// Parses `MENTIONS`, placing PR participants ahead of other assignable users.
+#[must_use]
+pub fn parse_mentions(data: &Value) -> Vec<MentionCandidate> {
+    let mut seen = HashSet::new();
+    let mut candidates = Vec::new();
+    let mut push_group = |pointer: &str, is_participant: bool| {
+        let Some(nodes) = data.pointer(pointer).and_then(Value::as_array) else {
+            return;
+        };
+        for node in nodes {
+            let Some(login) = node["login"].as_str().filter(|login| !login.is_empty()) else {
+                continue;
+            };
+            if seen.insert(login.to_owned()) {
+                candidates.push(MentionCandidate {
+                    login: login.to_owned(),
+                    is_participant,
+                });
+            }
+        }
+    };
+    push_group("/node/participants/nodes", true);
+    push_group("/node/repository/assignableUsers/nodes", false);
+    candidates
 }
 
 /// Parses one page of `THREADS`.
@@ -132,7 +220,7 @@ pub fn parse_files_page(data: &Value) -> Result<FilesPage> {
     Ok((parsed, next_cursor(files)))
 }
 
-fn parse_thread(node: &Value) -> Option<Thread> {
+pub(crate) fn parse_thread(node: &Value) -> Option<Thread> {
     let path = node["path"].as_str()?.to_owned();
     let comments = node.pointer("/comments/nodes")?.as_array()?;
     Some(Thread {
@@ -198,7 +286,7 @@ fn parse_line_anchor(node: &Value, path: String, side: Side, end: u64) -> Anchor
     }
 }
 
-fn parse_comment(node: &Value) -> Option<Message> {
+pub(crate) fn parse_comment(node: &Value) -> Option<Message> {
     let login = node
         .pointer("/author/login")
         .and_then(Value::as_str)
@@ -219,12 +307,42 @@ fn parse_comment(node: &Value) -> Option<Message> {
         } else {
             MessageSync::Published
         }),
-        viewer_did_author: false,
-        database_id: None,
-        reactions: Vec::new(),
+        viewer_did_author: node["viewerDidAuthor"].as_bool().unwrap_or(false),
+        database_id: parse_database_id(node),
+        reactions: parse_reactions(node),
         sync_error: None,
         recoverable_body: None,
     })
+}
+
+pub(crate) fn parse_reactions(node: &Value) -> Vec<Reaction> {
+    node["reactionGroups"]
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+        .iter()
+        .filter_map(|group| {
+            let count_u64 = group.pointer("/reactors/totalCount")?.as_u64()?;
+            if count_u64 == 0 {
+                return None;
+            }
+            let content = ReactionContent::parse(group["content"].as_str()?)?;
+            Some(Reaction {
+                content,
+                count: u32::try_from(count_u64).unwrap_or(u32::MAX),
+                viewer_has_reacted: group["viewerHasReacted"].as_bool().unwrap_or(false),
+            })
+        })
+        .collect()
+}
+
+fn parse_database_id(node: &Value) -> Option<String> {
+    if let Some(text) = node["fullDatabaseId"].as_str() {
+        return Some(text.to_owned());
+    }
+    node["fullDatabaseId"]
+        .as_u64()
+        .map(|database_id| database_id.to_string())
 }
 
 fn next_cursor(connection: &Value) -> Option<String> {
