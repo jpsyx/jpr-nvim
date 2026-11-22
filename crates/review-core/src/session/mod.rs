@@ -26,6 +26,12 @@ use crate::ports::{Ports, StoreSnapshot};
 use crate::presenter::session_view;
 use crate::viewed::apply_queued;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PushedHead {
+    base_pr_head_sha: String,
+    pushed_sha: String,
+}
+
 /// One pull request's review session: the facade every frontend talks to.
 ///
 /// It owns the session state, reaches the outside world only through its
@@ -40,7 +46,8 @@ pub struct ReviewSession {
     base_cache: BaseCache,
     disk_digests: Option<BTreeMap<String, u64>>,
     last_worktree_status: Option<WorktreeStatus>,
-    pushed_head_sha: Option<String>,
+    pushed_head: Option<PushedHead>,
+    pending_head_move_from: Option<String>,
 }
 
 impl ReviewSession {
@@ -67,7 +74,8 @@ impl ReviewSession {
             base_cache: BaseCache::default(),
             disk_digests: None,
             last_worktree_status: None,
-            pushed_head_sha: None,
+            pushed_head: None,
+            pending_head_move_from: None,
         })
     }
 
@@ -116,13 +124,16 @@ impl ReviewSession {
     }
 
     pub(super) fn effective_remote_head_sha(&self) -> Option<&str> {
-        self.pushed_head_sha.as_deref().or_else(|| {
-            self.saved
-                .session
-                .pr
-                .as_ref()
-                .map(|pr| pr.head_sha.as_str())
-        })
+        self.pushed_head
+            .as_ref()
+            .map(|pushed| pushed.pushed_sha.as_str())
+            .or_else(|| {
+                self.saved
+                    .session
+                    .pr
+                    .as_ref()
+                    .map(|pr| pr.head_sha.as_str())
+            })
     }
 
     pub(super) fn read_worktree_status(&self) -> Option<WorktreeStatus> {

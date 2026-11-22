@@ -6,7 +6,7 @@ use review_model::{Event, HeadMoveOutcome, Origin, PullRequest, SessionView, Syn
 use super::ReviewSession;
 use crate::comments::{merge_unflushed_threads, reconcile_concurrent_edits, record_agreed_bodies};
 use crate::ports::{FastForwardOutcome, ForgeSnapshot};
-use crate::reanchor::collect_changed_digest_paths;
+use crate::reanchor::{collect_changed_digest_paths, hash_bounded_file_bytes};
 use crate::viewed::{apply_queued, drop_stale_marks};
 
 struct HeadMoveSummary {
@@ -104,13 +104,13 @@ impl ReviewSession {
         // GitHub may lag behind a mark that lands now, so the pull that
         // follows can briefly undo it until a later pull.
         let has_landed = self.send_queued();
-        match self.pull() {
-            Ok((pr, snapshot)) => self.apply_pull(pr, snapshot, now),
-            Err(error) => {
-                self.fail_sync(&error, now, has_landed);
-                Err(error)
-            }
+        let result = self
+            .pull()
+            .and_then(|(pr, snapshot)| self.apply_pull(pr, snapshot, now));
+        if let Err(error) = &result {
+            self.fail_sync(error, now, has_landed);
         }
+        result
     }
 
     /// Records and announces a failed pull. Marks that landed before it are
@@ -149,15 +149,24 @@ impl ReviewSession {
             .pr
             .as_ref()
             .map(|existing_pr| existing_pr.head_sha.clone());
+        let prior_head_sha = self.pending_head_move_from.clone().or(previous_head_sha);
         let pr_head_sha = pr.head_sha.clone();
-        self.reconcile_pulled_state(pr, snapshot, now)?;
-        let view = if let Some(previous_sha) =
-            previous_head_sha.filter(|prior_sha| prior_sha != &pr_head_sha)
+        if let Some(prior_sha) = prior_head_sha
+            .as_ref()
+            .filter(|prior_sha| *prior_sha != &pr_head_sha)
         {
-            self.handle_head_moved(&previous_sha, &pr_head_sha)?
+            self.pending_head_move_from = Some(prior_sha.clone());
         } else {
-            self.view()
-        };
+            self.pending_head_move_from = None;
+        }
+        self.reconcile_pulled_state(pr, snapshot, now)?;
+        let view =
+            if let Some(prior_sha) = prior_head_sha.filter(|prior_sha| prior_sha != &pr_head_sha) {
+                self.handle_head_moved(&prior_sha, &pr_head_sha)?
+            } else {
+                self.seed_pulled_file_digests();
+                self.view()
+            };
         self.publish(&Event::Synced {
             view: Box::new(view.clone()),
         });
@@ -170,6 +179,7 @@ impl ReviewSession {
         mut snapshot: ForgeSnapshot,
         now: u64,
     ) -> Result<()> {
+        let pulled_head_sha = pr.head_sha.clone();
         self.saved.session.pr = Some(pr);
         self.saved.session.last_synced_at = Some(now);
         reconcile_concurrent_edits(
@@ -197,7 +207,13 @@ impl ReviewSession {
         self.saved.files = snapshot.files;
         self.sync = SyncState::Synced { at: now };
         self.split_and_save_threads()?;
-        self.pushed_head_sha = None;
+        if self
+            .pushed_head
+            .as_ref()
+            .is_some_and(|pushed| pushed.base_pr_head_sha != pulled_head_sha)
+        {
+            self.pushed_head = None;
+        }
         Ok(())
     }
 
@@ -206,9 +222,14 @@ impl ReviewSession {
             fast_forward_result_to_head_move(self.ports.workspace.fast_forward_to(pr_head_sha));
         if matches!(
             summary.outcome,
-            HeadMoveOutcome::FastForwarded | HeadMoveOutcome::RestoreConflict
+            HeadMoveOutcome::AlreadyAtTarget
+                | HeadMoveOutcome::FastForwarded
+                | HeadMoveOutcome::RestoreConflict
         ) {
             self.reanchor_after_head_move(&summary.conflicted_paths)?;
+        }
+        if summary.outcome != HeadMoveOutcome::Failed {
+            self.pending_head_move_from = None;
         }
         let view = self.view();
         self.publish(&Event::HeadMoved {
@@ -236,6 +257,22 @@ impl ReviewSession {
         }
         self.disk_digests = Some(current_digests);
         Ok(())
+    }
+
+    fn seed_pulled_file_digests(&mut self) {
+        let Some(digests) = self.disk_digests.as_mut() else {
+            return;
+        };
+        for file in &self.saved.files {
+            if !digests.contains_key(&file.path)
+                && let Ok(Some(bytes)) = self.ports.workspace.file_on_disk(&file.path)
+            {
+                digests.insert(
+                    file.path.clone(),
+                    hash_bounded_file_bytes(&bytes, super::diffs::MAX_DIFF_BYTES),
+                );
+            }
+        }
     }
 }
 
@@ -559,5 +596,109 @@ mod tests {
 
         assert_eq!(find_thread_state(&session, &thread_a.id), (Some(2), false));
         assert_eq!(find_thread_state(&session, &thread_b.id), (Some(3), false));
+    }
+
+    #[test]
+    fn poll_worktree_files_after_restore_conflict_waits_for_conflict_resolution_to_reanchor() {
+        use review_model::{Anchor, Origin};
+        let fakes = Fakes::new(100);
+        fakes
+            .workspace
+            .put_disk("src/a.rs", "fn a() {}\nlet a = 1;\n");
+        let mut session = fakes.open_synced();
+        let (thread_a, _) = session
+            .comment_with_origin(Anchor::line("src/a.rs", 2), "Keep", Origin::Local)
+            .unwrap();
+
+        advance_remote_head(&fakes, "def456");
+        fakes.workspace.set_fast_forward_outcome(Some(Ok(
+            crate::ports::FastForwardOutcome::RestoreConflict {
+                previous_sha: "abc123".into(),
+                head_sha: "def456".into(),
+                conflicted_paths: vec!["src/a.rs".into()],
+            },
+        )));
+        fakes
+            .workspace
+            .put_disk("src/a.rs", "<<<<<<<\nfn a_remote() {}\n>>>>>>>\n");
+        session.sync().unwrap();
+
+        assert_eq!(session.poll_worktree_files().unwrap(), None);
+        assert_eq!(find_thread_state(&session, &thread_a.id), (Some(2), false));
+        fakes
+            .workspace
+            .put_disk("src/a.rs", "// resolved\nfn a() {}\nlet a = 1;\n");
+        assert_eq!(
+            session.poll_worktree_files().unwrap(),
+            Some(vec!["src/a.rs".to_owned()])
+        );
+        assert_eq!(find_thread_state(&session, &thread_a.id), (Some(3), false));
+    }
+
+    #[test]
+    fn sync_retries_failed_fast_forward_on_next_sync_at_same_remote_head() {
+        use review_model::{Anchor, HeadMoveOutcome, Origin};
+        let fakes = Fakes::new(100);
+        fakes
+            .workspace
+            .put_disk("src/a.rs", "fn f() {}\nlet x = 1;\n");
+        let mut session = fakes.open_synced();
+        let (thread, _) = session
+            .comment_with_origin(Anchor::line("src/a.rs", 2), "Why 1?", Origin::Local)
+            .unwrap();
+        let events = session.subscribe();
+
+        advance_remote_head(&fakes, "def456");
+        fakes
+            .workspace
+            .set_fast_forward_outcome(Some(Err("index.lock busy".into())));
+        session.sync().unwrap();
+        let (_, _, first_outcome, _, _, _) = take_head_moved_and_synced(&events);
+        assert_eq!(first_outcome, HeadMoveOutcome::Failed);
+        assert_eq!(find_thread_state(&session, &thread.id), (Some(2), false));
+
+        fakes.workspace.set_fast_forward_outcome(None);
+        fakes
+            .workspace
+            .put_disk("src/a.rs", "// upstream\nfn f() {}\nlet x = 1;\n");
+        session.sync().unwrap();
+        let (prior_sha, head_sha, second_outcome, _, _, _) = take_head_moved_and_synced(&events);
+        assert_eq!(
+            (prior_sha.as_str(), head_sha.as_str()),
+            ("abc123", "def456")
+        );
+        assert_eq!(second_outcome, HeadMoveOutcome::FastForwarded);
+        assert_eq!(find_thread_state(&session, &thread.id), (Some(3), false));
+    }
+
+    #[test]
+    fn sync_marks_failed_and_retries_head_move_when_apply_pull_save_fails() {
+        use review_model::{HeadMoveOutcome, SyncState};
+        let fakes = Fakes::new(100);
+        let mut session = fakes.open_synced();
+        let events = session.subscribe();
+
+        advance_remote_head(&fakes, "def456");
+        fakes.clock.set(200);
+        fakes.store.fail_saves_with(Some("disk full"));
+        let error = session.sync().unwrap_err();
+        assert!(error.to_string().contains("disk full"));
+        assert!(matches!(
+            session.view().sync,
+            SyncState::Failed { at: 200, .. }
+        ));
+        assert!(matches!(
+            events.try_recv().unwrap(),
+            Event::SyncFailed { .. }
+        ));
+
+        fakes.store.fail_saves_with(None);
+        session.sync().unwrap();
+        let (prior_sha, head_sha, outcome, _, _, _) = take_head_moved_and_synced(&events);
+        assert_eq!(
+            (prior_sha.as_str(), head_sha.as_str()),
+            ("abc123", "def456")
+        );
+        assert_eq!(outcome, HeadMoveOutcome::FastForwarded);
     }
 }

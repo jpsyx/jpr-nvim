@@ -55,7 +55,9 @@ impl ReviewSession {
     pub fn poll_worktree_files(&mut self) -> Result<Option<Vec<String>>> {
         let current_digests = self.collect_worktree_digests();
         let Some(previous_digests) = self.disk_digests.as_ref() else {
-            self.disk_digests = Some(current_digests);
+            if self.saved.session.pr.is_some() || !current_digests.is_empty() {
+                self.disk_digests = Some(current_digests);
+            }
             self.poll_worktree_status_change();
             return Ok(None);
         };
@@ -507,5 +509,36 @@ mod tests {
             Some(vec!["src/a.rs".to_owned()])
         );
         assert_eq!(session.threads().last().unwrap().anchor.start, Some(4));
+    }
+
+    #[test]
+    fn poll_worktree_files_before_initial_sync_does_not_emit_spurious_files_changed_after_sync() {
+        let fakes = Fakes::new(100);
+        fakes.workspace.put_disk("src/a.rs", "fn a() {}\n");
+        fakes.workspace.put_disk("src/b.rs", "fn b() {}\n");
+        let mut session = fakes.open();
+
+        assert_eq!(session.poll_worktree_files().unwrap(), None);
+        session.sync().unwrap();
+
+        let events = session.subscribe();
+        assert_eq!(session.poll_worktree_files().unwrap(), None);
+        assert!(events.try_recv().is_err());
+
+        fakes.workspace.put_base("src/c.rs", "fn c() {}\n");
+        fakes.workspace.put_disk("src/c.rs", "fn c() {}\n");
+        let mut expanded = super::super::test_support::create_snapshot();
+        expanded.files.push(review_model::ChangedFile {
+            path: "src/c.rs".into(),
+            additions: 1,
+            deletions: 0,
+            viewed: review_model::ViewedState::Unviewed,
+        });
+        fakes.forge.set_snapshot(expanded);
+        session.sync().unwrap();
+        let _ = events.try_recv().unwrap();
+
+        assert_eq!(session.poll_worktree_files().unwrap(), None);
+        assert!(events.try_recv().is_err());
     }
 }

@@ -208,13 +208,21 @@ pub(crate) fn hash_bounded_file_bytes(bytes: &[u8], max_bytes: usize) -> u64 {
     hash
 }
 
+fn has_forbidden_path_char(ch: char) -> bool {
+    ch.is_control()
+        || matches!(
+            ch,
+            '\u{2028}' | '\u{2029}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'
+        )
+}
+
 /// Validates that `path` is a safe repository-relative path with no traversal,
-/// backslashes, ASCII control bytes, or `.git` segments.
+/// backslashes, control or bidi-override characters, or `.git` segments.
 pub fn validate_safe_relative_path(path: &str) -> Result<()> {
     if path.is_empty()
         || path.starts_with('/')
         || path.contains('\\')
-        || path.bytes().any(|byte| byte.is_ascii_control())
+        || path.chars().any(has_forbidden_path_char)
         || path.split('/').any(|segment| {
             segment.is_empty()
                 || segment == "."
@@ -393,8 +401,17 @@ mod tests {
     }
 
     #[test]
-    fn validate_safe_relative_path_rejects_ascii_control_characters() {
-        for bad_path in ["src/a\nb.rs", "src/a\rb.rs", "src/a\tb.rs", "src/a\x1bb.rs"] {
+    fn validate_safe_relative_path_rejects_control_and_bidi_characters() {
+        for bad_path in [
+            "src/a\nb.rs",
+            "src/a\rb.rs",
+            "src/a\tb.rs",
+            "src/a\x1bb.rs",
+            "src/a\u{009b}b.rs",
+            "src/a\u{2028}b.rs",
+            "src/a\u{202e}b.rs",
+            "src/a\u{2066}b.rs",
+        ] {
             assert!(
                 validate_safe_relative_path(bad_path).is_err(),
                 "expected {bad_path:?} to fail validation"

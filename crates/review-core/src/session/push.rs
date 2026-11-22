@@ -3,7 +3,7 @@
 use anyhow::{Result, bail};
 use review_model::{PushResult, WorktreeStatus};
 
-use super::ReviewSession;
+use super::{PushedHead, ReviewSession};
 
 impl ReviewSession {
     /// Pushes `HEAD` to the synced pull request's `head_ref`, then runs a
@@ -15,8 +15,7 @@ impl ReviewSession {
             (pr.head_ref.clone(), pr.head_sha.clone())
         };
         let effective_remote_sha = self
-            .pushed_head_sha
-            .as_deref()
+            .effective_remote_head_sha()
             .unwrap_or(&pr_head_sha)
             .to_owned();
         let local_head_sha = self.ports.workspace.head_commit()?;
@@ -26,7 +25,10 @@ impl ReviewSession {
             .worktree_status(Some(&effective_remote_sha))?;
         validate_push_status(&status, &local_head_sha, &effective_remote_sha)?;
         let head_sha = self.ports.workspace.push_head(&head_ref)?;
-        self.pushed_head_sha = Some(head_sha.clone());
+        self.pushed_head = Some(PushedHead {
+            base_pr_head_sha: pr_head_sha,
+            pushed_sha: head_sha.clone(),
+        });
         match self.sync() {
             Ok(view) => Ok(PushResult {
                 is_pushed: true,
@@ -238,5 +240,43 @@ mod tests {
         fakes.workspace.fail_push_with(Some("remote rejected"));
         let push_error = session.push().unwrap_err();
         assert!(push_error.to_string().contains("remote rejected"));
+    }
+
+    #[test]
+    fn push_retains_pushed_head_across_lagging_sync_until_forge_head_advances() {
+        let fakes = Fakes::new(100);
+        let mut session = fakes.open_synced();
+        fakes.workspace.set_head_commit("newhead1");
+        fakes.workspace.set_worktree_status(Some(WorktreeStatus {
+            is_dirty: false,
+            ahead: 1,
+            behind: 0,
+            modified_paths: Vec::new(),
+        }));
+
+        let push_result = session.push().unwrap();
+        assert!(push_result.sync_error.is_none());
+        assert_eq!(
+            fakes.workspace.status_remote_shas().last(),
+            Some(&Some("newhead1".to_owned()))
+        );
+        let retry_error = session.push().unwrap_err();
+        assert!(retry_error.to_string().contains("already up to date"));
+
+        let mut updated_pr = sample_pr();
+        updated_pr.head_sha = "newhead1".into();
+        fakes.forge.set_pr(updated_pr);
+        let mut updated_snapshot = create_snapshot();
+        updated_snapshot.head_sha = "newhead1".into();
+        fakes.forge.set_snapshot(updated_snapshot);
+        let events = session.subscribe();
+        session.sync().unwrap();
+        assert!(matches!(
+            events.try_recv().unwrap(),
+            Event::HeadMoved {
+                outcome: HeadMoveOutcome::AlreadyAtTarget,
+                ..
+            }
+        ));
     }
 }

@@ -82,9 +82,6 @@ impl ReviewSession {
     }
 
     fn file_texts_after_prepare(&mut self, path: &str) -> Result<(FileText, FileText)> {
-        if !self.saved.files.iter().any(|file| file.path == path) {
-            bail!("{path} is not a file this pull request changes");
-        }
         let base = self.base_text_after_prepare(path)?;
         let bytes = self.ports.workspace.file_on_disk(path)?;
         if is_too_large(bytes.as_deref()) {
