@@ -15,12 +15,13 @@ use super::ReviewSession;
 /// to show instead of diffed, so it is never kept in memory or line diffed.
 pub(super) const MAX_DIFF_BYTES: usize = 4 * 1024 * 1024;
 
-/// The base side of the diffs, kept while the pull request's base commit
-/// stays the same: its merge base, the renames since it, and the base texts
-/// read so far.
+/// The base side of the diffs, kept while the pull request's base commit and
+/// checked-out `HEAD` stay the same: its merge base, the renames since it, and
+/// the base texts read so far.
 #[derive(Debug, Default)]
 pub(super) struct BaseCache {
     base_sha: String,
+    head_sha: String,
     pub(super) merge_base: String,
     /// New path to old path, for files renamed since the merge base.
     renamed_from: HashMap<String, String>,
@@ -111,14 +112,19 @@ impl ReviewSession {
         Ok(text)
     }
 
-    /// Finds the merge base for the pull request's base commit, unless it is
-    /// already known, and starts a fresh cache for it.
+    /// Finds the merge base for the pull request's base commit and current
+    /// `HEAD`, unless both still match the cache, and starts a fresh cache
+    /// when either commit moves.
     pub(super) fn prepare_base(&mut self) -> Result<()> {
         let base_sha = self.synced_pr()?.base_sha.clone();
         if base_sha.is_empty() {
             bail!("the base commit is not known yet; sync with GitHub first");
         }
-        if !self.base_cache.merge_base.is_empty() && self.base_cache.base_sha == base_sha {
+        let head_sha = self.ports.workspace.head_commit()?;
+        if !self.base_cache.merge_base.is_empty()
+            && self.base_cache.base_sha == base_sha
+            && self.base_cache.head_sha == head_sha
+        {
             return Ok(());
         }
         let merge_base = self.ports.workspace.merge_base(&base_sha)?;
@@ -131,6 +137,7 @@ impl ReviewSession {
             .collect();
         self.base_cache = BaseCache {
             base_sha,
+            head_sha,
             merge_base,
             renamed_from,
             texts: HashMap::new(),
@@ -210,6 +217,21 @@ mod tests {
         session.file_diff("src/a.rs").unwrap();
         session.stream(ViewMode::Unified).unwrap();
         assert_eq!(fakes.workspace.merge_base_calls(), 1);
+    }
+
+    #[test]
+    fn moving_head_commit_invalidates_base_cache_and_recomputes_merge_base() {
+        let fakes = create_fakes();
+        let mut session = fakes.open_synced();
+        session.file_diff("src/a.rs").unwrap();
+        assert_eq!(fakes.workspace.merge_base_calls(), 1);
+
+        fakes.workspace.set_head_commit("def456");
+        session.file_diff("src/a.rs").unwrap();
+        assert_eq!(fakes.workspace.merge_base_calls(), 2);
+
+        session.file_diff("src/a.rs").unwrap();
+        assert_eq!(fakes.workspace.merge_base_calls(), 2);
     }
 
     #[test]

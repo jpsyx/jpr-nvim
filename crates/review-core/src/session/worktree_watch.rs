@@ -50,15 +50,18 @@ impl ReviewSession {
     }
 
     /// Polls tracked worktree files on disk for content changes, re-anchoring
-    /// any affected `Origin::Local` threads and emitting [`Event::FilesChanged`].
+    /// any affected `Origin::Local` threads and emitting [`Event::FilesChanged`]
+    /// or [`Event::WorktreeStatusChanged`].
     pub fn poll_worktree_files(&mut self) -> Result<Option<Vec<String>>> {
         let current_digests = self.collect_worktree_digests();
         let Some(previous_digests) = self.disk_digests.as_ref() else {
             self.disk_digests = Some(current_digests);
+            self.poll_worktree_status_change();
             return Ok(None);
         };
         let changed_paths = collect_changed_digest_paths(previous_digests, &current_digests);
         if changed_paths.is_empty() {
+            self.poll_worktree_status_change();
             return Ok(None);
         }
         let did_reanchor = self.reanchor_changed_local_threads(&changed_paths);
@@ -67,6 +70,7 @@ impl ReviewSession {
         }
         self.disk_digests = Some(current_digests);
         let view = self.view();
+        self.last_worktree_status = Some(view.worktree_status.clone());
         self.publish(&Event::FilesChanged {
             paths: changed_paths.clone(),
             view: Box::new(view.clone()),
@@ -79,6 +83,23 @@ impl ReviewSession {
         Ok(Some(changed_paths))
     }
 
+    fn poll_worktree_status_change(&mut self) {
+        let Some(status) = self.read_worktree_status() else {
+            return;
+        };
+        let should_publish = self
+            .last_worktree_status
+            .as_ref()
+            .is_some_and(|previous| previous != &status);
+        self.last_worktree_status = Some(status);
+        if should_publish {
+            let view = self.view();
+            self.publish(&Event::WorktreeStatusChanged {
+                view: Box::new(view),
+            });
+        }
+    }
+
     fn read_anchor_disk_state(&self, path: &str) -> Result<AnchorDiskState> {
         let Some(bytes) = self.ports.workspace.file_on_disk(path)? else {
             return Ok(AnchorDiskState::Missing);
@@ -87,6 +108,16 @@ impl ReviewSession {
             bytes_to_utf8_text(bytes)
                 .map_or(AnchorDiskState::UnreadableText, AnchorDiskState::Utf8),
         )
+    }
+
+    pub(super) fn collect_local_thread_paths(&self) -> Vec<String> {
+        self.threads
+            .iter()
+            .filter(|thread| thread.origin == Origin::Local)
+            .filter_map(|thread| thread.anchor.file.clone())
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect()
     }
 
     fn collect_candidate_paths(&mut self) -> BTreeSet<String> {
@@ -122,7 +153,7 @@ impl ReviewSession {
         candidates
     }
 
-    fn collect_worktree_digests(&mut self) -> BTreeMap<String, u64> {
+    pub(super) fn collect_worktree_digests(&mut self) -> BTreeMap<String, u64> {
         let candidates = self.collect_candidate_paths();
         let mut digests = BTreeMap::new();
         for path in candidates {
@@ -149,7 +180,7 @@ impl ReviewSession {
         digests
     }
 
-    fn reanchor_changed_local_threads(&mut self, changed_paths: &[String]) -> bool {
+    pub(super) fn reanchor_changed_local_threads(&mut self, changed_paths: &[String]) -> bool {
         let changed_set: BTreeSet<&str> = changed_paths.iter().map(String::as_str).collect();
         let mut loaded_texts: BTreeMap<String, LoadedDiskText> = BTreeMap::new();
         let mut did_reanchor = false;
@@ -351,5 +382,67 @@ mod tests {
         let missing_updated = session.threads().last().unwrap();
         assert_eq!(missing_updated.anchor.snapshot, None);
         assert!(missing_updated.outdated);
+    }
+
+    #[test]
+    fn poll_worktree_files_emits_worktree_status_changed_when_git_status_changes_without_file_edits()
+     {
+        let fakes = Fakes::new(100);
+        fakes.workspace.put_disk("src/a.rs", "fn f() {}\n");
+        let mut session = fakes.open_synced();
+        let events = session.subscribe();
+
+        assert_eq!(session.poll_worktree_files().unwrap(), None);
+        assert!(events.try_recv().is_err());
+
+        fakes
+            .workspace
+            .set_worktree_status(Some(review_model::WorktreeStatus {
+                is_dirty: false,
+                ahead: 1,
+                behind: 0,
+                modified_paths: Vec::new(),
+            }));
+        assert_eq!(session.poll_worktree_files().unwrap(), None);
+        match events.try_recv().unwrap() {
+            Event::WorktreeStatusChanged { view } => {
+                assert!(!view.worktree_status.is_dirty);
+                assert_eq!(view.worktree_status.ahead, 1);
+            }
+            other => panic!("expected WorktreeStatusChanged, got {other:?}"),
+        }
+
+        assert_eq!(session.poll_worktree_files().unwrap(), None);
+        assert!(events.try_recv().is_err());
+    }
+
+    #[test]
+    fn poll_worktree_files_does_not_repeat_status_after_files_changed_until_commit() {
+        let fakes = Fakes::new(100);
+        fakes.workspace.put_at("abc123", "src/a.rs", "clean\n");
+        fakes.workspace.put_disk("src/a.rs", "clean\n");
+        let mut session = fakes.open_synced();
+        assert_eq!(session.poll_worktree_files().unwrap(), None);
+        let events = session.subscribe();
+
+        fakes.workspace.put_disk("src/a.rs", "edited\n");
+        assert_eq!(
+            session.poll_worktree_files().unwrap(),
+            Some(vec!["src/a.rs".to_owned()])
+        );
+        match events.try_recv().unwrap() {
+            Event::FilesChanged { view, .. } => assert!(view.worktree_status.is_dirty),
+            other => panic!("expected FilesChanged, got {other:?}"),
+        }
+        assert_eq!(session.poll_worktree_files().unwrap(), None);
+        assert!(events.try_recv().is_err());
+
+        fakes.workspace.set_head_commit("commit2");
+        fakes.workspace.put_at("commit2", "src/a.rs", "edited\n");
+        assert_eq!(session.poll_worktree_files().unwrap(), None);
+        match events.try_recv().unwrap() {
+            Event::WorktreeStatusChanged { view } => assert!(!view.worktree_status.is_dirty),
+            other => panic!("expected WorktreeStatusChanged, got {other:?}"),
+        }
     }
 }

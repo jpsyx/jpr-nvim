@@ -6,6 +6,7 @@ mod agent_loop;
 mod comments;
 mod diffs;
 mod local;
+mod push;
 mod submit;
 mod sync;
 #[cfg(test)]
@@ -19,7 +20,7 @@ use std::collections::BTreeMap;
 use std::sync::mpsc::{self, Receiver, Sender};
 
 use anyhow::{Context, Result};
-use review_model::{Event, Origin, PullRequest, SessionView, SyncState, Thread};
+use review_model::{Event, Origin, PullRequest, SessionView, SyncState, Thread, WorktreeStatus};
 
 use crate::ports::{Ports, StoreSnapshot};
 use crate::presenter::session_view;
@@ -38,6 +39,7 @@ pub struct ReviewSession {
     subscribers: Vec<Sender<Event>>,
     base_cache: BaseCache,
     disk_digests: Option<BTreeMap<String, u64>>,
+    last_worktree_status: Option<WorktreeStatus>,
 }
 
 impl ReviewSession {
@@ -63,6 +65,7 @@ impl ReviewSession {
             subscribers: Vec::new(),
             base_cache: BaseCache::default(),
             disk_digests: None,
+            last_worktree_status: None,
         })
     }
 
@@ -95,17 +98,7 @@ impl ReviewSession {
     /// The current status view.
     #[must_use]
     pub fn view(&self) -> SessionView {
-        let remote_head_sha = self
-            .saved
-            .session
-            .pr
-            .as_ref()
-            .map(|pr| pr.head_sha.as_str());
-        let worktree_status = self
-            .ports
-            .workspace
-            .worktree_status(remote_head_sha)
-            .unwrap_or_default();
+        let worktree_status = self.current_worktree_status();
         session_view(
             self.saved.session.pr.as_ref(),
             &self.saved.files,
@@ -114,6 +107,22 @@ impl ReviewSession {
             self.saved.registry.queued_viewed.len() + self.saved.registry.queued_ops.len(),
             &worktree_status,
         )
+    }
+
+    pub(super) fn read_worktree_status(&self) -> Option<WorktreeStatus> {
+        let remote_head_sha = self
+            .saved
+            .session
+            .pr
+            .as_ref()
+            .map(|pr| pr.head_sha.as_str());
+        self.ports.workspace.worktree_status(remote_head_sha).ok()
+    }
+
+    pub(super) fn current_worktree_status(&self) -> WorktreeStatus {
+        self.read_worktree_status()
+            .or_else(|| self.last_worktree_status.clone())
+            .unwrap_or_default()
     }
 
     /// Partitions GitHub and local threads into their separate store slices

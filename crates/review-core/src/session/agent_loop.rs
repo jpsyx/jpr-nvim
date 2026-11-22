@@ -10,10 +10,10 @@ use review_model::{
 
 use super::ReviewSession;
 use crate::agent::{
-    build_prepass_prompt_from_pr, build_send_prompt_from_threads, build_uuid_v4_from_seed,
-    select_dispatchable_threads,
+    build_conflict_prompt_from_paths, build_prepass_prompt_from_pr, build_send_prompt_from_threads,
+    build_uuid_v4_from_seed, select_dispatchable_threads,
 };
-use crate::reanchor::normalize_prepass_anchor;
+use crate::reanchor::{normalize_prepass_anchor, validate_safe_relative_path};
 
 impl ReviewSession {
     /// Returns the launch/resume plan for `kind`, allocating and persisting a
@@ -125,6 +125,33 @@ impl ReviewSession {
             kind: AgentRoundKind::Prepass,
             thread_ids: Vec::new(),
             prompt: build_prepass_prompt_from_pr(pr),
+            profile: AgentProfile::from_kind(kind),
+        })
+    }
+
+    /// Prepares a conflict-resolution prompt for `conflicted_paths` after a
+    /// dirty-worktree fast-forward hit stash-restore conflicts.
+    pub fn prepare_conflict_resolution(
+        &self,
+        conflicted_paths: &[String],
+        kind: AgentKind,
+    ) -> Result<AgentDispatch> {
+        let pr = self.synced_pr()?;
+        let mut normalized_paths = Vec::with_capacity(conflicted_paths.len());
+        for path in conflicted_paths {
+            validate_safe_relative_path(path)?;
+            if !normalized_paths.iter().any(|existing| existing == path) {
+                normalized_paths.push(path.clone());
+            }
+        }
+        if normalized_paths.is_empty() {
+            bail!("at least one conflicted path is required");
+        }
+        Ok(AgentDispatch {
+            round: self.saved.local.next_round.max(1),
+            kind: AgentRoundKind::Conflict,
+            thread_ids: Vec::new(),
+            prompt: build_conflict_prompt_from_paths(pr, &normalized_paths),
             profile: AgentProfile::from_kind(kind),
         })
     }
@@ -602,5 +629,60 @@ mod tests {
             ])
             .unwrap();
         assert_eq!(created.len(), 2);
+    }
+
+    #[test]
+    fn prepare_conflict_resolution_rejects_unsynced_empty_and_unsafe_paths() {
+        let fakes = Fakes::new(100);
+        assert!(
+            fakes
+                .open()
+                .prepare_conflict_resolution(&["src/a.rs".into()], AgentKind::Claude)
+                .is_err()
+        );
+        let session = fakes.open_synced();
+        assert!(
+            session
+                .prepare_conflict_resolution(&[], AgentKind::Claude)
+                .is_err()
+        );
+        for unsafe_path in ["../etc/passwd", "/abs/file.rs", ".git/config"] {
+            assert!(
+                session
+                    .prepare_conflict_resolution(&[unsafe_path.into()], AgentKind::Claude)
+                    .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn prepare_conflict_resolution_builds_conflict_dispatch_and_confirm_send_records_it() {
+        let fakes = Fakes::new(100);
+        let mut session = fakes.open_synced();
+        let events = session.subscribe();
+
+        let paths = vec!["src/a.rs".to_owned(), "src/a.rs".to_owned()];
+        let dispatch = session
+            .prepare_conflict_resolution(&paths, AgentKind::Claude)
+            .unwrap();
+        assert_eq!(dispatch.round, 1);
+        assert_eq!(dispatch.kind, AgentRoundKind::Conflict);
+        assert!(dispatch.thread_ids.is_empty());
+        assert_eq!(dispatch.prompt.matches("- `src/a.rs`").count(), 1);
+
+        let (recorded, _) = session
+            .confirm_send(
+                dispatch.round,
+                AgentRoundKind::Conflict,
+                &[],
+                &dispatch.prompt,
+            )
+            .unwrap();
+        assert_eq!(recorded.kind, AgentRoundKind::Conflict);
+        assert_eq!(fakes.store.rounds().unwrap(), vec![recorded]);
+        assert!(matches!(
+            events.try_recv().unwrap(),
+            Event::AgentRound { round, .. } if round.kind == AgentRoundKind::Conflict
+        ));
     }
 }

@@ -133,14 +133,14 @@ pub fn build_conflict_prompt_from_paths(pr: &PullRequest, conflicted_paths: &[St
     let mut output = String::new();
     let _ = writeln!(
         output,
-        "PR #{} ({}/{}) fast-forwarded to `{}` and popping local uncommitted edits left merge conflicts in:",
+        "PR #{} ({}/{}) fast-forwarded to `{}` and restoring stashed local edits conflicted in:",
         pr.number, pr.owner, pr.repo, pr.head_sha
     );
     for path in conflicted_paths {
         let _ = writeln!(output, "- `{path}`");
     }
     output.push_str(
-        "\nResolve the conflict markers in those files while preserving both the upstream PR update and the local edits, stage the resolved files, and leave `git stash` intact if anything remains unclear. Never push and never touch GitHub.",
+        "\nResolve any conflict markers in those files (or inspect `git stash` if `git stash apply` aborted on an untracked file collision before writing conflict markers) while preserving both the upstream PR update and the local edits, stage the resolved files, and leave `git stash` intact if anything remains unclear. Never push and never touch GitHub.",
     );
     output
 }
