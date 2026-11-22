@@ -178,13 +178,16 @@ impl ReviewSession {
             );
         }
         match kind {
-            AgentRoundKind::Prepass if !thread_ids.is_empty() => {
-                bail!("prepass round cannot include thread IDs");
+            AgentRoundKind::Prepass | AgentRoundKind::Conflict if !thread_ids.is_empty() => {
+                bail!(
+                    "{} round cannot include thread IDs",
+                    round_kind_to_label(kind)
+                );
             }
             AgentRoundKind::Send if thread_ids.is_empty() => {
                 bail!("send round requires at least one thread ID");
             }
-            AgentRoundKind::Prepass | AgentRoundKind::Send => Ok(()),
+            AgentRoundKind::Prepass | AgentRoundKind::Conflict | AgentRoundKind::Send => Ok(()),
         }
     }
 
@@ -246,6 +249,14 @@ impl ReviewSession {
         };
         self.threads.push(thread.clone());
         thread
+    }
+}
+
+const fn round_kind_to_label(kind: AgentRoundKind) -> &'static str {
+    match kind {
+        AgentRoundKind::Send => "send",
+        AgentRoundKind::Prepass => "prepass",
+        AgentRoundKind::Conflict => "conflict",
     }
 }
 
@@ -468,6 +479,13 @@ mod tests {
             session
                 .confirm_send(1, AgentRoundKind::Prepass, ids, "p")
                 .is_err()
+        );
+        let conflict_error = session
+            .confirm_send(1, AgentRoundKind::Conflict, ids, "p")
+            .unwrap_err();
+        assert_eq!(
+            conflict_error.to_string(),
+            "conflict round cannot include thread IDs"
         );
 
         session

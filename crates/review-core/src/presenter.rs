@@ -2,7 +2,7 @@
 
 use review_model::{
     AnchorKind, ChangedFile, FileRow, MessageSync, PullRequest, SessionView, SyncState, Thread,
-    ViewedState,
+    ViewedState, WorktreeStatus,
 };
 
 use crate::comments::count_code_threads;
@@ -43,6 +43,7 @@ pub fn session_view(
             .count(),
         queued_count,
         sync: sync.clone(),
+        worktree_status: WorktreeStatus::default(),
     }
 }
 
@@ -58,6 +59,8 @@ fn create_file_rows_from_files(files: &[ChangedFile], threads: &[Thread]) -> Vec
                 .iter()
                 .filter(|thread| thread.anchor.file.as_deref() == Some(file.path.as_str()))
                 .count(),
+            is_modified: false,
+            local_threads: 0,
         })
         .collect()
 }

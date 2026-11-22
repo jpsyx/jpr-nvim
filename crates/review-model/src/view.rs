@@ -26,6 +26,38 @@ pub enum SyncState {
     },
 }
 
+/// Working-tree dirty and commit-divergence summary relative to the PR head.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct WorktreeStatus {
+    /// Whether any tracked or untracked file is modified in the worktree.
+    pub is_dirty: bool,
+    /// Commits on `HEAD` not reachable from the pull request's remote head commit.
+    pub ahead: usize,
+    /// Commits on the pull request's remote head commit not reachable from `HEAD`.
+    pub behind: usize,
+    /// Sorted repository-relative paths currently modified or untracked.
+    pub modified_paths: Vec<String>,
+}
+
+/// How the local checkout reacted when the forge's `headSha` moved on sync.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum HeadMoveOutcome {
+    /// Local `HEAD` was already at the new `headSha` (for example right after `:Jpr push`).
+    AlreadyAtTarget,
+    /// Local `HEAD` fast-forwarded cleanly (auto-stashing and restoring dirty changes when needed).
+    FastForwarded,
+    /// Fast-forward succeeded, but popping the auto-stash hit conflicts; conflict markers and the stash entry remain.
+    RestoreConflict,
+    /// Local `HEAD` has unpushed commits ahead of the remote `headSha`; left untouched.
+    AheadOfTarget,
+    /// Local `HEAD` and remote `headSha` diverged; left untouched.
+    Diverged,
+    /// Fetching or fast-forwarding failed before changing `HEAD`.
+    Failed,
+}
+
 /// One changed file as the file list shows it: a frontend draws one row per
 /// file from it, in the order the session gives.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -41,6 +73,12 @@ pub struct FileRow {
     pub viewed: ViewedState,
     /// Threads anchored to this file, open or resolved.
     pub threads: usize,
+    /// Whether this file currently has uncommitted local changes in the worktree.
+    #[serde(default)]
+    pub is_modified: bool,
+    /// Open local threads anchored to this file.
+    #[serde(default)]
+    pub local_threads: usize,
 }
 
 /// One row of the changed files drawn as a tree: a directory, or a file of
@@ -86,13 +124,35 @@ pub struct SessionView {
     pub queued_count: usize,
     /// When the session last talked to the forge, and how it went.
     pub sync: SyncState,
+    /// Dirty and ahead/behind state of the local checkout relative to the PR head.
+    #[serde(default)]
+    pub worktree_status: WorktreeStatus,
+}
+
+/// Outcome returned by `:Jpr push` after pushing `HEAD` to the pull request head branch.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PushResult {
+    /// Always `true` when `git push` succeeded.
+    pub is_pushed: bool,
+    /// Commit SHA pushed from `HEAD`.
+    pub head_sha: String,
+    /// Non-fatal error if the post-push GitHub sync failed after `git push` succeeded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sync_error: Option<String>,
+    /// Current session view after pushing (and syncing when sync succeeded).
+    pub view: SessionView,
 }
 
 /// A change the session announces to its subscribers. The RPC server forwards
 /// each one to its client as an `event` notification, so a frontend redraws
 /// without asking.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "camelCase")]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum Event {
     /// A sync finished.
     Synced {
@@ -130,6 +190,28 @@ pub enum Event {
         /// The updated view with refreshed counts.
         view: Box<SessionView>,
     },
+    /// Local worktree dirty or ahead/behind status changed.
+    WorktreeStatusChanged {
+        /// The updated view with refreshed worktree status.
+        view: Box<SessionView>,
+    },
+    /// The pull request's remote `headSha` changed during sync.
+    HeadMoved {
+        /// Previous `headSha` before the sync.
+        previous_sha: String,
+        /// New `headSha` observed on the forge.
+        head_sha: String,
+        /// How the local worktree reacted to the new `headSha`.
+        outcome: HeadMoveOutcome,
+        /// Repository-relative paths with restore conflicts, when any.
+        #[serde(default)]
+        conflicted_paths: Vec<String>,
+        /// Human-readable detail when fast-forward or stash pop hit a snag.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message: Option<String>,
+        /// The updated view after reconciling `headSha`.
+        view: Box<SessionView>,
+    },
 }
 
 #[cfg(test)]
@@ -165,6 +247,8 @@ mod tests {
                 deletions: 2,
                 viewed: ViewedState::Viewed,
                 threads: 3,
+                is_modified: false,
+                local_threads: 0,
             }],
             tree: Vec::new(),
             viewed_count: 1,
@@ -174,6 +258,7 @@ mod tests {
             local_unsent_count: 4,
             queued_count: 2,
             sync: SyncState::Never,
+            worktree_status: WorktreeStatus::default(),
         }
     }
 
@@ -230,5 +315,70 @@ mod tests {
             failed,
             serde_json::json!({ "type": "syncFailed", "message": "offline" })
         );
+    }
+
+    #[test]
+    fn worktree_status_push_result_and_head_moved_use_camel_case() {
+        let mut view = create_sample_view();
+        view.files[0].is_modified = true;
+        view.files[0].local_threads = 1;
+        view.worktree_status = WorktreeStatus {
+            is_dirty: true,
+            ahead: 2,
+            behind: 1,
+            modified_paths: vec!["a.rs".into()],
+        };
+        let push = serde_json::to_value(PushResult {
+            is_pushed: true,
+            head_sha: "abc1234".into(),
+            sync_error: None,
+            view: view.clone(),
+        })
+        .unwrap();
+        assert_eq!(push["isPushed"], true);
+        assert_eq!(push["headSha"], "abc1234");
+        assert!(push.get("syncError").is_none());
+        assert_eq!(push["view"]["worktreeStatus"]["isDirty"], true);
+        assert_eq!(push["view"]["worktreeStatus"]["ahead"], 2);
+        assert_eq!(push["view"]["worktreeStatus"]["behind"], 1);
+        assert_eq!(push["view"]["files"][0]["isModified"], true);
+        assert_eq!(push["view"]["files"][0]["localThreads"], 1);
+        let status_event = serde_json::to_value(Event::WorktreeStatusChanged {
+            view: Box::new(view.clone()),
+        })
+        .unwrap();
+        assert_eq!(status_event["type"], "worktreeStatusChanged");
+        let moved_event = serde_json::to_value(Event::HeadMoved {
+            previous_sha: "old111".into(),
+            head_sha: "new222".into(),
+            outcome: HeadMoveOutcome::RestoreConflict,
+            conflicted_paths: vec!["a.rs".into()],
+            message: Some("stash pop conflict".into()),
+            view: Box::new(view),
+        })
+        .unwrap();
+        assert_eq!(moved_event["type"], "headMoved");
+        assert_eq!(moved_event["previousSha"], "old111");
+        assert_eq!(moved_event["headSha"], "new222");
+        assert_eq!(moved_event["outcome"], "restoreConflict");
+        assert_eq!(moved_event["conflictedPaths"], serde_json::json!(["a.rs"]));
+    }
+
+    #[test]
+    fn legacy_view_json_without_polish_fields_deserializes_with_defaults() {
+        let mut encoded = serde_json::to_value(create_sample_view()).unwrap();
+        encoded
+            .as_object_mut()
+            .unwrap()
+            .remove("worktreeStatus")
+            .unwrap();
+        let row = encoded["files"][0].as_object_mut().unwrap();
+        row.remove("isModified").unwrap();
+        row.remove("localThreads").unwrap();
+
+        let decoded: SessionView = serde_json::from_value(encoded).unwrap();
+        assert!(!decoded.files[0].is_modified);
+        assert_eq!(decoded.files[0].local_threads, 0);
+        assert_eq!(decoded.worktree_status, WorktreeStatus::default());
     }
 }

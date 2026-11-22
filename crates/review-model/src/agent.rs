@@ -128,7 +128,8 @@ pub struct AgentLaunchPlan {
     pub profile: AgentProfile,
 }
 
-/// Whether an agent round sent reviewer comments or requested a PR pre-pass.
+/// Whether an agent round sent reviewer comments, requested a PR pre-pass, or
+/// requested conflict resolution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum AgentRoundKind {
@@ -136,6 +137,8 @@ pub enum AgentRoundKind {
     Send,
     /// Pre-pass review request (`:Jpr prepass`).
     Prepass,
+    /// Restore-conflict resolution request after a dirty-worktree fast-forward.
+    Conflict,
 }
 
 /// One persisted agent send entry in `rounds.jsonl`.
@@ -144,9 +147,9 @@ pub enum AgentRoundKind {
 pub struct AgentRound {
     /// 1-based monotonic round number for this pull request.
     pub round: u64,
-    /// Dispatch kind (`send` or `prepass`).
+    /// Dispatch kind (`send`, `prepass`, or `conflict`).
     pub kind: AgentRoundKind,
-    /// Local thread IDs included in this round (`Vec::new()` for `prepass`).
+    /// Local thread IDs included in this round (`Vec::new()` for `prepass` and `conflict`).
     pub thread_ids: Vec<String>,
     /// Exact prompt text sent to the agent.
     pub prompt: String,
@@ -161,7 +164,7 @@ pub struct AgentRound {
 pub struct AgentDispatch {
     /// Candidate 1-based round number to pass back to `confirmSend`.
     pub round: u64,
-    /// Dispatch kind (`send` or `prepass`).
+    /// Dispatch kind (`send`, `prepass`, or `conflict`).
     pub kind: AgentRoundKind,
     /// Local thread IDs covered by this dispatch.
     pub thread_ids: Vec<String>,
@@ -253,5 +256,13 @@ mod tests {
         let encoded = serde_json::to_value(&round).unwrap();
         assert_eq!(encoded["threadIds"], json!(["loc-1"]));
         assert_eq!(encoded["sentAt"], 42);
+    }
+
+    #[test]
+    fn conflict_round_kind_serializes_as_conflict() {
+        assert_eq!(
+            serde_json::to_value(AgentRoundKind::Conflict).unwrap(),
+            json!("conflict")
+        );
     }
 }
