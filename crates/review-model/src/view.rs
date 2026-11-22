@@ -76,7 +76,7 @@ pub struct FileRow {
     /// Whether this file currently has uncommitted local changes in the worktree.
     #[serde(default)]
     pub is_modified: bool,
-    /// Open local threads anchored to this file.
+    /// Local threads anchored to this file, open or resolved.
     #[serde(default)]
     pub local_threads: usize,
 }

@@ -194,9 +194,12 @@ mod tests {
             changed_file("a.rs", ViewedState::Viewed),
             changed_file("b.rs", ViewedState::Unviewed),
         ];
+        let mut resolved_local = create_local_unsent_thread("loc-3", "a.rs");
+        resolved_local.state = ThreadState::Resolved;
         let threads = [
             github_thread("T1", "a.rs"),
             create_local_unsent_thread("loc-1", "a.rs"),
+            resolved_local,
             create_local_unsent_thread("loc-2", "b.rs"),
         ];
         let status = WorktreeStatus {
@@ -215,7 +218,8 @@ mod tests {
         );
         assert_eq!(view.worktree_status, status);
         assert!(!view.files[0].is_modified);
-        assert_eq!((view.files[0].threads, view.files[0].local_threads), (2, 1));
+        assert_eq!((view.files[0].threads, view.files[0].local_threads), (3, 2));
+        assert_eq!(view.files[0].threads - view.files[0].local_threads, 1);
         assert!(view.files[1].is_modified);
         assert_eq!((view.files[1].threads, view.files[1].local_threads), (1, 1));
     }
