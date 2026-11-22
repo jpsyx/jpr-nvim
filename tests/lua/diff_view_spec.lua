@@ -233,24 +233,33 @@ assert(vim.wait(3000, function()
 end), "the base window closes")
 assert(not vim.wo[win].diff, "diff mode is off")
 
--- An engine that stops mid-review keeps the tab, but its base windows close,
--- diff mode goes off and the autocommands are gone.
+-- An engine that stops mid-review restarts once and falls back to read-only on
+-- a second crash while keeping the base window open; closing the tab cleans up.
 main_window.edit(review, win, "README.md", 1)
 assert(vim.wait(3000, function()
     return find_base_window(review.tab) ~= nil
 end), "the base window opens again")
 base = find_base_window(review.tab)
 local group_name = ("jpr-diff-%d"):format(review.tab)
+local report_warn = jpr.warn
 jpr.error = function() end
+jpr.warn = function() end
+local first_client = review.client
+first_client:stop()
+assert(vim.wait(3000, function()
+    return review.has_restarted == true and review.client ~= nil and review.client ~= first_client
+end), "first stop restarts the engine")
 review.client:stop()
 assert(vim.wait(3000, function()
-    return review.diff == nil
-end), "the session lets go of its diffs")
+    return review.is_read_only == true and review.client == nil
+end), "second stop switches the session to read-only")
 jpr.error = report_error
-assert(vim.api.nvim_tabpage_is_valid(review.tab), "the tab stays")
-assert(not vim.api.nvim_win_is_valid(base) and not vim.wo[win].diff, "the base window closed")
-assert(not pcall(vim.api.nvim_get_autocmds, { group = group_name }), "the autocommands are gone")
+jpr.warn = report_warn
+assert(vim.api.nvim_tabpage_is_valid(review.tab) and vim.api.nvim_win_is_valid(base), "read-only keeps the tab and base window")
 vim.cmd.tabclose()
+assert(review.diff == nil, "closing the tab lets go of its diffs")
+assert(not vim.api.nvim_win_is_valid(base), "the base window closed")
+assert(not pcall(vim.api.nvim_get_autocmds, { group = group_name }), "the autocommands are gone")
 
 session.toggle_view()
 assert(view_mode.get() == "unified", "toggled back")

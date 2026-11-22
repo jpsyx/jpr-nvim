@@ -61,7 +61,11 @@ function M.render(session, view)
     if not panel or not vim.api.nvim_buf_is_valid(panel.buf) then
         return
     end
-    local built = render.build(view, os.time())
+    local effective_view = view
+    if session.is_read_only == true and (type(view) ~= "table" or view.isReadOnly ~= true) then
+        effective_view = vim.tbl_extend("force", type(view) == "table" and view or {}, { isReadOnly = true })
+    end
+    local built = render.build(effective_view, os.time())
     panel.paths = built.paths
     panel.conversation_line = built.conversation_line
     vim.bo[panel.buf].modifiable = true

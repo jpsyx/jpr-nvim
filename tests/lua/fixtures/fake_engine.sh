@@ -37,6 +37,8 @@ profile_claude='{"kind":"claude","pasteStyle":"bracketed","submitKey":"enter","s
 profile_codex='{"kind":"codex","pasteStyle":"bracketed","submitKey":"tab","submitDelayMs":200}'
 agent_round_send='{"round":1,"kind":"send","threadIds":["loc-1"],"prompt":"Review local thread loc-1","sentAt":1}'
 agent_round_prepass='{"round":1,"kind":"prepass","threadIds":[],"prompt":"Run pre-pass review","sentAt":1}'
+agent_round_conflict='{"round":1,"kind":"conflict","threadIds":[],"prompt":"Resolve conflicts in README.md","sentAt":1700000099}'
+if [ -n "$FAKE_ENGINE_STDERR" ]; then printf '%s\n' "$FAKE_ENGINE_STDERR" >&2; fi
 reply() { printf '{"jsonrpc":"2.0","id":%s,"result":%s}\n' "$id" "$1"; }
 announce() { printf '{"jsonrpc":"2.0","method":"event","params":{"type":"%s","view":%s}}\n' "$1" "$2"; }
 announce_round() { printf '{"jsonrpc":"2.0","method":"event","params":{"type":"agentRound","round":%s,"view":%s}}\n' "$1" "$2"; }
@@ -59,6 +61,12 @@ while IFS= read -r line; do
     *'"method":"initialize"'*) reply '{"protocolVersion":'"${FAKE_ENGINE_PROTOCOL:-5}"',"version":"'"${FAKE_ENGINE_VERSION:-test}"'"}' ;;
     *'"method":"snapshot"'*) reply "$view_empty" ;;
     *'"method":"sync"'*) announce synced "$view_synced"; reply "$view_synced" ;;
+    *'"method":"push"'*)
+      if [ -n "$FAKE_ENGINE_PUSH_SYNC_ERROR" ]; then
+        reply '{"isPushed":true,"headSha":"abc1234","syncError":"'"$FAKE_ENGINE_PUSH_SYNC_ERROR"'","view":'"$view_synced"'}'
+      else
+        reply '{"isPushed":true,"headSha":"abc1234","view":'"$view_synced"'}'
+      fi ;;
     *'"method":"fileDiff"'*'"BROKEN.md"'*|*'"BROKEN.md"'*'"method":"fileDiff"'*)
       printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32000,"message":"BROKEN.md is not at the base"}}\n' "$id" ;;
     *'"method":"fileDiff"'*'"NULL.md"'*|*'"NULL.md"'*'"method":"fileDiff"'*) reply null ;;
@@ -94,12 +102,17 @@ while IFS= read -r line; do
     *'"method":"confirmSend"'*'"kind":"prepass"'*|*'"kind":"prepass"'*'"method":"confirmSend"'*)
       announce_round "$agent_round_prepass" "$view_synced"
       reply '{"round":'"$agent_round_prepass"',"view":'"$view_synced"'}' ;;
+    *'"method":"confirmSend"'*'"kind":"conflict"'*|*'"kind":"conflict"'*'"method":"confirmSend"'*)
+      announce_round "$agent_round_conflict" "$view_synced"
+      reply '{"round":'"$agent_round_conflict"',"view":'"$view_synced"'}' ;;
     *'"method":"confirmSend"'*)
       announce threadsChanged "$view_synced"
       announce_round "$agent_round_send" "$view_synced"
       reply '{"round":'"$agent_round_send"',"view":'"$view_synced"'}' ;;
     *'"method":"preparePrepass"'*)
       reply '{"round":1,"kind":"prepass","threadIds":[],"prompt":"Run pre-pass review","profile":'"$(agent_profile "$line")"'}' ;;
+    *'"method":"prepareConflictResolution"'*)
+      reply '{"round":1,"kind":"conflict","threadIds":[],"prompt":"Resolve conflicts in README.md","profile":'"$(agent_profile "$line")"'}' ;;
     *'"method":"promoteThread"'*)
       announce threadsChanged "$view_synced"
       reply '{"thread":'"$thread_code"',"view":'"$view_synced"'}' ;;

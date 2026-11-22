@@ -362,7 +362,8 @@ return function(context)
     assert(not stream_view.is_visible(third), "the stream stays hidden")
     session.close_current()
 
-    -- An engine that stops mid-review closes the stream's left half and wipes its buffers, but the tab stays.
+    -- An engine that stops mid-review restarts once, keeps the stream open in
+    -- read-only mode on a second crash, and wipes its buffers on :tabclose.
     session.start({ worktree = worktree, repo = "octo/widgets", number = 8 })
     local second = session.current()
     assert(vim.wait(3000, function()
@@ -371,16 +372,25 @@ return function(context)
     session.toggle_view()
     wait_for_mode(second, "split")
     local left_win = second.stream.left_win
+    local report_warn = jpr.warn
     jpr.error = function() end
+    jpr.warn = function() end
+    local first_client = second.client
+    first_client:stop()
+    assert(vim.wait(3000, function()
+        return second.has_restarted == true and second.client ~= nil and second.client ~= first_client
+    end), "first stop restarts the engine")
     second.client:stop()
     assert(vim.wait(3000, function()
-        return second.stream == nil
-    end), "the session lets go of its stream")
+        return second.is_read_only == true and second.client == nil
+    end), "second stop switches the session to read-only")
     jpr.error = report_error
-    assert(vim.api.nvim_tabpage_is_valid(second.tab), "the tab stays")
+    jpr.warn = report_warn
+    assert(vim.api.nvim_tabpage_is_valid(second.tab) and vim.api.nvim_win_is_valid(left_win), "read-only keeps the tab and split stream")
+    vim.cmd.tabclose()
+    assert(second.stream == nil, "closing the tab lets go of its stream")
     assert(not vim.api.nvim_win_is_valid(left_win), "the left half closed")
     assert(#find_stream_buffers(8) == 0, "its buffers are wiped")
-    vim.cmd.tabclose()
     session.toggle_view()
     assert(view_mode.get() == "unified", "toggled back")
 end
