@@ -175,21 +175,21 @@ pub fn validate_anchor_file(files: &[ChangedFile], anchor: &Anchor) -> Result<()
 }
 
 pub(crate) fn collect_changed_digest_paths(
-    previous: &BTreeMap<String, u64>,
-    current: &BTreeMap<String, u64>,
+    previous_digests: &BTreeMap<String, u64>,
+    current_digests: &BTreeMap<String, u64>,
 ) -> Vec<String> {
-    let mut changed = BTreeSet::new();
-    for (path, digest) in current {
-        if previous.get(path) != Some(digest) {
-            changed.insert(path.clone());
+    let mut changed_paths = BTreeSet::new();
+    for (path, digest) in current_digests {
+        if previous_digests.get(path) != Some(digest) {
+            changed_paths.insert(path.clone());
         }
     }
-    for path in previous.keys() {
-        if !current.contains_key(path) {
-            changed.insert(path.clone());
+    for path in previous_digests.keys() {
+        if !current_digests.contains_key(path) {
+            changed_paths.insert(path.clone());
         }
     }
-    changed.into_iter().collect()
+    changed_paths.into_iter().collect()
 }
 
 #[must_use]
@@ -209,12 +209,12 @@ pub(crate) fn hash_bounded_file_bytes(bytes: &[u8], max_bytes: usize) -> u64 {
 }
 
 /// Validates that `path` is a safe repository-relative path with no traversal,
-/// backslashes, NUL bytes, or `.git` segments.
+/// backslashes, ASCII control bytes, or `.git` segments.
 pub fn validate_safe_relative_path(path: &str) -> Result<()> {
     if path.is_empty()
         || path.starts_with('/')
         || path.contains('\\')
-        || path.contains('\0')
+        || path.bytes().any(|byte| byte.is_ascii_control())
         || path.split('/').any(|segment| {
             segment.is_empty()
                 || segment == "."
@@ -390,5 +390,16 @@ mod tests {
         assert!(cleared);
         assert!(!thread.outdated);
         assert_eq!(thread.anchor.snapshot.as_deref(), Some("only one line"));
+    }
+
+    #[test]
+    fn validate_safe_relative_path_rejects_ascii_control_characters() {
+        for bad_path in ["src/a\nb.rs", "src/a\rb.rs", "src/a\tb.rs", "src/a\x1bb.rs"] {
+            assert!(
+                validate_safe_relative_path(bad_path).is_err(),
+                "expected {bad_path:?} to fail validation"
+            );
+        }
+        assert!(validate_safe_relative_path("src/valid_file.rs").is_ok());
     }
 }

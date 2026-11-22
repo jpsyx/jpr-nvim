@@ -40,6 +40,7 @@ pub struct ReviewSession {
     base_cache: BaseCache,
     disk_digests: Option<BTreeMap<String, u64>>,
     last_worktree_status: Option<WorktreeStatus>,
+    pushed_head_sha: Option<String>,
 }
 
 impl ReviewSession {
@@ -66,6 +67,7 @@ impl ReviewSession {
             base_cache: BaseCache::default(),
             disk_digests: None,
             last_worktree_status: None,
+            pushed_head_sha: None,
         })
     }
 
@@ -99,23 +101,32 @@ impl ReviewSession {
     #[must_use]
     pub fn view(&self) -> SessionView {
         let worktree_status = self.current_worktree_status();
+        self.view_with_status(&worktree_status)
+    }
+
+    pub(super) fn view_with_status(&self, worktree_status: &WorktreeStatus) -> SessionView {
         session_view(
             self.saved.session.pr.as_ref(),
             &self.saved.files,
             &self.threads,
             &self.sync,
             self.saved.registry.queued_viewed.len() + self.saved.registry.queued_ops.len(),
-            &worktree_status,
+            worktree_status,
         )
     }
 
+    pub(super) fn effective_remote_head_sha(&self) -> Option<&str> {
+        self.pushed_head_sha.as_deref().or_else(|| {
+            self.saved
+                .session
+                .pr
+                .as_ref()
+                .map(|pr| pr.head_sha.as_str())
+        })
+    }
+
     pub(super) fn read_worktree_status(&self) -> Option<WorktreeStatus> {
-        let remote_head_sha = self
-            .saved
-            .session
-            .pr
-            .as_ref()
-            .map(|pr| pr.head_sha.as_str());
+        let remote_head_sha = self.effective_remote_head_sha();
         self.ports.workspace.worktree_status(remote_head_sha).ok()
     }
 
@@ -153,8 +164,24 @@ impl ReviewSession {
     }
 
     fn publish(&mut self, event: &Event) {
+        if let Some(view) = extract_event_view(event) {
+            self.last_worktree_status = Some(view.worktree_status.clone());
+        }
         self.subscribers
             .retain(|subscriber| subscriber.send(event.clone()).is_ok());
+    }
+}
+
+const fn extract_event_view(event: &Event) -> Option<&SessionView> {
+    match event {
+        Event::Synced { view }
+        | Event::ViewedChanged { view }
+        | Event::ThreadsChanged { view }
+        | Event::FilesChanged { view, .. }
+        | Event::AgentRound { view, .. }
+        | Event::WorktreeStatusChanged { view }
+        | Event::HeadMoved { view, .. } => Some(view),
+        Event::SyncFailed { .. } => None,
     }
 }
 

@@ -1,7 +1,7 @@
 //! Pushing local commits on `HEAD` to the pull request's remote branch.
 
 use anyhow::{Result, bail};
-use review_model::PushResult;
+use review_model::{PushResult, WorktreeStatus};
 
 use super::ReviewSession;
 
@@ -10,18 +10,23 @@ impl ReviewSession {
     /// forge sync. When `git push` succeeds and the follow-up sync fails,
     /// returns `Ok` with `is_pushed: true` and `sync_error: Some(..)`.
     pub fn push(&mut self) -> Result<PushResult> {
-        let (head_ref, remote_head_sha) = {
+        let (head_ref, pr_head_sha) = {
             let pr = self.synced_pr()?;
             (pr.head_ref.clone(), pr.head_sha.clone())
         };
+        let effective_remote_sha = self
+            .pushed_head_sha
+            .as_deref()
+            .unwrap_or(&pr_head_sha)
+            .to_owned();
+        let local_head_sha = self.ports.workspace.head_commit()?;
         let status = self
             .ports
             .workspace
-            .worktree_status(Some(&remote_head_sha))?;
-        if status.ahead == 0 && status.is_dirty {
-            bail!("nothing committed to push: commit your changes before running :Jpr push");
-        }
+            .worktree_status(Some(&effective_remote_sha))?;
+        validate_push_status(&status, &local_head_sha, &effective_remote_sha)?;
         let head_sha = self.ports.workspace.push_head(&head_ref)?;
+        self.pushed_head_sha = Some(head_sha.clone());
         match self.sync() {
             Ok(view) => Ok(PushResult {
                 is_pushed: true,
@@ -41,6 +46,23 @@ impl ReviewSession {
             }
         }
     }
+}
+
+fn validate_push_status(
+    status: &WorktreeStatus,
+    local_head_sha: &str,
+    effective_remote_sha: &str,
+) -> Result<()> {
+    if status.ahead == 0 && status.behind > 0 {
+        bail!("local HEAD is behind the pull request head: run :Jpr sync before pushing");
+    }
+    if status.ahead == 0 && local_head_sha == effective_remote_sha {
+        if status.is_dirty {
+            bail!("nothing committed to push: commit your changes before running :Jpr push");
+        }
+        bail!("nothing to push: HEAD is already up to date with the pull request");
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -116,6 +138,34 @@ mod tests {
     }
 
     #[test]
+    fn push_refuses_clean_up_to_date_and_behind_remote_worktrees() {
+        let fakes = Fakes::new(100);
+        let mut session = fakes.open_synced();
+
+        let up_to_date_error = session.push().unwrap_err();
+        assert!(
+            up_to_date_error.to_string().contains("already up to date"),
+            "{up_to_date_error}"
+        );
+        assert!(fakes.workspace.pushed_refs().is_empty());
+
+        fakes.workspace.set_worktree_status(Some(WorktreeStatus {
+            is_dirty: false,
+            ahead: 0,
+            behind: 2,
+            modified_paths: Vec::new(),
+        }));
+        let behind_error = session.push().unwrap_err();
+        assert!(
+            behind_error
+                .to_string()
+                .contains("behind the pull request head: run :Jpr sync"),
+            "{behind_error}"
+        );
+        assert!(fakes.workspace.pushed_refs().is_empty());
+    }
+
+    #[test]
     fn push_keeps_pushed_result_with_sync_error_when_post_push_sync_fails() {
         let fakes = Fakes::new(100);
         let mut session = fakes.open_synced();
@@ -134,12 +184,59 @@ mod tests {
         let sync_error = push_result.sync_error.expect("sync error is recorded");
         assert!(sync_error.contains("gh offline"), "{sync_error}");
         assert_eq!(push_result.view.worktree_status.ahead, 0);
+        assert_eq!(
+            fakes.workspace.status_remote_shas().last(),
+            Some(&Some("newhead1".to_owned()))
+        );
 
+        let retry_error = session.push().unwrap_err();
+        assert!(
+            retry_error.to_string().contains("already up to date"),
+            "{retry_error}"
+        );
+        assert_eq!(fakes.workspace.pushed_refs().len(), 1);
+    }
+
+    #[test]
+    fn push_surfaces_remote_rejection_and_recovers_pushed_head_on_later_sync() {
+        let fakes = Fakes::new(100);
+        let mut session = fakes.open_synced();
+        fakes.workspace.set_head_commit("newhead1");
+        fakes.workspace.set_worktree_status(Some(WorktreeStatus {
+            is_dirty: false,
+            ahead: 1,
+            behind: 0,
+            modified_paths: Vec::new(),
+        }));
+        fakes.forge.fail_reads_with(Some("gh offline"));
+        session.push().unwrap();
+
+        fakes.forge.fail_reads_with(None);
+        let mut updated_pr = sample_pr();
+        updated_pr.head_sha = "newhead1".into();
+        fakes.forge.set_pr(updated_pr);
+        let mut updated_snapshot = create_snapshot();
+        updated_snapshot.head_sha = "newhead1".into();
+        fakes.forge.set_snapshot(updated_snapshot);
+        let events = session.subscribe();
+        session.sync().unwrap();
+        assert!(matches!(
+            events.try_recv().unwrap(),
+            Event::HeadMoved {
+                outcome: HeadMoveOutcome::AlreadyAtTarget,
+                ..
+            }
+        ));
+
+        fakes.workspace.set_head_commit("newhead2");
+        fakes.workspace.set_worktree_status(Some(WorktreeStatus {
+            is_dirty: false,
+            ahead: 1,
+            behind: 0,
+            modified_paths: Vec::new(),
+        }));
         fakes.workspace.fail_push_with(Some("remote rejected"));
         let push_error = session.push().unwrap_err();
-        assert!(
-            push_error.to_string().contains("remote rejected"),
-            "{push_error}"
-        );
+        assert!(push_error.to_string().contains("remote rejected"));
     }
 }

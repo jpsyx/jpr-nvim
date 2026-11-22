@@ -53,7 +53,7 @@ impl ReviewSession {
         let mut inputs = Vec::with_capacity(files.len());
         for file in files {
             let content = self
-                .file_texts(&file.path)
+                .file_texts_after_prepare(&file.path)
                 .map_err(|error| format!("{error:#}"));
             let threads = self
                 .threads
@@ -77,7 +77,15 @@ impl ReviewSession {
         if !self.saved.files.iter().any(|file| file.path == path) {
             bail!("{path} is not a file this pull request changes");
         }
-        let base = self.base_text(path)?;
+        self.prepare_base()?;
+        self.file_texts_after_prepare(path)
+    }
+
+    fn file_texts_after_prepare(&mut self, path: &str) -> Result<(FileText, FileText)> {
+        if !self.saved.files.iter().any(|file| file.path == path) {
+            bail!("{path} is not a file this pull request changes");
+        }
+        let base = self.base_text_after_prepare(path)?;
         let bytes = self.ports.workspace.file_on_disk(path)?;
         if is_too_large(bytes.as_deref()) {
             return Err(create_too_large_error(path));
@@ -86,8 +94,7 @@ impl ReviewSession {
     }
 
     /// `path` at the merge base, under its old name when it was renamed.
-    fn base_text(&mut self, path: &str) -> Result<FileText> {
-        self.prepare_base()?;
+    fn base_text_after_prepare(&mut self, path: &str) -> Result<FileText> {
         if let Some(text) = self.base_cache.texts.get(path) {
             return Ok(text.clone());
         }
@@ -217,6 +224,14 @@ mod tests {
         session.file_diff("src/a.rs").unwrap();
         session.stream(ViewMode::Unified).unwrap();
         assert_eq!(fakes.workspace.merge_base_calls(), 1);
+    }
+
+    #[test]
+    fn stream_checks_head_commit_once_across_all_files() {
+        let fakes = create_fakes();
+        let mut session = fakes.open_synced();
+        session.stream(ViewMode::Unified).unwrap();
+        assert_eq!(fakes.workspace.head_commit_calls(), 1);
     }
 
     #[test]

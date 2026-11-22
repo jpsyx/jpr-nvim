@@ -64,13 +64,9 @@ impl ReviewSession {
             self.poll_worktree_status_change();
             return Ok(None);
         }
-        let did_reanchor = self.reanchor_changed_local_threads(&changed_paths);
-        if did_reanchor {
-            self.split_and_save_threads()?;
-        }
+        let did_reanchor = self.reanchor_and_save_local_threads(&changed_paths)?;
         self.disk_digests = Some(current_digests);
         let view = self.view();
-        self.last_worktree_status = Some(view.worktree_status.clone());
         self.publish(&Event::FilesChanged {
             paths: changed_paths.clone(),
             view: Box::new(view.clone()),
@@ -83,6 +79,23 @@ impl ReviewSession {
         Ok(Some(changed_paths))
     }
 
+    pub(super) fn reanchor_and_save_local_threads(
+        &mut self,
+        changed_paths: &[String],
+    ) -> Result<bool> {
+        let previous_threads = self.threads.clone();
+        let previous_github_threads = self.saved.registry.threads.clone();
+        let previous_local_threads = self.saved.local.threads.clone();
+        let did_reanchor = self.reanchor_changed_local_threads(changed_paths);
+        if did_reanchor && let Err(error) = self.split_and_save_threads() {
+            self.threads = previous_threads;
+            self.saved.registry.threads = previous_github_threads;
+            self.saved.local.threads = previous_local_threads;
+            return Err(error);
+        }
+        Ok(did_reanchor)
+    }
+
     fn poll_worktree_status_change(&mut self) {
         let Some(status) = self.read_worktree_status() else {
             return;
@@ -90,13 +103,14 @@ impl ReviewSession {
         let should_publish = self
             .last_worktree_status
             .as_ref()
-            .is_some_and(|previous| previous != &status);
-        self.last_worktree_status = Some(status);
+            .is_some_and(|previous_status| previous_status != &status);
         if should_publish {
-            let view = self.view();
+            let view = self.view_with_status(&status);
             self.publish(&Event::WorktreeStatusChanged {
                 view: Box::new(view),
             });
+        } else {
+            self.last_worktree_status = Some(status);
         }
     }
 
@@ -134,8 +148,8 @@ impl ReviewSession {
                 candidates.insert(path.clone());
             }
         }
-        if let Some(previous) = self.disk_digests.as_ref() {
-            candidates.extend(previous.keys().cloned());
+        if let Some(previous_digests) = self.disk_digests.as_ref() {
+            candidates.extend(previous_digests.keys().cloned());
         }
         if self
             .saved
@@ -146,8 +160,8 @@ impl ReviewSession {
             && self.prepare_base().is_ok()
         {
             let merge_base = self.base_cache.merge_base.clone();
-            if let Ok(changed) = self.ports.workspace.list_changed_files_since(&merge_base) {
-                candidates.extend(changed);
+            if let Ok(changed_paths) = self.ports.workspace.list_changed_files_since(&merge_base) {
+                candidates.extend(changed_paths);
             }
         }
         candidates
@@ -166,13 +180,13 @@ impl ReviewSession {
                 }
                 Ok(None) => {}
                 Err(_) => {
-                    if let Some(previous) = self
+                    if let Some(previous_digest) = self
                         .disk_digests
                         .as_ref()
                         .and_then(|map| map.get(&path))
                         .copied()
                     {
-                        digests.insert(path, previous);
+                        digests.insert(path, previous_digest);
                     }
                 }
             }
@@ -444,5 +458,54 @@ mod tests {
             Event::WorktreeStatusChanged { view } => assert!(!view.worktree_status.is_dirty),
             other => panic!("expected WorktreeStatusChanged, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn non_sync_publish_updates_last_worktree_status_avoiding_duplicate_status_event() {
+        let fakes = Fakes::new(100);
+        fakes.workspace.put_disk("src/a.rs", "fn f() {}\n");
+        let mut session = fakes.open_synced();
+        assert_eq!(session.poll_worktree_files().unwrap(), None);
+
+        fakes
+            .workspace
+            .set_worktree_status(Some(review_model::WorktreeStatus {
+                is_dirty: false,
+                ahead: 1,
+                behind: 0,
+                modified_paths: Vec::new(),
+            }));
+        session.set_viewed("src/a.rs", false).unwrap();
+        let events = session.subscribe();
+
+        assert_eq!(session.poll_worktree_files().unwrap(), None);
+        assert!(events.try_recv().is_err());
+    }
+
+    #[test]
+    fn poll_worktree_files_rolls_back_threads_and_digests_when_save_fails() {
+        let fakes = Fakes::new(100);
+        fakes
+            .workspace
+            .put_disk("src/a.rs", "fn f() {}\nlet x = 1;\n");
+        let mut session = fakes.open_synced();
+        session
+            .comment_with_origin(Anchor::line("src/a.rs", 2), "Why 1?", Origin::Local)
+            .unwrap();
+        assert_eq!(session.poll_worktree_files().unwrap(), None);
+
+        fakes
+            .workspace
+            .write_disk("src/a.rs", b"// h1\n// h2\nfn f() {}\nlet x = 1;\n");
+        fakes.store.fail_saves_with(Some("disk full"));
+        assert!(session.poll_worktree_files().is_err());
+        assert_eq!(session.threads().last().unwrap().anchor.start, Some(2));
+
+        fakes.store.fail_saves_with(None);
+        assert_eq!(
+            session.poll_worktree_files().unwrap(),
+            Some(vec!["src/a.rs".to_owned()])
+        );
+        assert_eq!(session.threads().last().unwrap().anchor.start, Some(4));
     }
 }

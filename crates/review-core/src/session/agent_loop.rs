@@ -140,7 +140,13 @@ impl ReviewSession {
         let mut normalized_paths = Vec::with_capacity(conflicted_paths.len());
         for path in conflicted_paths {
             validate_safe_relative_path(path)?;
-            if !normalized_paths.iter().any(|existing| existing == path) {
+            if path.contains('`') {
+                bail!("invalid conflicted path {path:?}");
+            }
+            if !normalized_paths
+                .iter()
+                .any(|existing_path| existing_path == path)
+            {
                 normalized_paths.push(path.clone());
             }
         }
@@ -646,11 +652,19 @@ mod tests {
                 .prepare_conflict_resolution(&[], AgentKind::Claude)
                 .is_err()
         );
-        for unsafe_path in ["../etc/passwd", "/abs/file.rs", ".git/config"] {
+        for unsafe_path in [
+            "../etc/passwd",
+            "/abs/file.rs",
+            ".git/config",
+            "src/a\nb.rs",
+            "src/a\rb.rs",
+            "src/`evil`.rs",
+        ] {
             assert!(
                 session
                     .prepare_conflict_resolution(&[unsafe_path.into()], AgentKind::Claude)
-                    .is_err()
+                    .is_err(),
+                "expected {unsafe_path:?} to be rejected"
             );
         }
     }

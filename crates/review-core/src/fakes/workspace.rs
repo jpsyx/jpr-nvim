@@ -24,6 +24,8 @@ struct WorkspaceState {
     list_changed_failure: Option<String>,
     disk_read_failures: HashMap<String, String>,
     head_commit: Option<String>,
+    head_commit_calls: usize,
+    status_remote_shas: Vec<Option<String>>,
     status_override: Option<WorktreeStatus>,
     push_failure: Option<String>,
     pushed_refs: Vec<(String, String)>,
@@ -146,6 +148,18 @@ impl FakeWorkspace {
         self.lock().merge_base_calls
     }
 
+    /// How many times `HEAD` was looked up via [`Workspace::head_commit`].
+    #[must_use]
+    pub fn head_commit_calls(&self) -> usize {
+        self.lock().head_commit_calls
+    }
+
+    /// Every `remote_head_sha` argument passed to [`Workspace::worktree_status`].
+    #[must_use]
+    pub fn status_remote_shas(&self) -> Vec<Option<String>> {
+        self.lock().status_remote_shas.clone()
+    }
+
     fn lock(&self) -> MutexGuard<'_, WorkspaceState> {
         self.state
             .lock()
@@ -227,11 +241,16 @@ impl Workspace for FakeWorkspace {
     }
 
     fn head_commit(&self) -> Result<String> {
-        Ok(self.lock().current_head_commit())
+        let mut state = self.lock();
+        state.head_commit_calls += 1;
+        Ok(state.current_head_commit())
     }
 
-    fn worktree_status(&self, _remote_head_sha: Option<&str>) -> Result<WorktreeStatus> {
-        let state = self.lock();
+    fn worktree_status(&self, remote_head_sha: Option<&str>) -> Result<WorktreeStatus> {
+        let mut state = self.lock();
+        state
+            .status_remote_shas
+            .push(remote_head_sha.map(str::to_owned));
         if let Some(status) = &state.status_override {
             return Ok(status.clone());
         }
