@@ -60,6 +60,7 @@ pub fn handle(
         }
         "snapshot" => to_value(&lock(session)?.view()),
         "sync" => to_value(&engine_result_to_rpc(lock(session)?.sync())?),
+        "push" => to_value(&engine_result_to_rpc(lock(session)?.push())?),
         "fileDiff" => {
             let path = get_string_from_params(params, "path")?;
             to_value(&engine_result_to_rpc(lock(session)?.file_diff(path))?)

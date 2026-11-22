@@ -1,10 +1,10 @@
 #!/bin/sh
 # A stand-in for `jpr-review serve` in the Lua specs: answers by method name and
 # ignores its arguments. FAKE_ENGINE_PROTOCOL overrides the protocol version it
-# reports (default 4). When FAKE_ENGINE_LOG names a file, every request line is
-# appended to it, so a spec can check what the plugin sent. A fileDiff for
-# BROKEN.md fails, and one for NULL.md answers null. A setViewed for BROKEN.md
-# fails too.
+# reports (default 5); FAKE_ENGINE_VERSION overrides its server version (default
+# test). When FAKE_ENGINE_LOG names a file, every request line is appended to
+# it, so a spec can check what the plugin sent. A fileDiff for BROKEN.md fails,
+# and one for NULL.md answers null. A setViewed for BROKEN.md fails too.
 pr='{"number":7,"title":"Fix the widget","headSha":"head1","baseSha":"base1"}'
 tree='[{"depth":0,"name":"README.md","file":0}]'
 view_synced='{"pr":'"$pr"',"files":[{"path":"README.md","additions":2,"deletions":1,"viewed":"UNVIEWED","threads":1}],"tree":'"$tree"',"viewedCount":0,"threadCount":1,"draftCount":0,"conversationCount":1,"localUnsentCount":0,"queuedCount":0,"sync":{"state":"synced","at":1}}'
@@ -56,7 +56,7 @@ while IFS= read -r line; do
   if [ -n "$FAKE_ENGINE_LOG" ]; then printf '%s\n' "$line" >> "$FAKE_ENGINE_LOG"; fi
   id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
   case "$line" in
-    *'"method":"initialize"'*) reply '{"protocolVersion":'"${FAKE_ENGINE_PROTOCOL:-4}"',"version":"test"}' ;;
+    *'"method":"initialize"'*) reply '{"protocolVersion":'"${FAKE_ENGINE_PROTOCOL:-5}"',"version":"'"${FAKE_ENGINE_VERSION:-test}"'"}' ;;
     *'"method":"snapshot"'*) reply "$view_empty" ;;
     *'"method":"sync"'*) announce synced "$view_synced"; reply "$view_synced" ;;
     *'"method":"fileDiff"'*'"BROKEN.md"'*|*'"BROKEN.md"'*'"method":"fileDiff"'*)

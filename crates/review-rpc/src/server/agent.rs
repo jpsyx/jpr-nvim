@@ -1,5 +1,5 @@
 //! RPC method routing for local-comment agent loops, pre-pass writes,
-//! thread promotion, and live anchor updates.
+//! conflict-resolution dispatches, thread promotion, and live anchor updates.
 
 use std::sync::Mutex;
 
@@ -55,22 +55,17 @@ fn handle_prepass_and_anchor_method(
     params: &Value,
 ) -> Result<Value, RpcError> {
     match method {
-        "confirmSend" => {
-            let round = get_u64_from_params(params, "round")?;
-            let kind = get_round_kind_from_params(params)?;
-            let thread_ids = get_string_vec_from_params(params, "threadIds")?;
-            let prompt = get_string_from_params(params, "prompt")?;
-            let (entry, view) = engine_result_to_rpc(lock(session)?.confirm_send(
-                round,
-                kind,
-                &thread_ids,
-                prompt,
-            ))?;
-            Ok(json!({ "round": entry, "view": view }))
-        }
+        "confirmSend" => handle_confirm_send(session, params),
         "preparePrepass" => {
             let kind = get_agent_kind_from_params(params)?;
             to_value(&engine_result_to_rpc(lock(session)?.prepare_prepass(kind))?)
+        }
+        "prepareConflictResolution" => {
+            let paths = get_string_vec_from_params(params, "paths")?;
+            let kind = get_agent_kind_from_params(params)?;
+            to_value(&engine_result_to_rpc(
+                lock(session)?.prepare_conflict_resolution(&paths, kind),
+            )?)
         }
         "prepassWrite" => {
             let findings = get_prepass_findings_from_params(params)?;
@@ -89,4 +84,14 @@ fn handle_prepass_and_anchor_method(
             format!("unknown method {other:?}"),
         )),
     }
+}
+
+fn handle_confirm_send(session: &Mutex<ReviewSession>, params: &Value) -> Result<Value, RpcError> {
+    let round = get_u64_from_params(params, "round")?;
+    let kind = get_round_kind_from_params(params)?;
+    let thread_ids = get_string_vec_from_params(params, "threadIds")?;
+    let prompt = get_string_from_params(params, "prompt")?;
+    let (entry, view) =
+        engine_result_to_rpc(lock(session)?.confirm_send(round, kind, &thread_ids, prompt))?;
+    Ok(json!({ "round": entry, "view": view }))
 }

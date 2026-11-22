@@ -3,7 +3,7 @@
 use serde_json::{Value, json};
 
 /// Bumped whenever a request, response or event changes shape.
-pub const PROTOCOL_VERSION: u32 = 4;
+pub const PROTOCOL_VERSION: u32 = 5;
 
 /// A request from the client, as [`parse_request`] reads it off the wire. The
 /// server routes it by `method` and answers with its `id`.

@@ -116,13 +116,15 @@ pub fn get_agent_kind_from_params(params: &Value) -> Result<AgentKind, RpcError>
     })
 }
 
-/// Extracts required `kind` (`"send"` or `"prepass"`) for `confirmSend`.
+/// Extracts required `kind` (`"send"`, `"prepass"`, or `"conflict"`) for
+/// `confirmSend`.
 pub fn get_round_kind_from_params(params: &Value) -> Result<AgentRoundKind, RpcError> {
     match get_string_from_params(params, "kind")? {
         "send" => Ok(AgentRoundKind::Send),
         "prepass" => Ok(AgentRoundKind::Prepass),
+        "conflict" => Ok(AgentRoundKind::Conflict),
         other => Err(create_invalid_params_error(&format!(
-            "expected \"kind\" to be \"send\" or \"prepass\", got \"{other}\""
+            "expected \"kind\" to be \"send\", \"prepass\", or \"conflict\", got \"{other}\""
         ))),
     }
 }
@@ -295,7 +297,7 @@ mod tests {
     }
 
     #[test]
-    fn round_kind_parses_send_and_prepass_and_rejects_unknown() {
+    fn round_kind_parses_send_prepass_and_conflict_and_rejects_unknown() {
         assert_eq!(
             get_round_kind_from_params(&json!({ "kind": "send" })).unwrap(),
             AgentRoundKind::Send
@@ -305,10 +307,17 @@ mod tests {
             AgentRoundKind::Prepass
         );
         assert_eq!(
-            get_round_kind_from_params(&json!({ "kind": "unknown" }))
-                .unwrap_err()
-                .code,
-            RpcError::INVALID_PARAMS
+            get_round_kind_from_params(&json!({ "kind": "conflict" })).unwrap(),
+            AgentRoundKind::Conflict
+        );
+        let invalid_error = get_round_kind_from_params(&json!({ "kind": "unknown" })).unwrap_err();
+        assert_eq!(invalid_error.code, RpcError::INVALID_PARAMS);
+        assert!(
+            invalid_error
+                .message
+                .contains("\"send\", \"prepass\", or \"conflict\""),
+            "{}",
+            invalid_error.message
         );
     }
 

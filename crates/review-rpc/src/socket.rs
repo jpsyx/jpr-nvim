@@ -378,6 +378,8 @@ mod tests {
             "comment",
             "promoteThread",
             "sync",
+            "push",
+            "prepareConflictResolution",
             "setViewed",
             "reply",
             "editMessage",
