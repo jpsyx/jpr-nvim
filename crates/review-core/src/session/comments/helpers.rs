@@ -11,37 +11,34 @@ use crate::comments::find_message_mut;
 use crate::ports::{ForgeWriteError, QueuedCommentOp};
 
 impl ReviewSession {
-    pub(super) fn validate_anchor_file(&self, anchor: &Anchor) -> Result<()> {
-        let Some(path) = anchor.file.as_deref() else {
-            bail!("code comment anchor requires a file path");
-        };
-        if !self.saved.files.iter().any(|file| file.path == path) {
-            bail!("{path} is not a file this pull request changes");
-        }
-        Ok(())
+    pub(in super::super) fn validate_anchor_file(&self, anchor: &Anchor) -> Result<()> {
+        crate::reanchor::validate_anchor_file(&self.saved.files, anchor)
     }
 
-    pub(super) fn create_pr_comment(
+    pub(in super::super) fn create_github_thread_entry(
         &mut self,
-        pr: &PullRequest,
+        anchor: Anchor,
         body: &str,
-    ) -> Result<(Thread, SessionView)> {
+    ) -> Result<Thread> {
+        let pr = self.synced_pr()?.clone();
+        if anchor.kind == AnchorKind::Pr {
+            return Ok(self.insert_pr_comment(&pr, body));
+        }
+        self.validate_anchor_file(&anchor)?;
+        Ok(self.insert_code_thread(&pr, anchor, body))
+    }
+
+    fn insert_pr_comment(&mut self, pr: &PullRequest, body: &str) -> Thread {
         match self.ports.forge.create_conversation_comment(pr, body) {
             Ok(thread) => {
                 self.threads.push(thread.clone());
-                let view = self.save_and_announce_threads()?;
-                Ok((thread, view))
+                thread
             }
-            Err(error) => self.record_failed_or_queued_thread(Anchor::pr(), body, error),
+            Err(error) => self.insert_failed_or_queued_thread(Anchor::pr(), body, error),
         }
     }
 
-    pub(super) fn create_code_thread(
-        &mut self,
-        pr: &PullRequest,
-        anchor: Anchor,
-        body: &str,
-    ) -> Result<(Thread, SessionView)> {
+    fn insert_code_thread(&mut self, pr: &PullRequest, anchor: Anchor, body: &str) -> Thread {
         let pending_id = self.saved.registry.pending_review_id.clone();
         match self
             .ports
@@ -51,19 +48,18 @@ impl ReviewSession {
             Ok(created) => {
                 self.saved.registry.pending_review_id = Some(created.pending_review_id);
                 self.threads.push(created.thread.clone());
-                let view = self.save_and_announce_threads()?;
-                Ok((created.thread, view))
+                created.thread
             }
-            Err(error) => self.record_failed_or_queued_thread(anchor, body, error),
+            Err(error) => self.insert_failed_or_queued_thread(anchor, body, error),
         }
     }
 
-    fn record_failed_or_queued_thread(
+    fn insert_failed_or_queued_thread(
         &mut self,
         anchor: Anchor,
         body: &str,
         error: ForgeWriteError,
-    ) -> Result<(Thread, SessionView)> {
+    ) -> Thread {
         let temp_thread_id = self.allocate_temp_id("t");
         let temp_message_id = self.allocate_temp_id("m");
         let (sync, sync_error) = match error {
@@ -95,10 +91,11 @@ impl ReviewSession {
             state: ThreadState::Open,
             outdated: false,
             messages: vec![message],
+            agent: None,
+            promoted_to: None,
         };
         self.threads.push(thread.clone());
-        let view = self.save_and_announce_threads()?;
-        Ok((thread, view))
+        thread
     }
 
     pub(super) fn record_failed_or_queued_reply(
@@ -211,11 +208,11 @@ impl ReviewSession {
         }
     }
 
-    pub(super) fn find_thread(&self, thread_id: &str) -> Option<&Thread> {
+    pub(in super::super) fn find_thread(&self, thread_id: &str) -> Option<&Thread> {
         self.threads.iter().find(|thread| thread.id == thread_id)
     }
 
-    pub(super) fn find_thread_mut(&mut self, thread_id: &str) -> Option<&mut Thread> {
+    pub(in super::super) fn find_thread_mut(&mut self, thread_id: &str) -> Option<&mut Thread> {
         self.threads
             .iter_mut()
             .find(|thread| thread.id == thread_id)

@@ -101,6 +101,14 @@ local with_file_threads = vim.deepcopy(view)
 with_file_threads.files[1].threads = 3
 assert(stream.build_key_from_view(with_file_threads) ~= thread_key_base, "file.threads changes key")
 
+local with_local_unsent = vim.deepcopy(view)
+with_local_unsent.localUnsentCount = 2
+assert(stream.build_key_from_view(with_local_unsent) ~= thread_key_base, "localUnsentCount changes key")
+
+local with_nil_local_unsent = vim.deepcopy(view)
+with_nil_local_unsent.localUnsentCount = vim.NIL
+assert(stream.build_key_from_view(with_nil_local_unsent) == thread_key_base, "vim.NIL localUnsentCount matches 0")
+
 local file_thread = {
     threadId = "T_FILE",
     anchor = { file = "a.rs", kind = "file", side = "RIGHT" },
@@ -245,5 +253,29 @@ local right_only_split = stream.create_layout_from_stream({
 assert(#right_only_split.columns[1].lines == #right_only_split.columns[2].lines, "single-sided split padded")
 assert(right_only_split.columns[1].lines[4] == "" and right_only_split.columns[1].line_groups[4] == "JprDiffFiller", vim.inspect(right_only_split.columns[1]))
 assert(right_only_split.columns[2].lines[4]:find("  │ @alice", 1, true), vim.inspect(right_only_split.columns[2]))
+
+local local_file_thread = {
+    threadId = "loc-file",
+    origin = "local",
+    anchor = { file = "a.rs", kind = "file", side = "RIGHT" },
+    displayLine = 0,
+    kind = "local",
+    state = "open",
+    outdated = false,
+    messageCount = 1,
+    firstAuthor = "pablo",
+    snippet = "add doc comment",
+    agent = { state = "unsent" },
+    messages = { { id = "lm-f", author = "pablo", body = "add doc comment" } },
+}
+local local_stream = stream.create_layout_from_stream({
+    mode = "unified",
+    rows = {
+        { kind = "file", path = "a.rs", additions = 1, deletions = 0, viewed = "UNVIEWED", folded = false },
+        { kind = "thread", path = "a.rs", thread = local_file_thread, target = 1 },
+    },
+}, { expanded = false })
+assert(local_stream.columns[1].lines[2] == "  ◆ @pablo: add doc comment [local · unsent]", vim.inspect(local_stream.columns[1].lines))
+assert(local_stream.columns[1].line_groups[2] == "JprThreadLocal", vim.inspect(local_stream.columns[1].line_groups))
 
 print("stream_render_spec: ok")

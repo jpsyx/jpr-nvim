@@ -67,6 +67,39 @@ local zero_counts = panel.build({ files = {}, draftCount = 0, conversationCount 
 assert(zero_counts.lines[2] == "viewed 0/0 · threads 0", zero_counts.lines[2])
 assert(zero_counts.lines[5] == "  💬 Conversation", zero_counts.lines[5])
 assert(zero_counts.conversation_line == 5, tostring(zero_counts.conversation_line))
+assert(
+    panel.build_counts_text({
+        viewedCount = 1,
+        files = { {}, {} },
+        threadCount = 3,
+        draftCount = 1,
+        localUnsentCount = 2,
+        queuedCount = 0,
+    }) == "viewed 1/2 · threads 3 · drafts 1 · local unsent 2",
+    "localUnsentCount > 0 appends local unsent segment"
+)
+assert(
+    panel.build_counts_text({
+        viewedCount = 1,
+        files = { {}, {} },
+        threadCount = 3,
+        draftCount = 1,
+        localUnsentCount = 0,
+        queuedCount = 0,
+    }) == "viewed 1/2 · threads 3 · drafts 1",
+    "localUnsentCount = 0 omits local unsent segment"
+)
+assert(
+    panel.build_counts_text({
+        viewedCount = 1,
+        files = { {}, {} },
+        threadCount = 3,
+        draftCount = 1,
+        localUnsentCount = vim.NIL,
+        queuedCount = 0,
+    }) == "viewed 1/2 · threads 3 · drafts 1",
+    "localUnsentCount = vim.NIL omits local unsent segment"
+)
 
 local failed = panel.build({ files = {}, sync = { state = "failed", at = 1, message = "offline" } }, 2)
 assert(failed.lines[1] == "Loading pull request…", failed.lines[1])

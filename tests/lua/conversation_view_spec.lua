@@ -103,6 +103,28 @@ end), "PR comment RPC sent")
 local sent_pr_comment = helpers.read_requests(log, "comment")[comments_before + 1].params
 assert(vim.deep_equal(sent_pr_comment.anchor, { kind = "pr", side = "RIGHT" }) and sent_pr_comment.body == "Ship it!", vim.inspect(sent_pr_comment))
 
+-- 3b. Pressing c, flipping destination to [Local -> agent] with <C-g>, and saving with <C-s> sends origin = "local".
+review.compose_destination = nil
+vim.api.nvim_set_current_win(main_window.find(review))
+helpers.press_key("c")
+local pr_toggle_win = helpers.find_floating_win("PR Conversation")
+assert(pr_toggle_win ~= nil and vim.api.nvim_win_is_valid(pr_toggle_win), "compose opens on c for toggle")
+helpers.press_key("<C-g>")
+assert(helpers.win_title(pr_toggle_win):find("[Local → agent] PR Conversation", 1, true) ~= nil, helpers.win_title(pr_toggle_win))
+vim.api.nvim_buf_set_lines(vim.api.nvim_win_get_buf(pr_toggle_win), 0, -1, false, { "Local PR thought" })
+helpers.press_key("<C-s>")
+assert(vim.wait(3000, function()
+    return #helpers.read_requests(log, "comment") == comments_before + 2
+end), "local PR comment RPC sent")
+local sent_local_pr_comment = helpers.read_requests(log, "comment")[comments_before + 2].params
+assert(
+    vim.deep_equal(sent_local_pr_comment.anchor, { kind = "pr", side = "RIGHT" })
+        and sent_local_pr_comment.body == "Local PR thought"
+        and sent_local_pr_comment.origin == "local",
+    vim.inspect(sent_local_pr_comment)
+)
+review.compose_destination = nil
+
 -- 4. Multi-message PR threads: reactions, author checks on e/d, failed X, refresh visibility, q, close.
 local pr_threads_fixture = {
     {
@@ -166,6 +188,25 @@ local pr_threads_fixture = {
             },
         },
     },
+    {
+        id = "T_PR_LOCAL",
+        origin = "local",
+        anchor = { kind = "pr", side = "RIGHT" },
+        state = "open",
+        outdated = false,
+        agent = { state = "unsent" },
+        messages = {
+            {
+                id = "M_PR_LOCAL",
+                author = "claude",
+                body = "Local PR note",
+                created = "2026-11-20T02:00:00Z",
+                updated = "2026-11-20T02:00:00Z",
+                viewerDidAuthor = false,
+                reactions = {},
+            },
+        },
+    },
 }
 
 local original_request = review.client.request
@@ -200,12 +241,15 @@ assert(rendered_text:find("should not appear in conversation", 1, true) == nil, 
 assert(rendered_text:find(render_threads.REACTION_EMOJI.THUMBS_UP .. " 2*", 1, true) ~= nil, "reactions rendered: " .. rendered_text)
 assert(rendered_text:find("[failed]", 1, true) ~= nil, "failed badge rendered: " .. rendered_text)
 assert(rendered_text:find("rate limited", 1, true) ~= nil, "syncError rendered: " .. rendered_text)
+assert(rendered_text:find("[local · unsent]", 1, true) ~= nil, "local badge rendered: " .. rendered_text)
+assert(rendered_text:find("[p]romote", 1, true) ~= nil, "local conversation footer includes [p]romote: " .. rendered_text)
 
 local conversation_win = main_window.find(review)
 vim.api.nvim_set_current_win(conversation_win)
 local other_message_line = helpers.find_line_number(rendered_lines, "Thanks for the fix")
 local own_message_line = helpers.find_line_number(rendered_lines, "Offline follow-up")
-assert(other_message_line ~= nil and own_message_line ~= nil, rendered_text)
+local local_message_line = helpers.find_line_number(rendered_lines, "Local PR note")
+assert(other_message_line ~= nil and own_message_line ~= nil and local_message_line ~= nil, rendered_text)
 
 -- On non-own message: e and d error, X informs, + sends toggleReaction.
 vim.api.nvim_win_set_cursor(conversation_win, { other_message_line, 0 })
@@ -224,6 +268,29 @@ local retry_before = #helpers.read_requests(log, "retryMessage")
 helpers.press_key("X")
 assert(#infos == 1 and infos[1]:find("not in a failed state", 1, true), vim.inspect(infos))
 assert(#helpers.read_requests(log, "retryMessage") == retry_before, "non-failed X sends no RPC")
+
+-- On non-local GitHub thread: r, p, and s inform without opening compose or sending to agent.
+infos = {}
+helpers.press_key("r")
+assert(#infos == 1 and infos[1]:find("only local threads support replies", 1, true), vim.inspect(infos))
+assert(helpers.find_floating_win("Reply") == nil, "r on non-local thread does not open reply compose")
+
+infos = {}
+helpers.press_key("p")
+assert(#infos == 1 and infos[1]:find("only local threads can be promoted", 1, true), vim.inspect(infos))
+assert(helpers.find_floating_win("Promote") == nil, "p on non-local thread does not open promote compose")
+
+local sent_agent_threads = {}
+local original_agent_module = package.loaded["jpr.agent"]
+package.loaded["jpr.agent"] = {
+    send = function(target_session, thread_id)
+        sent_agent_threads[#sent_agent_threads + 1] = { session = target_session, thread_id = thread_id }
+    end,
+}
+infos = {}
+helpers.press_key("s")
+assert(#infos == 1 and infos[1]:find("only local threads can be sent", 1, true), vim.inspect(infos))
+assert(#sent_agent_threads == 0, "s on non-local thread does not call agent.send")
 
 local original_select = vim.ui.select
 vim.ui.select = function(items, _, on_choice)
@@ -279,6 +346,86 @@ assert(vim.wait(3000, function()
     return #helpers.read_requests(log, "retryMessage") == retry_before + 1
 end), "X on failed message sends retryMessage")
 assert(helpers.read_requests(log, "retryMessage")[retry_before + 1].params.messageId == "M_PR_OWN")
+
+-- 4b. Local PR thread actions: r (reply), p (promote), s (send), + guard, d even when not viewerDidAuthor.
+vim.api.nvim_set_current_win(conversation_win)
+vim.api.nvim_win_set_cursor(conversation_win, { local_message_line, 0 })
+
+local replies_before = #helpers.read_requests(log, "reply")
+helpers.press_key("r")
+local local_reply_win = helpers.find_floating_win("Local reply")
+assert(local_reply_win ~= nil and vim.api.nvim_win_is_valid(local_reply_win), "r opens [Local reply] compose")
+vim.api.nvim_buf_set_lines(vim.api.nvim_win_get_buf(local_reply_win), 0, -1, false, { "Follow up locally" })
+helpers.press_key("<C-s>")
+assert(vim.wait(3000, function()
+    return #helpers.read_requests(log, "reply") == replies_before + 1
+end), "r -> <C-s> sends reply for local PR thread")
+assert(helpers.read_requests(log, "reply")[replies_before + 1].params.threadId == "T_PR_LOCAL")
+
+vim.api.nvim_set_current_win(conversation_win)
+vim.api.nvim_win_set_cursor(conversation_win, { local_message_line, 0 })
+local promotes_before = #helpers.read_requests(log, "promoteThread")
+helpers.press_key("p")
+local promote_win = helpers.find_floating_win("Promote")
+assert(promote_win ~= nil and vim.api.nvim_win_is_valid(promote_win), "p opens [Promote -> GitHub] compose")
+assert(helpers.win_title(promote_win):find("[Promote → GitHub] PR Conversation", 1, true) ~= nil, helpers.win_title(promote_win))
+assert(table.concat(vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(promote_win), 0, -1, false), "\n") == "Local PR note")
+helpers.press_key("<C-s>")
+assert(vim.wait(3000, function()
+    return #helpers.read_requests(log, "promoteThread") == promotes_before + 1
+end), "p -> <C-s> sends promoteThread")
+local sent_promote = helpers.read_requests(log, "promoteThread")[promotes_before + 1].params
+assert(sent_promote.threadId == "T_PR_LOCAL" and sent_promote.body == "Local PR note", vim.inspect(sent_promote))
+
+vim.api.nvim_set_current_win(conversation_win)
+vim.api.nvim_win_set_cursor(conversation_win, { local_message_line, 0 })
+helpers.press_key("s")
+assert(#sent_agent_threads == 1 and sent_agent_threads[1].session == review and sent_agent_threads[1].thread_id == "T_PR_LOCAL",
+    "s delegates single local thread to jpr.agent.send")
+package.loaded["jpr.agent"] = original_agent_module
+
+infos = {}
+local react_local_before = #helpers.read_requests(log, "toggleReaction")
+helpers.press_key("+")
+assert(#infos == 1 and infos[1]:find("reactions apply only to GitHub comments", 1, true), vim.inspect(infos))
+assert(#helpers.read_requests(log, "toggleReaction") == react_local_before, "+ on local thread sends no toggleReaction")
+
+local delete_local_before = #helpers.read_requests(log, "deleteMessage")
+vim.fn.confirm = function()
+    return 1
+end
+helpers.press_key("d")
+vim.fn.confirm = original_confirm
+assert(vim.wait(3000, function()
+    return #helpers.read_requests(log, "deleteMessage") == delete_local_before + 1
+end), "d deletes local thread message even when not viewerDidAuthor")
+assert(helpers.read_requests(log, "deleteMessage")[delete_local_before + 1].params.messageId == "M_PR_LOCAL")
+
+-- Verify JprThreadLocal highlight is placed on the [local * unsent] badge line and p guards already-promoted threads.
+local badge_line = helpers.find_line_number(rendered_lines, "[local · unsent]")
+assert(badge_line ~= nil, "local badge line present")
+local extmarks = vim.api.nvim_buf_get_extmarks(conversation_buf, -1, { badge_line - 1, 0 }, { badge_line - 1, -1 }, { details = true })
+local has_local_highlight = false
+for _, mark in ipairs(extmarks) do
+    if mark[4] and mark[4].hl_group == "JprThreadLocal" then
+        has_local_highlight = true
+    end
+end
+assert(has_local_highlight, "local badge uses JprThreadLocal highlight")
+
+pr_threads_fixture[4].promotedTo = "PRRT_77"
+conversation.refresh(review)
+assert(vim.wait(3000, function()
+    local text = table.concat(vim.api.nvim_buf_get_lines(conversation_buf, 0, -1, false), "\n")
+    return text:find("[promoted]", 1, true) ~= nil
+end), "promoted badge rendered")
+local promoted_line = helpers.find_line_number(vim.api.nvim_buf_get_lines(conversation_buf, 0, -1, false), "Local PR note")
+vim.api.nvim_win_set_cursor(conversation_win, { promoted_line, 0 })
+infos = {}
+helpers.press_key("p")
+assert(#infos == 1 and infos[1]:find("already promoted", 1, true) ~= nil, vim.inspect(infos))
+assert(helpers.find_floating_win("Promote") == nil, "p on already-promoted local thread does not open compose")
+pr_threads_fixture[4].promotedTo = nil
 
 -- Stale threads request_id guard.
 hold_threads = true

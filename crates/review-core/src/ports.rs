@@ -7,8 +7,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
 use review_model::{
-    Anchor, AnchorKind, ChangedFile, MentionCandidate, Message, PullRequest, Reaction,
-    ReactionContent, ReviewEvent, Thread,
+    AgentKind, AgentRound, Anchor, AnchorKind, ChangedFile, MentionCandidate, Message, PullRequest,
+    Reaction, ReactionContent, ReviewEvent, Thread,
 };
 use serde::{Deserialize, Serialize};
 
@@ -254,6 +254,9 @@ pub trait Workspace: Send {
     fn file_on_disk(&self, path: &str) -> Result<Option<Vec<u8>>>;
     /// The files renamed between `commit` and the checkout, as `(old, new)` paths.
     fn renames(&self, commit: &str) -> Result<Vec<(String, String)>>;
+    /// Sorted repo-relative paths whose worktree content differs from `commit`
+    /// or are untracked.
+    fn list_changed_files_since(&self, commit: &str) -> Result<Vec<String>>;
 }
 
 /// The running daemon and what it last saw, persisted between runs.
@@ -271,6 +274,27 @@ pub struct SessionRecord {
     pub pr: Option<PullRequest>,
     /// Unix seconds of the last successful sync.
     pub last_synced_at: Option<u64>,
+    /// Unix domain socket path where the running daemon accepts CLI requests.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub socket: Option<String>,
+    /// Stable session identifier for resuming Claude Code or Codex on this PR.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_session_id: Option<String>,
+    /// Agent kind (`claude` or `codex`) associated with `agent_session_id`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_kind: Option<AgentKind>,
+}
+
+/// Local-only threads and counters persisted in `local.json`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct LocalStoreState {
+    /// Next numeric suffix for `loc-<id>` threads and `loc-m-<id>` messages.
+    pub next_local_id: u64,
+    /// Next 1-based dispatch round counter.
+    pub next_round: u64,
+    /// Every `Origin::Local` thread on this pull request.
+    pub threads: Vec<Thread>,
 }
 
 /// What the engine still owes the forge: changes made while the forge could
@@ -314,6 +338,8 @@ pub struct StoreSnapshot {
     pub files: Vec<ChangedFile>,
     /// What the engine still owes the forge.
     pub registry: SyncRegistry,
+    /// Local-only threads and counters for the reviewer-agent loop.
+    pub local: LocalStoreState,
 }
 
 /// Durable storage for one pull request's review state.
@@ -326,6 +352,10 @@ pub trait ReviewStore: Send {
     fn load(&self) -> Result<StoreSnapshot>;
     /// Replaces what is saved.
     fn save(&self, snapshot: &StoreSnapshot) -> Result<()>;
+    /// Appends one delivered agent round to durable storage.
+    fn append_round(&self, round: &AgentRound) -> Result<()>;
+    /// All persisted agent rounds, in append order.
+    fn rounds(&self) -> Result<Vec<AgentRound>>;
 }
 
 /// The time in Unix seconds. The session stamps each sync with it; it is a

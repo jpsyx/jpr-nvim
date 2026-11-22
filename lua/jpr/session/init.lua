@@ -145,6 +145,7 @@ local function forget(session, close_tab)
     close_optional_view("jpr.comments.popup", session)
     close_optional_view("jpr.comments.compose", session)
     close_optional_view("jpr.views.submit", session)
+    close_optional_view("jpr.agent", session)
     require("jpr.views.stream").close(session)
     require("jpr.views.diff").detach(session)
     panel.close(session)
@@ -292,35 +293,13 @@ end
 
 --- Updates `session`'s views and error reporting in response to engine notifications.
 function M.on_notification(session, method, params)
-    if method == "event" and params and (params.type == "synced" or params.type == "viewedChanged") then
-        M.show(session, params.view)
-    elseif method == "event" and params and params.type == "threadsChanged" then
-        session.view = params.view
-        panel.render(session, params.view)
-        require("jpr.views.diff").redraw_threads(session)
-        require("jpr.views.stream").refresh(session, true)
-        local conversation = package.loaded["jpr.views.conversation"]
-        if conversation and conversation.refresh then
-            conversation.refresh(session)
-        end
-    elseif method == "event" and params and params.type == "syncFailed" then
-        session.view.sync = { state = "failed", at = os.time(), message = params.message }
-        panel.render(session, session.view)
-    elseif method == "protocolError" then
-        jpr().error(params.message)
-    end
+    require("jpr.session.events").on_notification(session, method, params, M.show)
 end
 
 --- Handles `session`'s engine exiting. An exit the session did not ask for
 --- forgets the session and reports the exit code and the engine's stderr.
 function M.on_exit(session, code, stderr)
-    session.client = nil
-    if session.closing then
-        return
-    end
-    forget(session)
-    local detail = (stderr and stderr ~= "") and (": " .. stderr) or ""
-    jpr().error(("the review engine for PR #%d stopped (exit %d)%s"):format(session.number, code, detail))
+    require("jpr.session.events").on_exit(session, code, stderr, forget)
 end
 
 --- `:Jpr sync`: syncs the current tab's session now.
@@ -361,6 +340,33 @@ function M.stream_current()
         return jpr().error("no pull request is open in this tab")
     end
     require("jpr.views.stream").show(session, { focus = true })
+end
+
+--- `:Jpr agent`: toggles the interactive agent terminal panel for the current review.
+function M.agent_current()
+    local session = M.current()
+    if not session then
+        return jpr().error("no pull request is open in this tab")
+    end
+    require("jpr.agent").toggle(session)
+end
+
+--- `:Jpr send`: sends unsent local review threads to the interactive agent panel.
+function M.send_current()
+    local session = M.current()
+    if not session then
+        return jpr().error("no pull request is open in this tab")
+    end
+    require("jpr.agent").send(session)
+end
+
+--- `:Jpr prepass`: sends a pre-pass review prompt to the interactive agent panel.
+function M.prepass_current()
+    local session = M.current()
+    if not session then
+        return jpr().error("no pull request is open in this tab")
+    end
+    require("jpr.agent").prepass(session)
 end
 
 require("jpr.session.comments").attach(M)

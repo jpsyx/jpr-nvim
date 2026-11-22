@@ -79,6 +79,9 @@ pub struct SessionView {
     /// How many pull-request conversation messages exist.
     #[serde(default)]
     pub conversation_count: usize,
+    /// Open unsent local threads queued for `:Jpr send`.
+    #[serde(default)]
+    pub local_unsent_count: usize,
     /// Viewed marks waiting to reach the forge.
     pub queued_count: usize,
     /// When the session last talked to the forge, and how it went.
@@ -113,6 +116,20 @@ pub enum Event {
         /// The updated view with refreshed counts.
         view: Box<SessionView>,
     },
+    /// Working-tree files under the PR diff changed on disk.
+    FilesChanged {
+        /// Repository-relative paths reported as changed.
+        paths: Vec<String>,
+        /// The updated view with refreshed file metrics.
+        view: Box<SessionView>,
+    },
+    /// An agent dispatch or pre-pass round was confirmed and recorded.
+    AgentRound {
+        /// The recorded round details.
+        round: crate::AgentRound,
+        /// The updated view with refreshed counts.
+        view: Box<SessionView>,
+    },
 }
 
 #[cfg(test)]
@@ -139,9 +156,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn events_are_tagged_by_type_and_views_use_camel_case() {
-        let view = SessionView {
+    fn create_sample_view() -> SessionView {
+        SessionView {
             pr: None,
             files: vec![FileRow {
                 path: "a.rs".into(),
@@ -155,11 +171,17 @@ mod tests {
             thread_count: 3,
             draft_count: 1,
             conversation_count: 2,
+            local_unsent_count: 4,
             queued_count: 2,
             sync: SyncState::Never,
-        };
+        }
+    }
+
+    #[test]
+    fn synced_event_uses_camel_case_view_fields() {
+        let view = create_sample_view();
         let json = serde_json::to_value(Event::Synced {
-            view: Box::new(view.clone()),
+            view: Box::new(view),
         })
         .unwrap();
         assert_eq!(json["type"], "synced");
@@ -167,13 +189,39 @@ mod tests {
         assert_eq!(json["view"]["threadCount"], 3);
         assert_eq!(json["view"]["draftCount"], 1);
         assert_eq!(json["view"]["conversationCount"], 2);
+        assert_eq!(json["view"]["localUnsentCount"], 4);
         assert_eq!(json["view"]["queuedCount"], 2);
         assert_eq!(json["view"]["files"][0]["viewed"], "VIEWED");
+    }
+
+    #[test]
+    fn delta_and_failure_events_are_tagged_by_type() {
+        let view = create_sample_view();
         let threads_changed = serde_json::to_value(Event::ThreadsChanged {
-            view: Box::new(view),
+            view: Box::new(view.clone()),
         })
         .unwrap();
         assert_eq!(threads_changed["type"], "threadsChanged");
+        let files_changed = serde_json::to_value(Event::FilesChanged {
+            paths: vec!["src/lib.rs".into()],
+            view: Box::new(view.clone()),
+        })
+        .unwrap();
+        assert_eq!(files_changed["type"], "filesChanged");
+        assert_eq!(files_changed["paths"], serde_json::json!(["src/lib.rs"]));
+        let agent_round = serde_json::to_value(Event::AgentRound {
+            round: crate::AgentRound {
+                round: 1,
+                kind: crate::AgentRoundKind::Send,
+                thread_ids: vec!["loc-1".into()],
+                prompt: "prompt".into(),
+                sent_at: 99,
+            },
+            view: Box::new(view),
+        })
+        .unwrap();
+        assert_eq!(agent_round["type"], "agentRound");
+        assert_eq!(agent_round["round"]["round"], 1);
         let failed = serde_json::to_value(Event::SyncFailed {
             message: "offline".into(),
         })

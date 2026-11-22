@@ -1,13 +1,17 @@
 //! The git [`Workspace`]: a pull request's worktree and its history.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use review_core::ports::Workspace;
 
-use crate::git_output::{is_batch_request_safe, is_commit_id, parse_batch_blob, parse_renames};
-use crate::process::{run, run_bytes, run_with_input};
+use crate::git_output::{
+    is_batch_request_safe, is_commit_id, parse_batch_blob, parse_nul_paths,
+    parse_porcelain_z_paths, parse_renames,
+};
+use crate::process::{run, run_bytes, run_bytes_unlocked, run_with_input};
 use crate::unattended::run_unattended;
 use crate::worktree_path::{path_to_safe_relative, read_in_worktree};
 
@@ -126,6 +130,32 @@ impl Workspace for GitWorkspace {
         )
         .with_context(|| format!("finding the files renamed since {commit}"))?;
         Ok(parse_renames(&output))
+    }
+
+    fn list_changed_files_since(&self, commit: &str) -> Result<Vec<String>> {
+        require_commit_id(commit)?;
+        let diff_output = run_bytes_unlocked(
+            "git",
+            &["diff-index", "--name-only", "-z", commit, "--"],
+            &self.dir,
+        )
+        .with_context(|| format!("listing files changed since {commit}"))?;
+        let status_output = run_bytes_unlocked(
+            "git",
+            &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+            &self.dir,
+        )
+        .context("listing worktree status changes")?;
+        let mut paths = BTreeSet::new();
+        for path in parse_nul_paths(&diff_output)
+            .into_iter()
+            .chain(parse_porcelain_z_paths(&status_output))
+        {
+            if path_to_safe_relative(&path).is_ok() {
+                paths.insert(path);
+            }
+        }
+        Ok(paths.into_iter().collect())
     }
 }
 

@@ -510,3 +510,60 @@ drafts and `:Jpr submit` stay in sync.
 **Revisit when.** GitHub's GraphQL `addPullRequestReviewThreadReply` supports
 immediate replies without a `pullRequestReviewId`, or reviewers want an explicit
 toggle to hold replies as pending drafts even when no pending review exists.
+
+## CLI agent commands talk to the daemon socket first and fall back to local.lock
+
+**Decision.** `jpr-review threads`, `jpr-review reply`, and
+`jpr-review prepass-write` try the live daemon's Unix domain socket first
+(`--socket`, `$JPR_SOCKET`, or the socket recorded in `session.json`, with an
+explicit `--socket` failing loudly rather than falling back), and fall back to
+reading the store or mutating `local.json` under an exclusive `local.lock` file
+(`O_CREAT|O_EXCL`, 5 second wait, 30 second stale eviction) when no daemon is
+reachable. The daemon's socket accepts only `snapshot`, `threads`, `agentReply`,
+and `prepassWrite` (refusing all other RPC methods, including `shutdown`, with
+`-32600`), and flushes any events produced by socket mutations straight to the
+stdio stream so Neovim updates immediately.
+
+**Why.** When Neovim is open, the live `jpr-review serve` process holds the
+authoritative in-memory session and must observe every agent reply or pre-pass
+write immediately so threads, badges, and counts redraw without polling disk.
+When the agent runs standalone or after `:Jpr close`, no daemon is serving, so
+`local.lock` still lets `reply` and `prepass-write` update `local.json` safely
+without interleaving writes or corrupting atomic renames.
+
+**Consequences.** Any coding agent or hook running inside the session's shell
+cannot drive GitHub mutations or shut down the Neovim engine over the socket,
+while `agentReply` and `prepassWrite` still reach the live UI in real time.
+Offline writes wait up to 5 seconds for `local.lock` and take over locks older
+than 30 seconds if a prior CLI process crashed.
+
+**Revisit when.** Multiple concurrent frontends need full read/write session
+sharing over a socket rather than one Neovim stdio owner plus an agent helper
+channel.
+
+## Two-phase agent dispatch confirms rounds only after bracketed paste succeeds
+
+**Decision.** `:Jpr send` and `:Jpr prepass` split engine state transitions
+from terminal I/O into two RPC steps: `prepareSend` (or `preparePrepass`)
+returns an `AgentDispatch` containing the round number, prompt, and
+`AgentProfile` without advancing threads to `sent` or writing `rounds.jsonl`,
+and Neovim calls `confirmSend` only after launching the agent terminal, sanitizing
+any raw ESC (`\x1b`) bytes from the payload, wrapping it in bracketed paste
+(`\x1b[200~...\x1b[201~`), waiting `submitDelayMs` (200 ms), and sending the
+profile's submit key (`\r` for Claude, `\t` for Codex).
+
+**Why.** Spawning the agent split or pasting into its PTY can fail (missing
+binary, closed window, channel error). Advancing local threads from `unsent` to
+`sent` before the prompt actually reached the agent would strand those threads
+and leave `:Jpr send` claiming nothing is unsent. Stripping raw ESC bytes
+prevents untrusted PR titles, file paths, or comment text inside a prompt from
+breaking out of bracketed paste and injecting terminal control sequences or
+premature submits.
+
+**Consequences.** If spawning or pasting fails, local threads remain `unsent`
+and no phantom round is appended to `rounds.jsonl`. If Neovim crashes in the
+200 ms window between pasting and calling `confirmSend`, the agent may have
+received the prompt while the threads stay `unsent` so the reviewer can re-send.
+
+**Revisit when.** Agent CLIs expose a non-PTY structured prompt/session API that
+acknowledges receipt directly without terminal paste timing.

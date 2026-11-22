@@ -10,7 +10,7 @@ mod tests;
 
 use anyhow::{Context, Result, bail};
 use review_model::{
-    Anchor, AnchorKind, MentionCandidate, ReactionContent, SessionView, Thread, ThreadState,
+    Anchor, AnchorKind, MentionCandidate, Origin, ReactionContent, SessionView, Thread, ThreadState,
 };
 
 use super::ReviewSession;
@@ -33,23 +33,19 @@ impl ReviewSession {
     /// Creates a draft code thread (`File`/`Line`/`Range`) or a published PR
     /// conversation comment (`Pr`).
     pub fn comment(&mut self, anchor: Anchor, body: &str) -> Result<(Thread, SessionView)> {
-        if body.trim().is_empty() {
-            bail!("comment body cannot be empty");
-        }
-        let pr = self.synced_pr()?.clone();
-        if anchor.kind == AnchorKind::Pr {
-            return self.create_pr_comment(&pr, body);
-        }
-        self.validate_anchor_file(&anchor)?;
-        self.create_code_thread(&pr, anchor, body)
+        self.comment_with_origin(anchor, body, Origin::Github)
     }
 
     /// Appends a reply to `thread_id` (published immediately when no pending
-    /// review blocks it, or attached as a draft to the active pending review)
-    /// and returns the updated [`Thread`] and [`SessionView`].
+    /// review blocks it, attached as a draft to the active pending review, or
+    /// appended locally for `Origin::Local`) and returns the updated [`Thread`]
+    /// and [`SessionView`].
     pub fn reply(&mut self, thread_id: &str, body: &str) -> Result<(Thread, SessionView)> {
         if body.trim().is_empty() {
             bail!("reply body cannot be empty");
+        }
+        if self.is_local_thread(thread_id) {
+            return self.reply_local_thread(thread_id, body);
         }
         let pr = self.synced_pr()?.clone();
         let canonical_thread_id = self.get_canonical_id_from_id(thread_id);
@@ -86,11 +82,14 @@ impl ReviewSession {
         }
     }
 
-    /// Edits `message_id`'s body on the forge (or updates an unflushed local
-    /// placeholder in place).
+    /// Edits `message_id`'s body on the forge (or updates an unflushed or local
+    /// message in place).
     pub fn edit_message(&mut self, message_id: &str, body: &str) -> Result<(Thread, SessionView)> {
         if body.trim().is_empty() {
             bail!("message body cannot be empty");
+        }
+        if self.is_local_message(message_id) {
+            return self.edit_local_message(message_id, body);
         }
         let _ = self.synced_pr()?;
         let canonical_message_id = self.get_canonical_id_from_id(message_id);
@@ -126,6 +125,9 @@ impl ReviewSession {
 
     /// Deletes `message_id` (removing its thread when it was the sole message).
     pub fn delete_message(&mut self, message_id: &str) -> Result<SessionView> {
+        if self.is_local_message(message_id) {
+            return self.delete_local_message(message_id);
+        }
         let _ = self.synced_pr()?;
         let canonical_message_id = self.get_canonical_id_from_id(message_id);
         let (thread_id, anchor_kind, _) = self.locate_message(&canonical_message_id)?;
@@ -170,6 +172,9 @@ impl ReviewSession {
         thread_id: &str,
         is_resolved: bool,
     ) -> Result<(Thread, SessionView)> {
+        if self.is_local_thread(thread_id) {
+            return self.set_local_resolved(thread_id, is_resolved);
+        }
         let _ = self.synced_pr()?;
         let canonical_thread_id = self.get_canonical_id_from_id(thread_id);
         let target_state = if is_resolved {
@@ -186,30 +191,40 @@ impl ReviewSession {
         let previous_state = thread.state;
         thread.state = target_state;
         let snapshot_thread = thread.clone();
+        self.apply_forge_resolved(&canonical_thread_id, is_resolved, previous_state)?;
+        let view = self.save_and_announce_threads()?;
+        Ok((snapshot_thread, view))
+    }
+
+    fn apply_forge_resolved(
+        &mut self,
+        canonical_thread_id: &str,
+        is_resolved: bool,
+        previous_state: ThreadState,
+    ) -> Result<()> {
         match self
             .ports
             .forge
-            .set_resolved(&canonical_thread_id, is_resolved)
+            .set_resolved(canonical_thread_id, is_resolved)
         {
-            Ok(()) => {}
+            Ok(()) => Ok(()),
             Err(ForgeWriteError::Transient(_)) => {
                 self.saved
                     .registry
                     .queued_ops
                     .push(QueuedCommentOp::SetResolved {
-                        thread_id: canonical_thread_id,
+                        thread_id: canonical_thread_id.to_owned(),
                         resolved: is_resolved,
                     });
+                Ok(())
             }
             Err(ForgeWriteError::Rejected(reason)) => {
-                if let Some(target) = self.find_thread_mut(&canonical_thread_id) {
+                if let Some(target) = self.find_thread_mut(canonical_thread_id) {
                     target.state = previous_state;
                 }
                 bail!("{reason}");
             }
         }
-        let view = self.save_and_announce_threads()?;
-        Ok((snapshot_thread, view))
     }
 
     /// Toggles `content` on `message_id` for the viewer.
@@ -218,6 +233,9 @@ impl ReviewSession {
         message_id: &str,
         content: ReactionContent,
     ) -> Result<(Thread, SessionView)> {
+        if self.is_local_message(message_id) {
+            return self.toggle_local_reaction(message_id, content);
+        }
         let _ = self.synced_pr()?;
         let canonical_message_id = self.get_canonical_id_from_id(message_id);
         let (thread_id, _, _) = self.locate_message(&canonical_message_id)?;
@@ -247,6 +265,9 @@ impl ReviewSession {
     /// Retries sending a [`MessageSync::Failed`](review_model::MessageSync::Failed)
     /// message to the forge and returns the updated [`SessionView`].
     pub fn retry_message(&mut self, message_id: &str) -> Result<SessionView> {
+        if self.is_local_message(message_id) {
+            bail!("local comments cannot be retried on GitHub");
+        }
         let _ = self.synced_pr()?;
         let canonical_message_id = self.get_canonical_id_from_id(message_id);
         self.enqueue_failed_message(&canonical_message_id, None)?;

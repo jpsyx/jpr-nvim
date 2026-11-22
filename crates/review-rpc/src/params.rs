@@ -1,7 +1,11 @@
 //! Reading a request's params. A param that is missing or of the wrong type
 //! is an invalid-params error that says what was expected.
 
-use review_model::{Anchor, ReactionContent, ReviewEvent, ViewMode};
+use review_model::{
+    AgentKind, AgentRoundKind, Anchor, LocalAnchorUpdate, Origin, PrepassFinding, ReactionContent,
+    ReviewEvent, ViewMode,
+};
+use serde::Deserialize;
 use serde_json::Value;
 
 use crate::protocol::RpcError;
@@ -21,6 +25,7 @@ pub fn get_optional_string_from_params<'a>(
     params: &'a Value,
     name: &str,
 ) -> Result<Option<&'a str>, RpcError> {
+    ensure_object_or_null(params)?;
     match params.get(name) {
         None | Some(Value::Null) => Ok(None),
         Some(value) => value.as_str().map(Some).ok_or_else(|| {
@@ -64,9 +69,8 @@ pub fn get_mode_from_params(params: &Value) -> Result<ViewMode, RpcError> {
 pub fn get_anchor_from_params(params: &Value) -> Result<Anchor, RpcError> {
     let raw = params
         .get("anchor")
-        .cloned()
         .ok_or_else(|| create_invalid_params_error("expected an \"anchor\" object"))?;
-    serde_json::from_value(raw)
+    Anchor::deserialize(raw)
         .map_err(|error| create_invalid_params_error(&format!("invalid \"anchor\": {error}")))
 }
 
@@ -86,6 +90,86 @@ pub fn get_review_event_from_params(params: &Value) -> Result<ReviewEvent, RpcEr
     let raw = get_string_from_params(params, "event")?;
     ReviewEvent::parse(raw)
         .ok_or_else(|| create_invalid_params_error(&format!("unknown review event \"{raw}\"")))
+}
+
+/// Extracts optional `origin` (`"github"` or `"local"`), defaulting to
+/// [`Origin::Github`] when omitted or `null`.
+pub fn get_origin_from_params(params: &Value) -> Result<Origin, RpcError> {
+    match get_optional_string_from_params(params, "origin")? {
+        None | Some("github") => Ok(Origin::Github),
+        Some("local") => Ok(Origin::Local),
+        Some(other) => Err(create_invalid_params_error(&format!(
+            "expected \"origin\" to be \"github\" or \"local\", got \"{other}\""
+        ))),
+    }
+}
+
+/// Extracts optional `agent` (`"claude"` or `"codex"`), defaulting to
+/// [`AgentKind::Claude`] when omitted or `null`.
+pub fn get_agent_kind_from_params(params: &Value) -> Result<AgentKind, RpcError> {
+    get_optional_string_from_params(params, "agent")?.map_or(Ok(AgentKind::Claude), |raw| {
+        AgentKind::parse(raw).ok_or_else(|| {
+            create_invalid_params_error(&format!(
+                "expected \"agent\" to be \"claude\" or \"codex\", got \"{raw}\""
+            ))
+        })
+    })
+}
+
+/// Extracts required `kind` (`"send"` or `"prepass"`) for `confirmSend`.
+pub fn get_round_kind_from_params(params: &Value) -> Result<AgentRoundKind, RpcError> {
+    match get_string_from_params(params, "kind")? {
+        "send" => Ok(AgentRoundKind::Send),
+        "prepass" => Ok(AgentRoundKind::Prepass),
+        other => Err(create_invalid_params_error(&format!(
+            "expected \"kind\" to be \"send\" or \"prepass\", got \"{other}\""
+        ))),
+    }
+}
+
+/// Extracts a required array of strings at `key`.
+pub fn get_string_vec_from_params(params: &Value, key: &str) -> Result<Vec<String>, RpcError> {
+    let items = params.get(key).and_then(Value::as_array).ok_or_else(|| {
+        create_invalid_params_error(&format!("expected a string array \"{key}\""))
+    })?;
+    let mut values = Vec::with_capacity(items.len());
+    for item in items {
+        let text = item.as_str().ok_or_else(|| {
+            create_invalid_params_error(&format!("expected strings inside \"{key}\""))
+        })?;
+        values.push(text.to_owned());
+    }
+    Ok(values)
+}
+
+/// Extracts and deserializes the `findings` array for `prepassWrite`.
+pub fn get_prepass_findings_from_params(params: &Value) -> Result<Vec<PrepassFinding>, RpcError> {
+    let raw = params
+        .get("findings")
+        .filter(|value| value.is_array())
+        .ok_or_else(|| create_invalid_params_error("expected a \"findings\" array"))?;
+    Vec::<PrepassFinding>::deserialize(raw)
+        .map_err(|error| create_invalid_params_error(&format!("invalid \"findings\": {error}")))
+}
+
+/// Extracts and deserializes the `updates` array for `updateLocalAnchors`.
+pub fn get_anchor_updates_from_params(params: &Value) -> Result<Vec<LocalAnchorUpdate>, RpcError> {
+    let raw = params
+        .get("updates")
+        .filter(|value| value.is_array())
+        .ok_or_else(|| create_invalid_params_error("expected an \"updates\" array"))?;
+    Vec::<LocalAnchorUpdate>::deserialize(raw)
+        .map_err(|error| create_invalid_params_error(&format!("invalid \"updates\": {error}")))
+}
+
+fn ensure_object_or_null(params: &Value) -> Result<(), RpcError> {
+    if params.is_object() || params.is_null() {
+        Ok(())
+    } else {
+        Err(create_invalid_params_error(
+            "expected params to be an object or null",
+        ))
+    }
 }
 
 fn create_invalid_params_error(message: &str) -> RpcError {
@@ -175,5 +259,131 @@ mod tests {
             None
         );
         assert_eq!(get_u64_from_params(&params, "cursorLine").unwrap(), 42);
+    }
+
+    #[test]
+    fn origin_and_agent_kind_default_and_validate() {
+        assert_eq!(get_origin_from_params(&json!({})).unwrap(), Origin::Github);
+        assert_eq!(
+            get_origin_from_params(&Value::Null).unwrap(),
+            Origin::Github
+        );
+        assert_eq!(
+            get_origin_from_params(&json!({ "origin": "local" })).unwrap(),
+            Origin::Local
+        );
+        assert_eq!(
+            get_origin_from_params(&json!({ "origin": "bad" }))
+                .unwrap_err()
+                .code,
+            RpcError::INVALID_PARAMS
+        );
+        assert_eq!(
+            get_agent_kind_from_params(&json!({})).unwrap(),
+            AgentKind::Claude
+        );
+        assert_eq!(
+            get_agent_kind_from_params(&json!({ "agent": "codex" })).unwrap(),
+            AgentKind::Codex
+        );
+        assert_eq!(
+            get_agent_kind_from_params(&json!({ "agent": "other" }))
+                .unwrap_err()
+                .code,
+            RpcError::INVALID_PARAMS
+        );
+    }
+
+    #[test]
+    fn round_kind_parses_send_and_prepass_and_rejects_unknown() {
+        assert_eq!(
+            get_round_kind_from_params(&json!({ "kind": "send" })).unwrap(),
+            AgentRoundKind::Send
+        );
+        assert_eq!(
+            get_round_kind_from_params(&json!({ "kind": "prepass" })).unwrap(),
+            AgentRoundKind::Prepass
+        );
+        assert_eq!(
+            get_round_kind_from_params(&json!({ "kind": "unknown" }))
+                .unwrap_err()
+                .code,
+            RpcError::INVALID_PARAMS
+        );
+    }
+
+    #[test]
+    fn string_vec_prepass_findings_and_anchor_updates_parse_arrays() {
+        assert_eq!(
+            get_string_vec_from_params(&json!({ "threadIds": ["loc-1"] }), "threadIds").unwrap(),
+            vec!["loc-1".to_owned()]
+        );
+        assert_eq!(
+            get_string_vec_from_params(&json!({ "threadIds": [1] }), "threadIds")
+                .unwrap_err()
+                .code,
+            RpcError::INVALID_PARAMS
+        );
+        let findings = get_prepass_findings_from_params(&json!({
+            "findings": [{ "anchor": Anchor::line("src/a.rs", 2), "body": "bug" }]
+        }))
+        .unwrap();
+        assert_eq!(findings.len(), 1);
+        assert_eq!(
+            get_prepass_findings_from_params(&json!({ "findings": {} }))
+                .unwrap_err()
+                .code,
+            RpcError::INVALID_PARAMS
+        );
+        let updates = get_anchor_updates_from_params(&json!({
+            "updates": [{ "threadId": "loc-1", "start": 3, "end": 4 }]
+        }))
+        .unwrap();
+        assert_eq!(updates.len(), 1);
+        assert_eq!(updates[0].start, 3);
+    }
+
+    #[test]
+    fn non_object_and_numeric_edge_cases_are_rejected_as_invalid_params() {
+        assert_eq!(
+            get_optional_string_from_params(&Value::Null, "origin").unwrap(),
+            None
+        );
+        for bad in [json!([123]), json!(42), json!("local"), json!(true)] {
+            assert_eq!(
+                get_optional_string_from_params(&bad, "origin")
+                    .unwrap_err()
+                    .code,
+                RpcError::INVALID_PARAMS
+            );
+            assert_eq!(
+                get_origin_from_params(&bad).unwrap_err().code,
+                RpcError::INVALID_PARAMS
+            );
+            assert_eq!(
+                get_agent_kind_from_params(&bad).unwrap_err().code,
+                RpcError::INVALID_PARAMS
+            );
+        }
+        for bad_round in [json!({ "round": -1 }), json!({ "round": 1.5 })] {
+            assert_eq!(
+                get_u64_from_params(&bad_round, "round").unwrap_err().code,
+                RpcError::INVALID_PARAMS
+            );
+        }
+        assert_eq!(
+            get_anchor_updates_from_params(
+                &json!({ "updates": [{ "threadId": "loc-1", "start": -2, "end": 1.5 }] })
+            )
+            .unwrap_err()
+            .code,
+            RpcError::INVALID_PARAMS
+        );
+        assert_eq!(
+            get_origin_from_params(&json!({ "origin": 123 }))
+                .unwrap_err()
+                .code,
+            RpcError::INVALID_PARAMS
+        );
     }
 }

@@ -3,7 +3,8 @@
 use std::collections::BTreeMap;
 
 use review_core::fakes::{changed_file, sample_pr};
-use review_core::ports::SyncRegistry;
+use review_core::ports::{LocalStoreState, SyncRegistry};
+use review_model::{AgentKind, AgentThreadState, Anchor, Message, Origin, Thread, ThreadState};
 use serde_json::{Value, json};
 
 use super::*;
@@ -14,6 +15,9 @@ fn session() -> SessionRecord {
         worktree: Some("/tmp/widgets-worktrees/pr-7".into()),
         pr: Some(sample_pr()),
         last_synced_at: Some(100),
+        socket: Some("/tmp/jpr.sock".into()),
+        agent_session_id: Some("11111111-2222-3333-4444-555555555555".into()),
+        agent_kind: Some(AgentKind::Codex),
     }
 }
 
@@ -22,22 +26,41 @@ fn as_json(bytes: &[u8]) -> Value {
 }
 
 #[test]
-fn a_session_round_trips_inside_a_version_2_envelope() {
+fn a_session_round_trips_inside_a_version_3_envelope() {
     let bytes = encode_session(&session()).unwrap();
-    assert_eq!(as_json(&bytes)["version"], json!(2));
-    assert_eq!(as_json(&bytes)["pr"]["headSha"], json!("abc123"));
-    assert_eq!(as_json(&bytes)["pr"]["baseSha"], json!("base000"));
+    let encoded_json = as_json(&bytes);
+    assert_eq!(encoded_json["version"], json!(3));
+    assert_eq!(encoded_json["pr"]["headSha"], json!("abc123"));
+    assert_eq!(encoded_json["pr"]["baseSha"], json!("base000"));
+    assert_eq!(encoded_json["socket"], json!("/tmp/jpr.sock"));
+    assert_eq!(
+        encoded_json["agentSessionId"],
+        json!("11111111-2222-3333-4444-555555555555")
+    );
+    assert_eq!(encoded_json["agentKind"], json!("codex"));
     assert_eq!(decode_session(&bytes).unwrap(), session());
 }
 
 #[test]
-fn a_version_1_session_loads_without_a_base_commit() {
-    let record = decode_session(
+fn a_version_1_and_2_session_load_with_empty_agent_fields() {
+    let v1 = decode_session(
         br#"{"version": 1, "pr": {"owner": "octo", "number": 7, "headSha": "abc123"}}"#,
     )
     .unwrap();
-    let pr = record.pr.unwrap();
+    let pr = v1.pr.unwrap();
     assert_eq!((pr.head_sha.as_str(), pr.base_sha.as_str()), ("abc123", ""));
+    assert_eq!(v1.socket, None);
+    assert_eq!(v1.agent_session_id, None);
+    assert_eq!(v1.agent_kind, None);
+
+    let v2 = decode_session(
+        br#"{"version": 2, "pid": 7, "pr": {"owner": "octo", "number": 7, "baseSha": "base000"}}"#,
+    )
+    .unwrap();
+    assert_eq!(v2.pid, Some(7));
+    assert_eq!(v2.socket, None);
+    assert_eq!(v2.agent_session_id, None);
+    assert_eq!(v2.agent_kind, None);
 }
 
 #[test]
@@ -74,6 +97,49 @@ fn a_github_file_newer_than_version_2_is_refused() {
     let message = format!("{error:#}");
     assert!(
         message.contains("version 99") && message.contains("version 2"),
+        "{message}"
+    );
+}
+
+#[test]
+fn the_local_file_round_trips_v1_and_refuses_version_9() {
+    let local = LocalStoreState {
+        next_local_id: 4,
+        next_round: 2,
+        threads: vec![Thread {
+            id: "loc-1".into(),
+            origin: Origin::Local,
+            anchor: Anchor::line("src/a.rs", 10),
+            state: ThreadState::Open,
+            outdated: false,
+            messages: vec![Message::create_with_sync(
+                "loc-m-1",
+                "reviewer",
+                "Check bounds",
+                "2026-11-21T00:00:00Z",
+                None,
+            )],
+            agent: Some(AgentThreadState::Sent { round: 1 }),
+            promoted_to: Some("PRRT_promoted".into()),
+        }],
+    };
+    let bytes = encode_local(&local).unwrap();
+    let encoded_json = as_json(&bytes);
+    assert_eq!(encoded_json["version"], json!(1));
+    assert_eq!(encoded_json["nextLocalId"], json!(4));
+    assert_eq!(encoded_json["nextRound"], json!(2));
+    assert_eq!(encoded_json["threads"][0]["agent"]["state"], json!("sent"));
+    assert_eq!(encoded_json["threads"][0]["agent"]["round"], json!(1));
+    assert_eq!(
+        encoded_json["threads"][0]["promotedTo"],
+        json!("PRRT_promoted")
+    );
+    assert_eq!(decode_local(&bytes).unwrap(), local);
+
+    let error = decode_local(br#"{"version": 9}"#).unwrap_err();
+    let message = format!("{error:#}");
+    assert!(
+        message.contains("version 9") && message.contains("version 1"),
         "{message}"
     );
 }
@@ -135,6 +201,8 @@ fn create_populated_registry_from_base(mut registry: SyncRegistry) -> SyncRegist
         state: ThreadState::Open,
         outdated: false,
         messages: vec![message],
+        agent: None,
+        promoted_to: None,
     });
     registry.queued_ops = create_sample_queued_ops();
     registry.mention_candidates.push(MentionCandidate {
@@ -182,15 +250,15 @@ fn a_newer_version_is_refused_naming_both_versions() {
 fn an_unknown_older_version_is_refused() {
     let error = decode_session(br#"{"version": 0}"#).unwrap_err();
     assert!(format!("{error:#}").contains("version 0"), "{error:#}");
-    assert!(format!("{error:#}").contains("1 to 2"), "{error:#}");
+    assert!(format!("{error:#}").contains("1 to 3"), "{error:#}");
 }
 
 #[test]
-fn a_session_newer_than_version_2_is_refused() {
-    let error = decode_session(br#"{"version": 3}"#).unwrap_err();
+fn a_session_newer_than_version_3_is_refused() {
+    let error = decode_session(br#"{"version": 4}"#).unwrap_err();
     let message = format!("{error:#}");
     assert!(
-        message.contains("version 3") && message.contains("version 2"),
+        message.contains("version 4") && message.contains("version 3"),
         "{message}"
     );
 }

@@ -1,9 +1,11 @@
 //! Offline comment queue management, retry enqueueing, and persistence.
 
+mod prune;
+
 use std::collections::VecDeque;
 
 use anyhow::{Context, Result, bail};
-use review_model::{AnchorKind, Event, Message, MessageSync, SessionView, Thread};
+use review_model::{AnchorKind, Event, Message, MessageSync, Origin, SessionView, Thread};
 
 use super::super::ReviewSession;
 use super::replay::ReplayOutcome;
@@ -16,7 +18,7 @@ impl ReviewSession {
         format!("tmp-{prefix}-{}", self.saved.registry.next_temp_id)
     }
 
-    pub(super) fn get_canonical_id_from_id(&self, id: &str) -> String {
+    pub(in super::super) fn get_canonical_id_from_id(&self, id: &str) -> String {
         self.saved
             .registry
             .id_map
@@ -26,9 +28,8 @@ impl ReviewSession {
     }
 
     pub(in super::super) fn save_and_announce_threads(&mut self) -> Result<SessionView> {
-        self.saved.registry.threads.clone_from(&self.threads);
         record_agreed_bodies(&self.threads, &mut self.saved.registry.agreed_bodies);
-        self.ports.store.save(&self.saved)?;
+        self.split_and_save_threads()?;
         let view = self.view();
         self.publish(&Event::ThreadsChanged {
             view: Box::new(view.clone()),
@@ -72,118 +73,6 @@ impl ReviewSession {
         was_updated
     }
 
-    pub(super) fn drop_local_message_and_ops(&mut self, thread_id: &str, message_id: &str) {
-        self.remove_message_from_threads(thread_id, message_id);
-        let was_thread_removed = self.find_thread(thread_id).is_none();
-        self.saved.registry.queued_ops.retain(|op| match op {
-            QueuedCommentOp::CreateReviewThread {
-                temp_thread_id,
-                temp_message_id,
-                ..
-            }
-            | QueuedCommentOp::CreateConversationComment {
-                temp_thread_id,
-                temp_message_id,
-                ..
-            } => {
-                temp_message_id != message_id
-                    && (!was_thread_removed || temp_thread_id != thread_id)
-            }
-            QueuedCommentOp::ReplyToThread {
-                thread_id: op_thread_id,
-                temp_message_id,
-                ..
-            } => {
-                temp_message_id != message_id && (!was_thread_removed || op_thread_id != thread_id)
-            }
-            QueuedCommentOp::EditMessage {
-                thread_id: op_thread_id,
-                message_id: op_message_id,
-                ..
-            }
-            | QueuedCommentOp::DeleteMessage {
-                thread_id: op_thread_id,
-                message_id: op_message_id,
-                ..
-            } => op_message_id != message_id && (!was_thread_removed || op_thread_id != thread_id),
-            QueuedCommentOp::SetResolved {
-                thread_id: op_thread_id,
-                ..
-            } => !was_thread_removed || op_thread_id != thread_id,
-            QueuedCommentOp::SetReaction { subject_id, .. } => subject_id != message_id,
-            QueuedCommentOp::SubmitReview { .. } => true,
-        });
-        self.promote_remaining_reply_if_root_deleted(thread_id);
-    }
-
-    fn promote_remaining_reply_if_root_deleted(&mut self, thread_id: &str) {
-        if !thread_id.starts_with("tmp-") {
-            return;
-        }
-        let Some(thread) = self.find_thread(thread_id).cloned() else {
-            return;
-        };
-        let has_create_thread = self.saved.registry.queued_ops.iter().any(|op| {
-            matches!(
-                op,
-                QueuedCommentOp::CreateReviewThread { temp_thread_id, .. }
-                    if temp_thread_id == thread_id
-            )
-        });
-        if has_create_thread {
-            return;
-        }
-        let Some(first_remaining) = thread.messages.first() else {
-            return;
-        };
-        for op in &mut self.saved.registry.queued_ops {
-            if let QueuedCommentOp::ReplyToThread {
-                thread_id: op_thread_id,
-                temp_message_id,
-                body,
-                ..
-            } = op
-                && op_thread_id == thread_id
-                && temp_message_id == &first_remaining.id
-            {
-                *op = QueuedCommentOp::CreateReviewThread {
-                    temp_thread_id: thread_id.to_owned(),
-                    temp_message_id: first_remaining.id.clone(),
-                    anchor: thread.anchor.clone(),
-                    body: body.clone(),
-                };
-                break;
-            }
-        }
-    }
-
-    pub(super) fn drop_queued_ops_for_removed_message(
-        &mut self,
-        thread_id: &str,
-        message_id: &str,
-    ) {
-        let was_thread_removed = self.find_thread(thread_id).is_none();
-        self.saved.registry.queued_ops.retain(|op| match op {
-            QueuedCommentOp::EditMessage {
-                message_id: op_message_id,
-                ..
-            } => op_message_id != message_id,
-            QueuedCommentOp::SetReaction { subject_id, .. } => subject_id != message_id,
-            QueuedCommentOp::SetResolved {
-                thread_id: op_thread_id,
-                ..
-            } => !was_thread_removed || op_thread_id != thread_id,
-            _ => true,
-        });
-    }
-
-    pub(super) fn remove_message_from_threads(&mut self, thread_id: &str, message_id: &str) {
-        if let Some(thread) = self.find_thread_mut(thread_id) {
-            thread.messages.retain(|message| message.id != message_id);
-        }
-        self.threads.retain(|thread| !thread.messages.is_empty());
-    }
-
     pub(super) fn enqueue_failed_message(
         &mut self,
         message_id: &str,
@@ -203,7 +92,11 @@ impl ReviewSession {
     }
 
     fn create_retry_op_from_message_id(&self, message_id: &str) -> Result<QueuedCommentOp> {
-        for thread in &self.threads {
+        for thread in self
+            .threads
+            .iter()
+            .filter(|thread| thread.origin == Origin::Github)
+        {
             let Some(message) = thread.messages.iter().find(|item| item.id == message_id) else {
                 continue;
             };
@@ -310,6 +203,11 @@ impl ReviewSession {
             .id_map
             .insert(temp_id.to_owned(), real_id.to_owned());
         remap_queued_ops(remaining_ops, temp_id, real_id);
+        for thread in &mut self.threads {
+            if thread.origin == Origin::Local && thread.promoted_to.as_deref() == Some(temp_id) {
+                thread.promoted_to = Some(real_id.to_owned());
+            }
+        }
     }
 }
 

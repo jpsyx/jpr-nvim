@@ -10,6 +10,15 @@ M.defaults = {
     worktree_cmd = nil,
     -- Width of the PR panel.
     panel_width = 44,
+    -- Interactive agent CLI for `:Jpr agent`, `:Jpr send`, and `:Jpr prepass`:
+    -- "claude" or "codex".
+    agent = "claude",
+    -- Command or path invoked for Claude Code in the agent panel.
+    claude_cmd = "claude",
+    -- Command or path invoked for Codex in the agent panel.
+    codex_cmd = "codex",
+    -- Width in columns of the right-hand `:Jpr agent` vertical split.
+    agent_width = 56,
     -- The diff view until the reviewer flips it with :Jpr toggle, which is
     -- then remembered: "unified" or "split".
     view = "unified",
@@ -40,6 +49,9 @@ M.subcommands = {
     "expand",
     "conversation",
     "submit",
+    "agent",
+    "send",
+    "prepass",
     "close",
 }
 
@@ -64,6 +76,7 @@ function M.define_highlights()
         JprFileHeader = "Title",
         JprThreadPublished = "DiagnosticInfo",
         JprThreadDraft = "DiagnosticWarn",
+        JprThreadLocal = "DiagnosticHint",
         JprThreadFailed = "DiagnosticError",
         JprThreadResolved = "Comment",
         JprReactionActive = "DiagnosticOk",
@@ -157,6 +170,9 @@ function M.command(fargs, cmd_opts)
         expand = session.expand_current,
         conversation = session.conversation_current,
         submit = session.submit_current,
+        agent = session.agent_current,
+        send = session.send_current,
+        prepass = session.prepass_current,
         close = session.close_current,
     }
     local handler = dispatch[subcommand]

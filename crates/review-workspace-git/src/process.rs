@@ -31,7 +31,20 @@ pub fn run(program: &str, args: &[&str], dir: &Path) -> Result<String> {
 
 /// Runs `program` in `dir` and returns its raw stdout, or fails with its stderr.
 pub fn run_bytes(program: &str, args: &[&str], dir: &Path) -> Result<Vec<u8>> {
-    let output = create_command(program, args, dir)
+    let mut command = create_command(program, args, dir);
+    run_command_bytes(&mut command, program, args)
+}
+
+/// Runs `program` in `dir` with `GIT_OPTIONAL_LOCKS=0` and returns its raw
+/// stdout, or fails with its stderr.
+pub fn run_bytes_unlocked(program: &str, args: &[&str], dir: &Path) -> Result<Vec<u8>> {
+    let mut command = create_command(program, args, dir);
+    command.env("GIT_OPTIONAL_LOCKS", "0");
+    run_command_bytes(&mut command, program, args)
+}
+
+fn run_command_bytes(command: &mut Command, program: &str, args: &[&str]) -> Result<Vec<u8>> {
+    let output = command
         .output()
         .with_context(|| format!("running {program}"))?;
     get_stdout_from_output(program, args, output)

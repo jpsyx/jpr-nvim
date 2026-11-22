@@ -180,6 +180,8 @@ pub(crate) fn parse_issue_comment_thread(node: &Value) -> Option<Thread> {
         state: ThreadState::Open,
         outdated: false,
         messages: vec![message],
+        agent: None,
+        promoted_to: None,
     })
 }
 
@@ -263,6 +265,8 @@ pub(crate) fn parse_thread(node: &Value) -> Option<Thread> {
         },
         outdated: node["isOutdated"].as_bool().unwrap_or(false),
         messages: comments.iter().filter_map(parse_comment).collect(),
+        agent: None,
+        promoted_to: None,
     })
 }
 

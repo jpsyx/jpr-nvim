@@ -1,8 +1,9 @@
-# Engine protocol (version 3)
+# Engine protocol (version 4)
 
 `jpr-review serve` speaks JSON-RPC 2.0, one JSON message per line, UTF-8.
-Requests arrive on stdin. Responses and notifications leave on stdout and may
-interleave, so clients match responses by `id`. Logs go to stderr.
+Requests from the primary frontend arrive on stdin. Responses and notifications
+leave on stdout and may interleave, so clients match responses by `id`. Logs go
+to stderr.
 
 ```
 jpr-review serve --pr <number> --repo <owner/name> [--poll <seconds>]
@@ -11,10 +12,25 @@ jpr-review serve --pr <number> --repo <owner/name> [--poll <seconds>]
 Run it in the pull request's worktree. `--poll` defaults to 60 seconds, and
 `--poll 0` turns background syncing off. While it polls, the server also
 resends queued viewed marks and queued comment operations every 20 seconds
-between syncs. Every sync sends queued viewed marks before pulling, and
-reconciles and replays queued comment operations once the pull succeeds. The
-server does not sync on its own at startup: until the first sync, `snapshot`
-returns what was saved last.
+between syncs, and watches tracked worktree files every 2 seconds for on-disk
+changes. Every sync sends queued viewed marks before pulling, and reconciles and
+replays queued comment operations once the pull succeeds. The server does not
+sync on its own at startup: until the first sync, `snapshot` returns what was
+saved last.
+
+## Unix socket transport
+
+Alongside stdio, `jpr-review serve` binds a Unix domain socket (`0600`
+permissions) and records its path in `session.json` (`socket`). When Neovim
+spawns the interactive agent terminal, it exports that path as `JPR_SOCKET`.
+
+- Only an allowlisted set of methods is accepted over the socket: `snapshot`,
+  `threads`, `agentReply`, and `prepassWrite`.
+- Any other method (including `shutdown`, `initialize`, `sync`, `submitReview`,
+  and `promoteThread`) is refused over the socket with `-32600` (`INVALID_REQUEST`).
+- After a socket request runs, any events it produced (such as
+  `threadsChanged`) are flushed immediately to the stdio client before the
+  socket reply is written.
 
 ## Handshake
 
@@ -26,7 +42,7 @@ plugin and the engine from the same checkout.
 
 | Method | Params | Result |
 | --- | --- | --- |
-| `initialize` | `{ "protocolVersion": 3, "client": "..." }` (the server reads neither) | `{ "protocolVersion": 3, "version": "0.3.0" }` |
+| `initialize` | `{ "protocolVersion": 4, "client": "..." }` (the server reads neither) | `{ "protocolVersion": 4, "version": "0.4.0" }` |
 | `snapshot` | none | `SessionView` |
 | `sync` | none | `SessionView`; error `-32000` when GitHub fails, after a `syncFailed` event |
 | `fileDiff` | `{ "path": "src/a.rs" }` | `FileDiffView`; error `-32000` for a file the pull request does not change, a side over 4 MiB, or before the first sync |
@@ -34,7 +50,7 @@ plugin and the engine from the same checkout.
 | `setViewed` | `{ "path": "src/a.rs", "viewed": true }` | `SessionView`, after a `viewedChanged` event |
 | `threads` | none | `{ "threads": Thread[] }` |
 | `mentions` | none | `{ "candidates": MentionCandidate[] }` |
-| `comment` | `{ "anchor": Anchor, "body": "..." }` | `{ "thread": Thread, "view": SessionView }`, after a `threadsChanged` event |
+| `comment` | `{ "anchor": Anchor, "body": "...", "origin"?: "github" \| "local" }` (`origin` optional, defaults to `"github"`) | `{ "thread": Thread, "view": SessionView }`, after a `threadsChanged` event |
 | `reply` | `{ "threadId": "...", "body": "..." }` | `{ "thread": Thread, "view": SessionView }`, after a `threadsChanged` event |
 | `editMessage` | `{ "messageId": "...", "body": "..." }` | `{ "thread": Thread, "view": SessionView }`, after a `threadsChanged` event |
 | `deleteMessage` | `{ "messageId": "..." }` | `SessionView`, after a `threadsChanged` event |
@@ -45,7 +61,15 @@ plugin and the engine from the same checkout.
 | `suggestFromEdit` | `{ "path": "src/a.rs", "editedText": "...", "cursorLine": 1, "commentBody": "..." \| null }` (`commentBody` optional) | `{ "suggested": SuggestedEdit, "thread": Thread, "view": SessionView }`, after a `threadsChanged` event |
 | `submitPreview` | none | `SubmitPreview`; error `-32000` before the first sync |
 | `submitReview` | `{ "event": ReviewEvent, "body": "..." \| null }` (`body` optional, defaults to `""`) | `SessionView`, after a `threadsChanged` event |
-| `shutdown` | none | `null`; the server stops reading and exits |
+| `agentReply` | `{ "threadId": "...", "body": "...", "author"?: "..." \| null }` (`author` optional, defaults to `"agent"`) | `{ "thread": Thread, "view": SessionView }`, after a `threadsChanged` event; refuses GitHub threads with `-32000` |
+| `promoteThread` | `{ "threadId": "...", "body": "..." }` | `{ "thread": Thread, "view": SessionView }`, after a `threadsChanged` event |
+| `prepareAgentLaunch` | `{ "agent"?: "claude" \| "codex" \| null }` (`agent` optional, defaults to `"claude"`) | `AgentLaunchPlan` |
+| `prepareSend` | `{ "threadId"?: "..." \| null, "agent"?: "claude" \| "codex" \| null }` (both optional) | `AgentDispatch`; error `-32000` if no unsent local thread matches or before the first sync |
+| `confirmSend` | `{ "round": 1, "kind": "send" \| "prepass", "threadIds": string[], "prompt": "..." }` | `{ "round": AgentRound, "view": SessionView }`, after `threadsChanged` (when `"send"` updates threads) and `agentRound` events |
+| `preparePrepass` | `{ "agent"?: "claude" \| "codex" \| null }` (`agent` optional, defaults to `"claude"`) | `AgentDispatch`; error `-32000` before the first sync |
+| `prepassWrite` | `{ "findings": PrepassFinding[] }` | `{ "threads": Thread[], "view": SessionView }`, after a `threadsChanged` event when threads are created |
+| `updateLocalAnchors` | `{ "path": "src/a.rs", "updates": LocalAnchorUpdate[] }` | `SessionView`, after a `threadsChanged` event when any local anchor moves |
+| `shutdown` | none | `null`; the server stops reading and exits (refused over Unix socket) |
 
 The server also exits when stdin closes. Methods without params ignore them,
 so `null`, `{}` or a missing `params` all work. `setViewed` succeeds even when
@@ -54,11 +78,15 @@ sent again by later retries and syncs.
 
 Comment mutations behave consistently offline and on errors:
 
-- `comment`, `reply`, `editMessage` return `-32000` if `body` is blank or before
-  the first sync. `comment` creates a draft thread in the pending review for
+- `comment`, `reply`, `editMessage` return `-32000` if `body` is blank or (for
+  GitHub threads) before the first sync. With `origin: "github"` (default),
+  `comment` creates a draft thread in the pending review for
   `line`/`range`/`file` anchors, and a published PR comment for `pr` anchors.
-  `reply` posts immediately via REST when no pending review is active, or adds a
-  draft reply when one is active.
+  With `origin: "local"`, `comment`, `reply`, `editMessage`, `deleteMessage`,
+  `setResolved`, and `toggleReaction` update `local.json` only and never call
+  GitHub (`retryMessage` refuses local messages with `-32000`).
+- `reply` on a GitHub thread posts immediately via REST when no pending review
+  is active, or adds a draft reply when one is active.
 - Transient forge failures on `comment`, `reply`, `editMessage`, `deleteMessage`,
   `setResolved`, `toggleReaction`, and `submitReview` queue the operation in
   `github.json` (assigning optimistic `tmp-*` ids and `sync: "queued"` where
@@ -85,6 +113,8 @@ Comment mutations behave consistently offline and on errors:
 { "type": "syncFailed", "message": "gh timed out after 30s" }
 { "type": "viewedChanged", "view": SessionView }
 { "type": "threadsChanged", "view": SessionView }
+{ "type": "filesChanged", "paths": ["src/a.rs"], "view": SessionView }
+{ "type": "agentRound", "round": AgentRound, "view": SessionView }
 ```
 
 Every sync announces `synced` or `syncFailed`, whether a `sync` request or the
@@ -92,11 +122,16 @@ background poller started it. `viewedChanged` follows every `setViewed` and
 every retry that got a queued mark through. `threadsChanged` follows every
 comment mutation (`comment`, `reply`, `editMessage`, `deleteMessage`,
 `setResolved`, `toggleReaction`, `retryMessage`, `suggestFromEdit`,
-`submitReview`) and every background retry that got a queued comment operation
-through. A sync whose pull fails after it got a queued mark through announces
-`viewedChanged` before `syncFailed`; a sync that succeeds announces the shorter
-queue in `synced`. An event is written before the response to the request that
-caused it, and every event is written before the `shutdown` response.
+`submitReview`, `agentReply`, `promoteThread`, `prepassWrite` when creating
+threads, `confirmSend` when thread states change, and `updateLocalAnchors`
+when any local anchor changes), every background retry that got a queued comment
+operation through, and worktree file changes that re-anchor local threads.
+`filesChanged` follows worktree file-watcher ticks when tracked files change on
+disk. `agentRound` follows `confirmSend`. A sync whose pull fails after it got
+a queued mark through announces `viewedChanged` before `syncFailed`; a sync
+that succeeds announces the shorter queue in `synced`. An event is written
+before the response to the request that caused it, and every event is written
+before the `shutdown` response.
 
 ## Types
 
@@ -113,6 +148,7 @@ caused it, and every event is written before the `shutdown` response.
   "threadCount": 2,
   "draftCount": 1,
   "conversationCount": 1,
+  "localUnsentCount": 0,
   "queuedCount": 0,
   "sync": { "state": "synced", "at": 1763510400 }
 }
@@ -129,6 +165,8 @@ caused it, and every event is written before the `shutdown` response.
 - `draftCount` counts messages with `sync: "draft"` across all threads.
 - `conversationCount` counts top-level PR conversation threads (`anchor.kind`
   equal to `"pr"`).
+- `localUnsentCount` counts open local threads (`origin: "local"`) in state
+  `unsent` whose latest message was authored by the reviewer (`viewerDidAuthor`).
 - `queuedCount` counts viewed marks and comment operations waiting for GitHub.
 - `sync` is `{ "state": "never" }`, `{ "state": "synced", "at": <unix seconds> }`
   or `{ "state": "failed", "at": <unix seconds>, "message": "..." }`.
@@ -190,17 +228,24 @@ caused it, and every event is written before the `shutdown` response.
   "anchor": { "file": "src/a.rs", "kind": "line", "side": "RIGHT", "start": 2, "end": 2, "commit": null, "snapshot": null },
   "state": "open",
   "outdated": false,
-  "messages": [ Message ]
+  "messages": [ Message ],
+  "agent": { "state": "unsent" },
+  "promotedTo": "PRRT_2"
 }
 ```
 
 - `origin` is `"github"` or `"local"`; `state` is `"open"` or `"resolved"`.
+- `agent` (`AgentThreadState`) is present for local threads and omitted for
+  GitHub threads.
+- `promotedTo` holds the target GitHub thread ID once a local thread has been
+  promoted via `promoteThread`, and is omitted otherwise.
 
 `ThreadPreview`:
 
 ```json
 {
   "threadId": "PRRT_1",
+  "origin": "github",
   "anchor": Anchor,
   "displayLine": 2,
   "kind": "published",
@@ -217,6 +262,73 @@ caused it, and every event is written before the `shutdown` response.
   places the marker, or `0` for a file-level thread.
 - `kind` is `"published"`, `"draft"` (draft, pending, or queued), `"failed"`, or
   `"local"`.
+- `origin`, `agent` (omitted when absent), and `promotedTo` (omitted when
+  absent) match `Thread`.
+
+`AgentThreadState`:
+
+- `{ "state": "unsent" }`: open local thread waiting for `:Jpr send`.
+- `{ "state": "sent", "round": 1 }`: dispatched in 1-based round `round`,
+  awaiting `agentReply`.
+- `{ "state": "answered" }`: latest message is the agent's reply.
+
+`AgentKind`, `AgentProfile`, `AgentLaunchPlan`, `AgentRound`, `AgentDispatch`,
+`PrepassFinding`, and `LocalAnchorUpdate`:
+
+- `AgentKind` is `"claude"` or `"codex"`.
+- `AgentProfile` describes terminal paste/submit delivery for `kind`:
+
+```json
+{
+  "kind": "claude",
+  "pasteStyle": "bracketed",
+  "submitKey": "enter",
+  "submitDelayMs": 200
+}
+```
+
+  (`"claude"` uses `"submitKey": "enter"`; `"codex"` uses `"submitKey": "tab"`.)
+- `AgentLaunchPlan`:
+
+```json
+{
+  "kind": "claude",
+  "sessionId": "550e8400-e29b-41d4-a716-446655440000",
+  "isResume": false,
+  "socket": "/path/to/s.sock",
+  "profile": AgentProfile
+}
+```
+
+  (`socket` is omitted when the server is running without a Unix socket.)
+- `AgentRoundKind` is `"send"` or `"prepass"`.
+- `AgentRound`:
+
+```json
+{
+  "round": 1,
+  "kind": "send",
+  "threadIds": ["loc-1"],
+  "prompt": "...",
+  "sentAt": 1763510400
+}
+```
+
+- `AgentDispatch`:
+
+```json
+{
+  "round": 1,
+  "kind": "send",
+  "threadIds": ["loc-1"],
+  "prompt": "...",
+  "profile": AgentProfile
+}
+```
+
+- `PrepassFinding`: `{ "anchor": Anchor, "body": "...", "author"?: "..." }`
+  (`author` optional, defaults to `"agent"`).
+- `LocalAnchorUpdate`: `{ "threadId": "loc-1", "start": 10, "end": 12 }`.
 
 `MentionCandidate`:
 
@@ -317,9 +429,9 @@ checked-out head; the current side is the file on disk:
 | Code | Meaning |
 | --- | --- |
 | -32700 | The line is not JSON (the response `id` is `null`) |
-| -32600 | Not a request: no string `method`, or no `id` (the response `id` is `null` when there was none) |
+| -32600 | Not a request: no string `method`, no `id` (the response `id` is `null` when there was none), or a method disallowed on the Unix socket |
 | -32601 | Unknown method |
-| -32602 | Invalid params: a missing or mistyped param (`path`, `viewed`, `mode`, `anchor`, `content`, `event`, `cursorLine`, etc.) |
+| -32602 | Invalid params: a missing or mistyped param (`path`, `viewed`, `mode`, `anchor`, `origin`, `agent`, `kind`, `round`, `threadIds`, `findings`, `updates`, `content`, `event`, `cursorLine`, etc.) |
 | -32000 | The engine could not do it; `message` says why |
 
 ## Versioning
@@ -337,3 +449,12 @@ result or an event changes shape, and update this document in the same commit.
   `threads` in `FileDiffView`, `thread` rows and `line.threads` in
   `StreamView`, and the `ThreadPreview`, `Reaction`, `ReactionContent`,
   `MentionCandidate`, `SubmitPreview`, `SuggestedEdit`, and `ReviewEvent` types.
+- **Version 4** added the Unix socket transport (allowlisting `snapshot`,
+  `threads`, `agentReply`, and `prepassWrite`), `origin` on `comment`,
+  `agentReply`, `promoteThread`, `prepareAgentLaunch`, `prepareSend`,
+  `confirmSend`, `preparePrepass`, `prepassWrite`, `updateLocalAnchors`, the
+  `filesChanged` and `agentRound` events, `localUnsentCount` in `SessionView`,
+  `agent` and `promotedTo` on `Thread`, `origin`/`agent`/`promotedTo` on
+  `ThreadPreview`, and the `AgentThreadState`, `AgentKind`, `AgentProfile`,
+  `AgentLaunchPlan`, `AgentRoundKind`, `AgentRound`, `AgentDispatch`,
+  `PrepassFinding`, and `LocalAnchorUpdate` types.

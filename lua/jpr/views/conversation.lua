@@ -23,6 +23,35 @@ local function count_messages(threads)
     return num_messages
 end
 
+local function has_local_thread(threads)
+    for _, thread in ipairs(threads or {}) do
+        if render.is_local_thread(thread) then
+            return true
+        end
+    end
+    return false
+end
+
+local function append_thread(layout, thread)
+    local local_badge = render.build_local_badge_from_thread(thread)
+    for index, message in ipairs(thread.messages or {}) do
+        local range_index = #layout.message_ranges + 1
+        render.append_formatted_message(layout, thread, message)
+        if index == 1 and local_badge ~= "" then
+            local range = layout.message_ranges[range_index]
+            local line_text = layout.lines[range.first]
+            layout.lines[range.first] = line_text .. " " .. local_badge
+            layout.highlights[#layout.highlights + 1] = {
+                line = range.first - 1,
+                col_start = #line_text + 1,
+                col_end = #line_text + 1 + #local_badge,
+                group = "JprThreadLocal",
+            }
+        end
+        layout.add("")
+    end
+end
+
 local function create_layout_from_threads(session, threads)
     local pr_threads = filter_pr_threads(threads)
     local layout = render.create_message_layout()
@@ -33,13 +62,13 @@ local function create_layout_from_threads(session, threads)
         layout.add("")
     else
         for _, thread in ipairs(pr_threads) do
-            for _, message in ipairs(thread.messages or {}) do
-                render.append_formatted_message(layout, thread, message)
-                layout.add("")
-            end
+            append_thread(layout, thread)
         end
     end
-    layout.add("[c]omment  [e]dit  [d]elete  [+]react  [X]retry  [q]uit", "JprMuted")
+    local footer = has_local_thread(pr_threads)
+            and "[c]omment  [r]eply  [e]dit  [d]elete  [p]romote  [s]end  [+]react  [X]retry  [q]uit"
+        or "[c]omment  [e]dit  [d]elete  [+]react  [X]retry  [q]uit"
+    layout.add(footer, "JprMuted")
     return layout
 end
 
@@ -94,7 +123,40 @@ local function open_edit_comment(session)
     if not entry.message.viewerDidAuthor then
         return require("jpr").error("you can only edit your own comments")
     end
-    require("jpr.comments.compose").open_edit(session, entry.message)
+    require("jpr.comments.compose").open_edit(session, entry.message, entry.thread)
+end
+
+local function reply_to_comment(session)
+    local entry = current_entry(session)
+    if not entry then
+        return
+    end
+    if not render.is_local_thread(entry.thread) then
+        return require("jpr").info("only local threads support replies here; press c to comment")
+    end
+    require("jpr.comments.compose").open_reply(session, entry.thread)
+end
+
+local function promote_comment_thread(session)
+    local entry = current_entry(session)
+    if not entry then
+        return
+    end
+    if not render.is_local_thread(entry.thread) then
+        return require("jpr").info("only local threads can be promoted to GitHub")
+    end
+    require("jpr.comments.compose").open_promote(session, entry.thread)
+end
+
+local function send_comment_thread(session)
+    local entry = current_entry(session)
+    if not entry then
+        return
+    end
+    if not render.is_local_thread(entry.thread) then
+        return require("jpr").info("only local threads can be sent to the agent")
+    end
+    require("jpr.agent").send(session, entry.thread_id)
 end
 
 local function delete_comment(session)
@@ -102,7 +164,7 @@ local function delete_comment(session)
     if not entry then
         return
     end
-    if not entry.message.viewerDidAuthor then
+    if not render.is_local_thread(entry.thread) and not entry.message.viewerDidAuthor then
         return require("jpr").error("you can only delete your own comments")
     end
     if vim.fn.confirm("Delete this comment?", "&Yes\n&No", 2) ~= 1 or session.closing or session.conversation ~= state then
@@ -115,6 +177,9 @@ local function react_to_comment(session)
     local entry, state = current_entry(session)
     if not entry then
         return
+    end
+    if render.is_local_thread(entry.thread) then
+        return require("jpr").info("reactions apply only to GitHub comments")
     end
     require("jpr.comments.popup").pick_reaction(function(choice)
         if session.closing or session.conversation ~= state then
@@ -142,8 +207,11 @@ local function bind_keys(session, buf)
     map("c", function()
         require("jpr.comments.compose").open_new(session, { kind = "pr", side = "RIGHT" })
     end, "Add PR conversation comment")
+    map("r", function() reply_to_comment(session) end, "Reply to local PR thread")
     map("e", function() open_edit_comment(session) end, "Edit own PR comment")
-    map("d", function() delete_comment(session) end, "Delete own PR comment")
+    map("d", function() delete_comment(session) end, "Delete PR comment")
+    map("p", function() promote_comment_thread(session) end, "Promote local PR thread to GitHub")
+    map("s", function() send_comment_thread(session) end, "Send local PR thread to agent")
     map("+", function() react_to_comment(session) end, "Toggle reaction on PR comment")
     map("X", function() retry_comment(session) end, "Retry failed PR comment")
     map("q", function() M.close(session) end, "Close PR conversation")

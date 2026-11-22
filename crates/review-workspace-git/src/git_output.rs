@@ -81,6 +81,49 @@ pub fn parse_renames(output: &[u8]) -> Vec<(String, String)> {
     renames
 }
 
+/// NUL-separated non-empty UTF-8 file paths from git `--name-only -z` output.
+#[must_use]
+pub fn parse_nul_paths(bytes: &[u8]) -> Vec<String> {
+    bytes
+        .split(|byte| *byte == 0)
+        .filter(|entry| !entry.is_empty())
+        .filter_map(|entry| std::str::from_utf8(entry).ok().map(str::to_owned))
+        .collect()
+}
+
+fn push_utf8_path(paths: &mut Vec<String>, bytes: &[u8]) {
+    if let Some(path) = std::str::from_utf8(bytes)
+        .ok()
+        .filter(|path| !path.is_empty())
+    {
+        paths.push(path.to_owned());
+    }
+}
+
+/// File paths reported by `git status --porcelain=v1 -z --untracked-files=all`.
+///
+/// Each entry is `XY path\0`, except renames and copies (`R`/`C`), which emit
+/// `XY new_path\0original_path\0`. Both non-empty valid UTF-8 paths are returned.
+#[must_use]
+pub fn parse_porcelain_z_paths(bytes: &[u8]) -> Vec<String> {
+    let mut entries = bytes
+        .split(|byte| *byte == 0)
+        .filter(|entry| !entry.is_empty());
+    let mut paths = Vec::new();
+    while let Some(entry) = entries.next() {
+        if entry.len() < 4 || entry[2] != b' ' {
+            continue;
+        }
+        let has_original_path = matches!(entry[0], b'R' | b'C') || matches!(entry[1], b'R' | b'C');
+        push_utf8_path(&mut paths, &entry[3..]);
+        if has_original_path {
+            let original_path = entries.next().unwrap_or_default();
+            push_utf8_path(&mut paths, original_path);
+        }
+    }
+    paths
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -159,6 +202,70 @@ mod tests {
         assert_eq!(
             parse_renames(output),
             [("old/name.rs".to_owned(), "new/name.rs".to_owned())]
+        );
+    }
+
+    #[test]
+    fn parses_nul_separated_paths_and_skips_empty_entries() {
+        let output = b"src/lib.rs\0\0src/dir/file with spaces.rs\0";
+        assert_eq!(
+            parse_nul_paths(output),
+            vec![
+                "src/lib.rs".to_owned(),
+                "src/dir/file with spaces.rs".to_owned(),
+            ]
+        );
+        assert!(parse_nul_paths(b"").is_empty());
+    }
+
+    #[test]
+    fn parses_porcelain_z_paths_including_renames_and_copies() {
+        let output = b"?? a.rs\0 M b.rs\0R  new.rs\0old.rs\0C  copy.rs\0orig.rs\0";
+        assert_eq!(
+            parse_porcelain_z_paths(output),
+            vec![
+                "a.rs".to_owned(),
+                "b.rs".to_owned(),
+                "new.rs".to_owned(),
+                "old.rs".to_owned(),
+                "copy.rs".to_owned(),
+                "orig.rs".to_owned(),
+            ]
+        );
+        assert!(parse_porcelain_z_paths(b"").is_empty());
+    }
+
+    #[test]
+    fn parse_nul_paths_skips_invalid_utf8_entries() {
+        let output = b"ok.rs\0\xff\xfe.rs\0also_ok.rs\0";
+        assert_eq!(
+            parse_nul_paths(output),
+            vec!["ok.rs".to_owned(), "also_ok.rs".to_owned()]
+        );
+    }
+
+    #[test]
+    fn parse_porcelain_z_paths_skips_malformed_and_handles_truncated_renames() {
+        let output = b"M\0M \0MM \0MXXfoo\0R  new.rs\0";
+        assert_eq!(parse_porcelain_z_paths(output), vec!["new.rs".to_owned()]);
+    }
+
+    #[test]
+    fn parse_porcelain_z_paths_handles_dual_status_special_chars_and_invalid_utf8() {
+        let output = b"RM a.rs\0b.rs\0CM c.rs\0d.rs\0 M  leading.rs\0?? tab\there.rs\0?? \"quoted\".rs\0 M \xff\xfe.rs\0R  \xff\xfe.rs\0kept_old.rs\0 M after.rs\0";
+        assert_eq!(
+            parse_porcelain_z_paths(output),
+            vec![
+                "a.rs".to_owned(),
+                "b.rs".to_owned(),
+                "c.rs".to_owned(),
+                "d.rs".to_owned(),
+                " leading.rs".to_owned(),
+                "tab\there.rs".to_owned(),
+                "\"quoted\".rs".to_owned(),
+                "kept_old.rs".to_owned(),
+                "after.rs".to_owned(),
+            ]
         );
     }
 }

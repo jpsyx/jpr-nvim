@@ -192,5 +192,117 @@ assert(render.find_message_at_line(two_popup, range_m1.last + 1).message_id == "
 assert(render.find_message_at_line(two_popup, range_m2.last + 1).message_id == "M2", "gap after Thread 1 maps to M2")
 assert(render.find_message_at_line(two_popup, range_m3.first).message_id == "M3", "Thread 2 message maps to M3")
 assert(render.find_message_at_line(two_popup, #two_popup.lines).message_id == "M3", "footer maps to last message M3")
+assert(not two_popup.lines[#two_popup.lines]:find("[p]romote", 1, true), "non-local popup omits [p]romote")
+assert(not two_popup.lines[#two_popup.lines]:find("[s]end", 1, true), "non-local popup omits [s]end")
+
+-- Local threads: sign priority, agent state badges, promoted tag, expanded lines, and popup.
+local local_unsent = {
+    threadId = "loc-1",
+    origin = "local",
+    displayLine = 6,
+    kind = "local",
+    state = "open",
+    outdated = false,
+    messageCount = 2,
+    firstAuthor = "pablo",
+    snippet = "check nil guard",
+    agent = { state = "unsent" },
+    messages = {
+        { id = "lm-1", author = "pablo", body = "check nil guard", created = "2026-11-21T01:00:00Z", updated = "2026-11-21T01:00:00Z" },
+        { id = "lm-2", author = "agent", body = "looks fine", created = "2026-11-21T01:01:00Z", updated = "2026-11-21T01:01:00Z" },
+    },
+}
+local local_sign, local_highlight = render.pick_sign({ local_unsent })
+assert(local_sign == "◆" and local_highlight == "JprThreadLocal", local_sign .. " " .. local_highlight)
+
+local priority_local_sign, priority_local_highlight = render.pick_sign({ resolved_thread, open_published_thread, local_unsent })
+assert(priority_local_sign == "◆" and priority_local_highlight == "JprThreadLocal", "open local outranks open published")
+local priority_draft_sign, priority_draft_highlight = render.pick_sign({ local_unsent, draft_thread })
+assert(priority_draft_sign == "✎" and priority_draft_highlight == "JprThreadDraft", "draft outranks open local")
+local priority_failed_sign, priority_failed_highlight = render.pick_sign({ local_unsent, draft_thread, failed_thread })
+assert(priority_failed_sign == "!" and priority_failed_highlight == "JprThreadFailed", "failed outranks draft and local")
+
+local resolved_local = vim.tbl_extend("force", vim.deepcopy(local_unsent), { state = "resolved" })
+local resolved_local_sign, resolved_local_highlight = render.pick_sign({ resolved_local })
+assert(resolved_local_sign == "✓" and resolved_local_highlight == "JprThreadResolved", "resolved local shows resolved sign")
+local resolved_local_with_published_sign, resolved_local_with_published_highlight =
+    render.pick_sign({ resolved_local, open_published_thread })
+assert(
+    resolved_local_with_published_sign == "💬" and resolved_local_with_published_highlight == "JprThreadPublished",
+    "resolved local does not outrank open published"
+)
+
+local unsent_eol = render.create_eol_chunks_from_threads({ local_unsent })
+assert(unsent_eol[1][1]:find("[local · unsent]", 1, true) ~= nil, vim.inspect(unsent_eol))
+assert(unsent_eol[1][2] == "JprThreadLocal", vim.inspect(unsent_eol))
+
+local local_sent = vim.tbl_extend("force", vim.deepcopy(local_unsent), { agent = { state = "sent", round = 2 } })
+local sent_eol = render.create_eol_chunks_from_threads({ local_sent })
+assert(sent_eol[1][1]:find("[local · sent #2]", 1, true) ~= nil, vim.inspect(sent_eol))
+
+local local_sent_nil_round = vim.tbl_extend("force", vim.deepcopy(local_unsent), { agent = { state = "sent", round = vim.NIL } })
+assert(render.build_local_badge_from_thread(local_sent_nil_round) == "[local · sent #1]", "vim.NIL round defaults to #1")
+
+local local_answered = vim.tbl_extend("force", vim.deepcopy(local_unsent), { agent = { state = "answered" } })
+local answered_eol = render.create_eol_chunks_from_threads({ local_answered })
+assert(answered_eol[1][1]:find("[local · answered]", 1, true) ~= nil, vim.inspect(answered_eol))
+
+local local_promoted = vim.tbl_extend("force", vim.deepcopy(local_answered), { promotedTo = "PRRT_9" })
+local promoted_eol = render.create_eol_chunks_from_threads({ local_promoted })
+assert(promoted_eol[1][1]:find("[local · answered] [promoted]", 1, true) ~= nil, vim.inspect(promoted_eol))
+
+local local_nil_fields = vim.tbl_extend("force", vim.deepcopy(local_unsent), { agent = vim.NIL, promotedTo = vim.NIL })
+assert(render.build_local_badge_from_thread(local_nil_fields) == "[local]", "vim.NIL fields safely fall back to [local]")
+assert(render.build_local_badge_from_thread(vim.NIL) == "", "vim.NIL thread safely returns empty badge")
+assert(render.build_local_badge_from_thread(open_published_thread) == "", "non-local thread has empty badge")
+
+local local_virtual_lines = render.create_expanded_virt_lines_from_threads({ local_unsent }, false)
+assert(local_virtual_lines[1][1][1]:find("[local · unsent]", 1, true) ~= nil, vim.inspect(local_virtual_lines))
+assert(local_virtual_lines[1][1][2] == "JprThreadLocal", vim.inspect(local_virtual_lines))
+assert(not local_virtual_lines[3][1][1]:find("[local · unsent]", 1, true), "reply header omits local badge")
+
+local local_popup = render.create_popup_layout_from_threads({ local_promoted })
+assert(local_popup.lines[1] == "Thread (Open) [local · answered] [promoted]", vim.inspect(local_popup.lines))
+assert(
+    local_popup.highlights[1].line == 0 and local_popup.highlights[1].group == "JprTitle",
+    vim.inspect(local_popup.highlights[1])
+)
+assert(
+    local_popup.lines[1]:sub(local_popup.highlights[1].col_start + 1, local_popup.highlights[1].col_end) == "Thread (Open)",
+    vim.inspect(local_popup.highlights[1])
+)
+assert(
+    local_popup.highlights[2].line == 0 and local_popup.highlights[2].group == "JprThreadLocal",
+    vim.inspect(local_popup.highlights[2])
+)
+assert(
+    local_popup.lines[1]:sub(local_popup.highlights[2].col_start + 1, local_popup.highlights[2].col_end)
+        == "[local · answered] [promoted]",
+    vim.inspect(local_popup.highlights[2])
+)
+assert(local_popup.lines[#local_popup.lines]:find("[p]romote", 1, true) ~= nil, vim.inspect(local_popup.lines))
+assert(local_popup.lines[#local_popup.lines]:find("[s]end", 1, true) ~= nil, vim.inspect(local_popup.lines))
+
+local outdated_local_popup = render.create_popup_layout_from_threads({
+    vim.tbl_extend("force", vim.deepcopy(local_promoted), { outdated = true }),
+})
+assert(
+    outdated_local_popup.lines[1] == "Thread (Open · Outdated) [local · answered] [promoted]",
+    vim.inspect(outdated_local_popup.lines[1])
+)
+assert(
+    outdated_local_popup.lines[1]:sub(
+        outdated_local_popup.highlights[1].col_start + 1,
+        outdated_local_popup.highlights[1].col_end
+    ) == "Thread (Open · Outdated)",
+    vim.inspect(outdated_local_popup.highlights[1])
+)
+assert(
+    outdated_local_popup.lines[1]:sub(
+        outdated_local_popup.highlights[2].col_start + 1,
+        outdated_local_popup.highlights[2].col_end
+    ) == "[local · answered] [promoted]",
+    vim.inspect(outdated_local_popup.highlights[2])
+)
 
 print("threads_render_spec: ok")

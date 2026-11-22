@@ -19,22 +19,9 @@ pub fn session_view(
     sync: &SyncState,
     queued_count: usize,
 ) -> SessionView {
-    let rows = files
-        .iter()
-        .map(|file| FileRow {
-            path: file.path.clone(),
-            additions: file.additions,
-            deletions: file.deletions,
-            viewed: file.viewed,
-            threads: threads
-                .iter()
-                .filter(|thread| thread.anchor.file.as_deref() == Some(file.path.as_str()))
-                .count(),
-        })
-        .collect();
     SessionView {
         pr: pr.cloned(),
-        files: rows,
+        files: create_file_rows_from_files(files, threads),
         tree: create_file_tree_from_paths(files.iter().map(|file| file.path.as_str())),
         viewed_count: files
             .iter()
@@ -50,14 +37,34 @@ pub fn session_view(
             .iter()
             .filter(|thread| thread.anchor.kind == AnchorKind::Pr)
             .count(),
+        local_unsent_count: threads
+            .iter()
+            .filter(|thread| crate::agent::is_thread_dispatchable(thread))
+            .count(),
         queued_count,
         sync: sync.clone(),
     }
 }
 
+fn create_file_rows_from_files(files: &[ChangedFile], threads: &[Thread]) -> Vec<FileRow> {
+    files
+        .iter()
+        .map(|file| FileRow {
+            path: file.path.clone(),
+            additions: file.additions,
+            deletions: file.deletions,
+            viewed: file.viewed,
+            threads: threads
+                .iter()
+                .filter(|thread| thread.anchor.file.as_deref() == Some(file.path.as_str()))
+                .count(),
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
-    use review_model::{Anchor, Message, MessageSync, Origin, ThreadState};
+    use review_model::{AgentThreadState, Anchor, Message, MessageSync, Origin, ThreadState};
 
     use super::*;
     use crate::fakes::{changed_file, github_thread, sample_pr};
@@ -76,6 +83,29 @@ mod tests {
                 "2026-11-20T00:00:00Z",
                 Some(MessageSync::Published),
             )],
+            agent: None,
+            promoted_to: None,
+        }
+    }
+
+    fn create_local_unsent_thread(id: &str, path: &str) -> Thread {
+        let mut message = Message::create_with_sync(
+            &format!("{id}-m1"),
+            "alice",
+            "check lifetime",
+            "2026-11-21T00:00:00Z",
+            None,
+        );
+        message.viewer_did_author = true;
+        Thread {
+            id: id.into(),
+            origin: Origin::Local,
+            anchor: Anchor::line(path, 5),
+            state: ThreadState::Open,
+            outdated: false,
+            messages: vec![message],
+            agent: Some(AgentThreadState::Unsent),
+            promoted_to: None,
         }
     }
 
@@ -93,6 +123,7 @@ mod tests {
             github_thread("T2", "a.rs"),
             draft_thread,
             create_conversation_thread("IC_1"),
+            create_local_unsent_thread("loc-1", "a.rs"),
         ];
         let view = session_view(
             Some(&sample_pr()),
@@ -106,11 +137,12 @@ mod tests {
             .iter()
             .map(|row| (row.path.as_str(), row.threads))
             .collect();
-        assert_eq!(counts, [("a.rs", 2), ("b.rs", 0), ("c.rs", 1)]);
+        assert_eq!(counts, [("a.rs", 3), ("b.rs", 0), ("c.rs", 1)]);
         assert_eq!(view.viewed_count, 1, "a dismissed file is not viewed");
-        assert_eq!(view.thread_count, 3);
+        assert_eq!(view.thread_count, 4);
         assert_eq!(view.conversation_count, 1);
         assert_eq!(view.draft_count, 1);
+        assert_eq!(view.local_unsent_count, 1);
         assert_eq!(view.pr.map(|pr| pr.number), Some(7));
         assert_eq!(view.sync, SyncState::Synced { at: 5 });
     }

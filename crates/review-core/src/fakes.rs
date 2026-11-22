@@ -10,8 +10,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use anyhow::{Result, anyhow};
 use review_model::{
-    Anchor, AnchorKind, ChangedFile, Message, MessageSync, Origin, PullRequest, Reaction,
-    ReactionContent, ReviewEvent, Thread, ThreadState, ViewedState,
+    AgentRound, Anchor, AnchorKind, ChangedFile, Message, MessageSync, Origin, PullRequest,
+    Reaction, ReactionContent, ReviewEvent, Thread, ThreadState, ViewedState,
 };
 
 use crate::ports::{
@@ -69,6 +69,8 @@ pub fn github_thread(id: &str, path: &str) -> Thread {
             "2026-11-19T00:00:00Z",
             Some(MessageSync::Published),
         )],
+        agent: None,
+        promoted_to: None,
     }
 }
 
@@ -262,22 +264,37 @@ impl Forge for FakeForge {
     }
 }
 
-/// A store that keeps the snapshot in memory, for tests that open a session
-/// without a disk. Clones share state, so a test can read what the session
-/// saved.
+#[derive(Debug, Default)]
+struct MemoryStoreState {
+    snapshot: StoreSnapshot,
+    rounds: Vec<AgentRound>,
+    save_failure: Option<String>,
+}
+
+/// A store that keeps the snapshot and rounds in memory, for tests that open a
+/// session without a disk. Clones share state, so a test can read what the
+/// session saved.
 #[derive(Debug, Clone, Default)]
 pub struct MemoryStore {
-    saved: Arc<Mutex<StoreSnapshot>>,
+    state: Arc<Mutex<MemoryStoreState>>,
 }
 
 impl MemoryStore {
     /// What was saved last.
     #[must_use]
     pub fn saved(&self) -> StoreSnapshot {
-        self.saved
+        self.lock().snapshot.clone()
+    }
+
+    /// Makes later `save` calls fail with `message`, or succeed again with `None`.
+    pub fn fail_saves_with(&self, message: Option<&str>) {
+        self.lock().save_failure = message.map(str::to_owned);
+    }
+
+    fn lock(&self) -> MutexGuard<'_, MemoryStoreState> {
+        self.state
             .lock()
             .expect("the memory store lock is poisoned")
-            .clone()
     }
 }
 
@@ -287,11 +304,22 @@ impl ReviewStore for MemoryStore {
     }
 
     fn save(&self, snapshot: &StoreSnapshot) -> Result<()> {
-        *self
-            .saved
-            .lock()
-            .expect("the memory store lock is poisoned") = snapshot.clone();
+        let mut state = self.lock();
+        if let Some(message) = &state.save_failure {
+            return Err(anyhow!("{message}"));
+        }
+        state.snapshot = snapshot.clone();
+        drop(state);
         Ok(())
+    }
+
+    fn append_round(&self, round: &AgentRound) -> Result<()> {
+        self.lock().rounds.push(round.clone());
+        Ok(())
+    }
+
+    fn rounds(&self) -> Result<Vec<AgentRound>> {
+        Ok(self.lock().rounds.clone())
     }
 }
 

@@ -235,6 +235,31 @@ function M.refresh_buffer(session, buf)
     end
 end
 
+local function handle_buf_write(session, buf)
+    local path = session.diff and M.buffer_to_changed_path(session, buf)
+    if not path then
+        return
+    end
+    local function refresh_after_write()
+        if session.closing or not session.diff then
+            return
+        end
+        if vim.api.nvim_buf_is_valid(buf) then
+            M.refresh_buffer(session, buf)
+        end
+        require("jpr.views.stream").refresh(session, true)
+    end
+    local updates = require("jpr.views.threads").collect_shifted_local_anchors(session, buf)
+    if #updates > 0 and session.client then
+        require("jpr.session").request(session, "updateLocalAnchors", {
+            path = path,
+            updates = updates,
+        }, refresh_after_write, refresh_after_write)
+        return
+    end
+    refresh_after_write()
+end
+
 --- Keeps `session`'s windows drawn as diffs for as long as it lives.
 function M.attach(session)
     local group = vim.api.nvim_create_augroup(("jpr-diff-%d"):format(session.tab), { clear = true })
@@ -254,10 +279,7 @@ function M.attach(session)
     vim.api.nvim_create_autocmd("BufWritePost", {
         group = group,
         callback = function(event)
-            if session.diff and M.buffer_to_changed_path(session, event.buf) then
-                M.refresh_buffer(session, event.buf)
-                require("jpr.views.stream").refresh(session, true)
-            end
+            handle_buf_write(session, event.buf)
         end,
     })
 end

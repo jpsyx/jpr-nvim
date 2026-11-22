@@ -2,13 +2,15 @@
 //! Responses and event notifications share one writer, one JSON message per
 //! line.
 
+mod agent;
 mod comments;
+mod ticker;
 
 use std::io::{BufRead, Write};
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+use std::path::PathBuf;
+use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex, MutexGuard};
-use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 use review_core::ReviewSession;
@@ -19,6 +21,13 @@ use serde_json::{Value, json};
 use crate::params::{get_bool_from_params, get_mode_from_params, get_string_from_params};
 use crate::protocol::{
     PROTOCOL_VERSION, Request, RpcError, failure, notification, parse_request, success,
+};
+#[cfg(unix)]
+use crate::socket::SocketServer;
+
+pub use ticker::{
+    PollStep, get_poll_step_from_elapsed, get_wake_interval_from_intervals,
+    get_wake_interval_from_poll_and_retry,
 };
 
 /// How a server runs, for example as the `serve` command sets it from its
@@ -32,44 +41,10 @@ pub struct ServeOptions {
     /// How often, between syncs, to resend what the forge refused; `None`
     /// waits for the next sync. Only a server that polls retries.
     pub retry_every: Option<Duration>,
-}
-
-/// What the poller does when it wakes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PollStep {
-    /// Pull from the forge (which sends the queue first).
-    Sync,
-    /// Resend the queue only.
-    Retry,
-    /// Nothing to do yet.
-    Wait,
-}
-
-/// What the poller does `since_sync` after its last sync: sync once a whole
-/// `poll_every` has passed, else resend a waiting queue, else wait.
-#[must_use]
-pub fn get_poll_step_from_elapsed(
-    since_sync: Duration,
-    poll_every: Duration,
-    has_queued: bool,
-) -> PollStep {
-    if since_sync >= poll_every {
-        PollStep::Sync
-    } else if has_queued {
-        PollStep::Retry
-    } else {
-        PollStep::Wait
-    }
-}
-
-/// How long the poller sleeps between wake-ups: the shorter of the two
-/// intervals.
-#[must_use]
-pub fn get_wake_interval_from_poll_and_retry(
-    poll_every: Duration,
-    retry_every: Option<Duration>,
-) -> Duration {
-    retry_every.map_or(poll_every, |retry_every| retry_every.min(poll_every))
+    /// Optional Unix domain socket path for CLI clients (`jpr-review reply`, etc.).
+    pub socket_path: Option<PathBuf>,
+    /// Optional interval for checking worktree file changes on disk.
+    pub watch_every: Option<Duration>,
 }
 
 /// Answers one request. Routing only: every rule lives in the session.
@@ -129,25 +104,19 @@ pub fn serve<R: BufRead, W: Write + Send + 'static>(
             .map_err(|_| anyhow!("the review session lock is poisoned"))?
             .subscribe(),
     ));
-    let (stop, stopped) = mpsc::channel::<()>();
-    let poller = options.poll_every.map(|poll_every| {
-        let shared = (Arc::clone(session), Arc::clone(&events), Arc::clone(writer));
-        spawn_poller(
-            shared,
-            stopped,
-            poll_every,
-            get_wake_interval_from_poll_and_retry(poll_every, options.retry_every),
-        )
-    });
-    let answered = answer_requests(reader, writer, session, &events, options);
-    // The poller stops before the last drain, so no sync can announce
-    // anything after it. The join waits for at most one in-flight sync and
-    // the write of its events.
-    drop(stop);
-    if let Some(poller) = poller {
-        // A poller that panicked has nothing left to stop.
-        let _ = poller.join();
+    if ticker::has_enabled_watch(options) {
+        let _ = lock(session).map(|mut guard| guard.poll_worktree_files());
     }
+    let socket_server = start_socket_server(options, session, &events, writer)?;
+    let (stop, stopped) = mpsc::channel::<()>();
+    let shared = (Arc::clone(session), Arc::clone(&events), Arc::clone(writer));
+    let ticker_handle = ticker::start_ticker(options, stopped, shared);
+    let answered = answer_requests(reader, writer, session, &events, options);
+    drop(stop);
+    if let Some(handle) = ticker_handle {
+        let _ = handle.join();
+    }
+    stop_socket_server(socket_server);
     let shutdown = answered?;
     write_events(&events, writer)?;
     if let Some(reply) = shutdown {
@@ -155,6 +124,49 @@ pub fn serve<R: BufRead, W: Write + Send + 'static>(
     }
     Ok(())
 }
+
+#[cfg(unix)]
+fn start_socket_server<W: Write + Send + 'static>(
+    options: &ServeOptions,
+    session: &Arc<Mutex<ReviewSession>>,
+    events: &Arc<Mutex<Receiver<Event>>>,
+    writer: &Arc<Mutex<W>>,
+) -> Result<Option<SocketServer>> {
+    options
+        .socket_path
+        .as_deref()
+        .map(|socket_path| {
+            SocketServer::start(
+                socket_path,
+                (Arc::clone(session), Arc::clone(events), Arc::clone(writer)),
+                options.server_version.clone(),
+            )
+        })
+        .transpose()
+}
+
+#[cfg(not(unix))]
+fn start_socket_server<W: Write + Send + 'static>(
+    options: &ServeOptions,
+    _session: &Arc<Mutex<ReviewSession>>,
+    _events: &Arc<Mutex<Receiver<Event>>>,
+    _writer: &Arc<Mutex<W>>,
+) -> Result<Option<()>> {
+    if options.socket_path.is_some() {
+        anyhow::bail!("Unix domain sockets are not supported on this platform");
+    }
+    Ok(None)
+}
+
+#[cfg(unix)]
+fn stop_socket_server(server: Option<SocketServer>) {
+    if let Some(socket_server) = server {
+        socket_server.stop_and_join();
+    }
+}
+
+#[cfg(not(unix))]
+fn stop_socket_server(_server: Option<()>) {}
 
 /// Answers requests until `reader` ends or a `shutdown` request arrives,
 /// returning the `shutdown` response unwritten so events can go first.
@@ -189,54 +201,17 @@ fn answer_requests<R: BufRead, W: Write>(
     Ok(None)
 }
 
-/// What the poller shares with the server: the session, its events and the
-/// output.
-type Shared<W> = (
+/// What the poller and socket server share with the server: the session, its
+/// events, and the primary output.
+pub type Shared<W> = (
     Arc<Mutex<ReviewSession>>,
     Arc<Mutex<Receiver<Event>>>,
     Arc<Mutex<W>>,
 );
 
-/// Wakes every `wake_interval` and, as [`get_poll_step_from_elapsed`]
-/// decides, syncs (every `poll_every`) or resends the queue, writing what that
-/// announced, until `stopped` fires or disconnects, or the output closes.
-fn spawn_poller<W: Write + Send + 'static>(
-    (session, events, writer): Shared<W>,
-    stopped: Receiver<()>,
-    poll_every: Duration,
-    wake_interval: Duration,
-) -> JoinHandle<()> {
-    thread::spawn(move || {
-        let mut last_sync = Instant::now();
-        // A message or a disconnect both mean stop.
-        while stopped.recv_timeout(wake_interval) == Err(RecvTimeoutError::Timeout) {
-            if let Ok(mut session) = session.lock() {
-                // A failure is announced as an event by the session.
-                match get_poll_step_from_elapsed(
-                    last_sync.elapsed(),
-                    poll_every,
-                    session.has_queued(),
-                ) {
-                    PollStep::Sync => {
-                        let _ = session.sync();
-                        last_sync = Instant::now();
-                    }
-                    PollStep::Retry => {
-                        let _ = session.flush_queued();
-                    }
-                    PollStep::Wait => {}
-                }
-            }
-            if write_events(&events, &writer).is_err() {
-                break;
-            }
-        }
-    })
-}
-
 /// Writes every event announced so far to `writer` as an `event`
 /// notification, in the order they were announced.
-fn write_events<W: Write>(events: &Mutex<Receiver<Event>>, writer: &Mutex<W>) -> Result<()> {
+pub fn write_events<W: Write>(events: &Mutex<Receiver<Event>>, writer: &Mutex<W>) -> Result<()> {
     // Holding the events lock while writing keeps two drains from
     // interleaving their events.
     let pending = events
@@ -286,49 +261,4 @@ pub fn to_value<T: Serialize>(value: &T) -> Result<Value, RpcError> {
             format!("encoding the result: {error}"),
         )
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    const MINUTE: Duration = Duration::from_secs(60);
-
-    #[test]
-    fn a_full_interval_since_the_last_sync_means_sync() {
-        assert_eq!(
-            get_poll_step_from_elapsed(MINUTE, MINUTE, true),
-            PollStep::Sync
-        );
-        assert_eq!(
-            get_poll_step_from_elapsed(MINUTE * 2, MINUTE, false),
-            PollStep::Sync
-        );
-    }
-
-    #[test]
-    fn between_syncs_a_waiting_queue_is_retried() {
-        assert_eq!(
-            get_poll_step_from_elapsed(Duration::from_secs(20), MINUTE, true),
-            PollStep::Retry
-        );
-        assert_eq!(
-            get_poll_step_from_elapsed(Duration::from_secs(20), MINUTE, false),
-            PollStep::Wait
-        );
-    }
-
-    #[test]
-    fn the_poller_wakes_at_the_shorter_interval() {
-        let retry = Some(Duration::from_secs(20));
-        assert_eq!(
-            get_wake_interval_from_poll_and_retry(MINUTE, retry),
-            Duration::from_secs(20)
-        );
-        assert_eq!(
-            get_wake_interval_from_poll_and_retry(Duration::from_secs(5), retry),
-            Duration::from_secs(5)
-        );
-        assert_eq!(get_wake_interval_from_poll_and_retry(MINUTE, None), MINUTE);
-    }
 }

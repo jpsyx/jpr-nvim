@@ -52,11 +52,57 @@ end), "the panel shows the synced pull request")
 local lines = vim.api.nvim_buf_get_lines(review.panel.buf, 0, -1, false)
 assert(lines[6] == "  README.md  +2 -1 [1]", vim.inspect(lines))
 
+assert(jpr.defaults.agent == "claude", "default agent")
+assert(jpr.defaults.claude_cmd == "claude", "default claude_cmd")
+assert(jpr.defaults.codex_cmd == "codex", "default codex_cmd")
+assert(jpr.defaults.agent_width == 56, "default agent_width")
+
+jpr.define_highlights()
+assert(vim.fn.hlexists("JprThreadLocal") == 1, "JprThreadLocal highlight group exists")
+
+local completed = jpr.complete("", "Jpr ")
+for _, subcommand in ipairs({ "agent", "send", "prepass" }) do
+    assert(vim.tbl_contains(completed, subcommand), ":Jpr completion includes " .. subcommand)
+end
+
 vim.api.nvim_set_current_win(review.panel.win)
 vim.api.nvim_win_set_cursor(review.panel.win, { 6, 0 })
 panel_view.open_file_under_cursor(review)
 assert(vim.api.nvim_get_current_win() ~= review.panel.win, "the file opens beside the panel")
 assert(vim.fn.resolve(vim.api.nvim_buf_get_name(0)) == vim.fn.resolve(worktree .. "/README.md"), "the worktree file opens")
+
+local readme_buffer = vim.api.nvim_get_current_buf()
+local diff_namespace = vim.api.nvim_create_namespace("jpr-diff")
+assert(vim.wait(3000, function()
+    return #vim.api.nvim_buf_get_extmarks(readme_buffer, diff_namespace, 0, -1, {}) > 0
+end), "initial diff overlay draws on README.md")
+assert(#vim.api.nvim_buf_get_extmarks(readme_buffer, diff_namespace, { 1, 0 }, { 1, -1 }, {}) == 0, "line 2 is not in buffer yet")
+
+vim.fn.writefile({ "hello", "new" }, worktree .. "/README.md")
+local files_changed_view = vim.deepcopy(review.view)
+files_changed_view.localUnsentCount = 1
+session.on_notification(review, "event", {
+    type = "filesChanged",
+    paths = { "README.md" },
+    view = files_changed_view,
+})
+assert(
+    vim.deep_equal(vim.api.nvim_buf_get_lines(readme_buffer, 0, -1, false), { "hello", "new" }),
+    "filesChanged reloads README.md via checktime"
+)
+assert(review.view.localUnsentCount == 1, "filesChanged updates session.view")
+assert(vim.wait(3000, function()
+    return #vim.api.nvim_buf_get_extmarks(readme_buffer, diff_namespace, { 1, 0 }, { 1, -1 }, {}) > 0
+end), "filesChanged refreshes the diff overlay")
+
+local agent_round_view = vim.deepcopy(review.view)
+agent_round_view.localUnsentCount = 0
+session.on_notification(review, "event", {
+    type = "agentRound",
+    round = { round = 1, kind = "send", threadIds = { "loc-1" }, prompt = "hi", sentAt = 1 },
+    view = agent_round_view,
+})
+assert(review.view.localUnsentCount == 0, "agentRound updates session.view")
 
 -- :Jpr open refocuses the tab only for the same repository.
 local review_tab = vim.api.nvim_get_current_tabpage()

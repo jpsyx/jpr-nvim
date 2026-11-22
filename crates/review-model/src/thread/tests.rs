@@ -15,6 +15,8 @@ fn a_thread_round_trips_through_json_with_its_wire_spellings() {
             "2026-11-19T00:00:00Z",
             Some(MessageSync::Draft),
         )],
+        agent: None,
+        promoted_to: None,
     };
     let json = serde_json::to_value(&thread).unwrap();
     assert_eq!(json["origin"], "github");
@@ -72,44 +74,33 @@ fn anchor_range_orders_reversed_bounds_and_collapses_equal_lines_to_line_kind() 
 
 #[test]
 fn thread_preview_ranks_failed_above_draft_above_published_across_messages() {
+    let push_message = |thread: &mut Thread, id: &str, author: &str, sync: MessageSync| {
+        let message = Message::create_with_sync(id, author, id, "2026-11-20T00:00:00Z", Some(sync));
+        thread.messages.push(message);
+    };
     let mut thread = Thread {
         id: "T1".into(),
         origin: Origin::Github,
         anchor: Anchor::line("src/a.rs", 7),
         state: ThreadState::Open,
         outdated: false,
-        messages: vec![Message::create_with_sync(
-            "M1",
-            "alice",
-            "published root",
-            "2026-11-20T00:00:00Z",
-            Some(MessageSync::Published),
-        )],
+        messages: Vec::new(),
+        agent: None,
+        promoted_to: None,
     };
+    push_message(&mut thread, "M1", "alice", MessageSync::Published);
     assert_eq!(
         create_thread_preview_from_thread(&thread, 7).kind,
         MarkerKind::Published
     );
 
-    thread.messages.push(Message::create_with_sync(
-        "M2",
-        "bob",
-        "draft reply",
-        "2026-11-20T00:01:00Z",
-        Some(MessageSync::Draft),
-    ));
+    push_message(&mut thread, "M2", "bob", MessageSync::Draft);
     assert_eq!(
         create_thread_preview_from_thread(&thread, 7).kind,
         MarkerKind::Draft
     );
 
-    thread.messages.push(Message::create_with_sync(
-        "M3",
-        "bob",
-        "failed reply",
-        "2026-11-20T00:02:00Z",
-        Some(MessageSync::Failed),
-    ));
+    push_message(&mut thread, "M3", "bob", MessageSync::Failed);
     assert_eq!(
         create_thread_preview_from_thread(&thread, 7).kind,
         MarkerKind::Failed
@@ -131,8 +122,38 @@ fn thread_preview_snippet_uses_trimmed_first_non_empty_line() {
             "2026-11-20T00:00:00Z",
             Some(MessageSync::Published),
         )],
+        agent: None,
+        promoted_to: None,
     };
     let preview = create_thread_preview_from_thread(&thread, 7);
     assert_eq!(preview.snippet, "first line");
     assert_eq!(preview.display_line, 7);
+}
+
+#[test]
+fn local_thread_preview_carries_origin_agent_state_and_promotion() {
+    let thread = Thread {
+        id: "loc-1".into(),
+        origin: Origin::Local,
+        anchor: Anchor::line("src/lib.rs", 8),
+        state: ThreadState::Open,
+        outdated: false,
+        messages: vec![Message::create_with_sync(
+            "loc-m-1",
+            "reviewer",
+            "Should we extract a helper here?",
+            "2026-11-21T00:00:00Z",
+            None,
+        )],
+        agent: Some(crate::AgentThreadState::Sent { round: 2 }),
+        promoted_to: Some("PRRT_99".into()),
+    };
+    let preview = create_thread_preview_from_thread(&thread, 8);
+    assert_eq!(preview.kind, MarkerKind::Local);
+    assert_eq!(preview.origin, Origin::Local);
+    assert_eq!(
+        preview.agent,
+        Some(crate::AgentThreadState::Sent { round: 2 })
+    );
+    assert_eq!(preview.promoted_to.as_deref(), Some("PRRT_99"));
 }

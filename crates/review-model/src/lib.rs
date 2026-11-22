@@ -1,12 +1,18 @@
 //! The review domain: pull requests, changed files, threads, and the read
 //! models every frontend draws. Pure data: no IO and no frontend concepts.
 
+mod agent;
 mod diff;
 mod pr;
 mod review;
 mod thread;
 mod view;
 
+pub use agent::{
+    AgentDispatch, AgentKind, AgentLaunchPlan, AgentProfile, AgentRound, AgentRoundKind,
+    AgentThreadState, DEFAULT_SUBMIT_DELAY_MS, LocalAnchorUpdate, PasteStyle, PrepassFinding,
+    SubmitKey,
+};
 pub use diff::{
     AddedLine, FileDiffView, LineCell, LineChange, RemovedBlock, RemovedLine, StreamRow,
     StreamView, SuggestedEdit, ViewMode, WordRange,

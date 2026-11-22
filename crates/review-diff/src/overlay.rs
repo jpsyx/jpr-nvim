@@ -234,6 +234,8 @@ mod tests {
                 "2026-11-20T00:00:00Z",
                 Some(MessageSync::Published),
             )],
+            agent: None,
+            promoted_to: None,
         };
         let threads = vec![
             make_thread("T-file", Anchor::file("a.rs")),

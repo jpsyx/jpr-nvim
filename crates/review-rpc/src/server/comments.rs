@@ -9,8 +9,8 @@ use serde_json::{Value, json};
 use super::{engine_result_to_rpc, lock, to_value};
 use crate::params::{
     get_anchor_from_params, get_bool_from_params, get_optional_string_from_params,
-    get_reaction_from_params, get_review_event_from_params, get_string_from_params,
-    get_u64_from_params,
+    get_origin_from_params, get_reaction_from_params, get_review_event_from_params,
+    get_string_from_params, get_u64_from_params,
 };
 use crate::protocol::RpcError;
 
@@ -25,7 +25,8 @@ pub(super) fn handle_comment_method(
         "comment" => {
             let anchor = get_anchor_from_params(params)?;
             let body = get_string_from_params(params, "body")?;
-            thread_view_result_to_rpc(lock(session)?.comment(anchor, body))
+            let origin = get_origin_from_params(params)?;
+            thread_view_result_to_rpc(lock(session)?.comment_with_origin(anchor, body, origin))
         }
         "reply" => {
             let thread_id = get_string_from_params(params, "threadId")?;
@@ -83,10 +84,7 @@ fn handle_reaction_and_review_method(
                 lock(session)?.submit_review(event, body),
             )?)
         }
-        other => Err(RpcError::new(
-            RpcError::METHOD_NOT_FOUND,
-            format!("unknown method {other:?}"),
-        )),
+        other => super::agent::handle_agent_method(session, other, params),
     }
 }
 
@@ -107,7 +105,7 @@ fn handle_suggest_from_edit(
     Ok(json!({ "suggested": suggested, "thread": thread, "view": view }))
 }
 
-fn thread_view_result_to_rpc(
+pub(super) fn thread_view_result_to_rpc(
     result: anyhow::Result<(review_model::Thread, review_model::SessionView)>,
 ) -> Result<Value, RpcError> {
     let (thread, view) = engine_result_to_rpc(result)?;

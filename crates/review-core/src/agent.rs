@@ -1,0 +1,307 @@
+//! Eligibility filtering and prompt builders for the interactive agent loop.
+
+use std::fmt::Write;
+
+use review_model::{
+    AgentThreadState, Anchor, AnchorKind, Origin, PullRequest, Side, Thread, ThreadState,
+};
+
+/// Whether `thread` should be sent on `:Jpr send`: local, open, `Unsent`, and
+/// ending with a reviewer-authored message.
+#[must_use]
+pub fn is_thread_dispatchable(thread: &Thread) -> bool {
+    thread.origin == Origin::Local
+        && thread.state == ThreadState::Open
+        && thread.agent == Some(AgentThreadState::Unsent)
+        && thread
+            .messages
+            .last()
+            .is_some_and(|message| message.viewer_did_author)
+}
+
+/// Selects dispatchable local threads, or only `only_thread_id` when given
+/// (for popup `s`, allowing any open local thread with messages to be sent or
+/// re-sent on demand).
+#[must_use]
+pub fn select_dispatchable_threads<'a>(
+    threads: &'a [Thread],
+    only_thread_id: Option<&str>,
+) -> Vec<&'a Thread> {
+    if let Some(target_id) = only_thread_id {
+        return threads
+            .iter()
+            .filter(|thread| {
+                thread.id == target_id
+                    && thread.origin == Origin::Local
+                    && thread.state == ThreadState::Open
+                    && !thread.messages.is_empty()
+            })
+            .collect();
+    }
+    threads
+        .iter()
+        .filter(|thread| is_thread_dispatchable(thread))
+        .collect()
+}
+
+/// Formats an [`Anchor`] as `file:L7`, `file:L7-9` (with ` (base)` for `LEFT`),
+/// `file`, or `PR`.
+#[must_use]
+pub fn build_anchor_label_from_anchor(anchor: &Anchor) -> String {
+    let side_suffix = if anchor.side == Side::Left {
+        " (base)"
+    } else {
+        ""
+    };
+    match anchor.kind {
+        AnchorKind::Pr => "PR".to_owned(),
+        AnchorKind::File => anchor.file.clone().unwrap_or_else(|| "file".to_owned()),
+        AnchorKind::Line => format!(
+            "{}:L{}{side_suffix}",
+            anchor.file.as_deref().unwrap_or("file"),
+            anchor.end.or(anchor.start).unwrap_or(1)
+        ),
+        AnchorKind::Range => format!(
+            "{}:L{}-{}{side_suffix}",
+            anchor.file.as_deref().unwrap_or("file"),
+            anchor.start.unwrap_or(1),
+            anchor.end.or(anchor.start).unwrap_or(1)
+        ),
+    }
+}
+
+/// Builds the single-item or numbered-batch prompt for `threads` on `pr`.
+#[must_use]
+pub fn build_send_prompt_from_threads(pr: &PullRequest, threads: &[&Thread]) -> String {
+    let mut output = String::new();
+    let count = threads.len();
+    let noun = if count == 1 { "comment" } else { "comments" };
+    let _ = writeln!(
+        output,
+        "Address {count} local review {noun} on PR #{} ({}/{}).",
+        pr.number, pr.owner, pr.repo
+    );
+    output.push_str("First run `jpr-review guide` and follow every rule in that contract.\n\n");
+    for (index, thread) in threads.iter().enumerate() {
+        append_thread_item(&mut output, index + 1, thread);
+    }
+    output.push_str(
+        "Reply to every item above with `jpr-review reply <thread-id> --body \"...\"`. Never push and never touch GitHub.",
+    );
+    output
+}
+
+fn append_thread_item(output: &mut String, item_number: usize, thread: &Thread) {
+    let label = build_anchor_label_from_anchor(&thread.anchor);
+    let _ = writeln!(output, "{item_number}. [{}] {label}", thread.id);
+    if let Some(snapshot) = thread.anchor.snapshot.as_deref()
+        && !snapshot.is_empty()
+    {
+        for code_line in snapshot.lines() {
+            let _ = writeln!(output, "   > {code_line}");
+        }
+    }
+    if thread.messages.len() > 1 {
+        output.push_str("   Thread so far:\n");
+        for prior in &thread.messages[..thread.messages.len() - 1] {
+            let _ = writeln!(output, "     @{}: {}", prior.author, prior.body.trim());
+        }
+    }
+    if let Some(latest) = thread.messages.last() {
+        let _ = writeln!(output, "   New comment: {}\n", latest.body.trim());
+    }
+}
+
+/// Builds the `:Jpr prepass` prompt instructing the agent to critique `pr` and
+/// record findings as local threads through `jpr-review prepass-write`.
+#[must_use]
+pub fn build_prepass_prompt_from_pr(pr: &PullRequest) -> String {
+    format!(
+        "Run a local pre-pass code review of PR #{} ({}/{}: {:?}, base `{}` -> head `{}`).\n\
+         1. Run `jpr-review guide` first and follow the Pre-pass section.\n\
+         2. Inspect the diff against `{}` in this worktree and verify surrounding callers before flagging anything.\n\
+         3. Write only high-signal findings (`[critical]`, `[high]`, `[medium]`, `[low]`, or `[nit]`) as JSON to `jpr-review prepass-write`.\n\
+         4. Never push and never touch GitHub.",
+        pr.number, pr.owner, pr.repo, pr.title, pr.base_ref, pr.head_ref, pr.base_sha
+    )
+}
+
+const fn splitmix64(mut state: u64) -> u64 {
+    state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    state = (state ^ (state >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    state = (state ^ (state >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    state ^ (state >> 31)
+}
+
+/// Formats a deterministic RFC 4122 v4 UUID from `(pr_number, timestamp, counter)`.
+#[must_use]
+pub(crate) fn build_uuid_v4_from_seed(pr_number: u64, timestamp: u64, counter: u64) -> String {
+    let lane_a = splitmix64(
+        pr_number.wrapping_mul(0x517C_C1B7_2722_0A95)
+            ^ timestamp.rotate_left(17)
+            ^ counter.wrapping_mul(0x9E37_79B9_7F4A_7C15),
+    );
+    let lane_b = splitmix64(
+        lane_a
+            ^ counter.rotate_left(29)
+            ^ timestamp.wrapping_mul(0xBF58_476D_1CE4_E5B9)
+            ^ pr_number.rotate_left(41),
+    );
+    let mut bytes = [0_u8; 16];
+    bytes[..8].copy_from_slice(&lane_a.to_be_bytes());
+    bytes[8..].copy_from_slice(&lane_b.to_be_bytes());
+    bytes[6] = (bytes[6] & 0x0F) | 0x40;
+    bytes[8] = (bytes[8] & 0x3F) | 0x80;
+    format!(
+        "{:08x}-{:04x}-{:04x}-{:04x}-{:04x}{:08x}",
+        u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]),
+        u16::from_be_bytes([bytes[4], bytes[5]]),
+        u16::from_be_bytes([bytes[6], bytes[7]]),
+        u16::from_be_bytes([bytes[8], bytes[9]]),
+        u16::from_be_bytes([bytes[10], bytes[11]]),
+        u32::from_be_bytes([bytes[12], bytes[13], bytes[14], bytes[15]]),
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use review_model::{
+        AgentThreadState, Anchor, Message, Origin, PullRequest, Side, Thread, ThreadState,
+    };
+
+    use super::*;
+    use crate::fakes::sample_pr;
+
+    fn create_local_thread(
+        id: &str,
+        anchor: Anchor,
+        state: ThreadState,
+        agent: AgentThreadState,
+        messages: Vec<Message>,
+    ) -> Thread {
+        Thread {
+            id: id.into(),
+            origin: Origin::Local,
+            anchor,
+            state,
+            outdated: false,
+            messages,
+            agent: Some(agent),
+            promoted_to: None,
+        }
+    }
+
+    fn create_message(author: &str, body: &str, viewer_did_author: bool) -> Message {
+        let mut message =
+            Message::create_with_sync("m", author, body, "2026-11-21T00:00:00Z", None);
+        message.viewer_did_author = viewer_did_author;
+        message
+    }
+
+    #[test]
+    fn selects_only_open_unsent_local_threads_ending_with_reviewer_message() {
+        let eligible = create_local_thread(
+            "loc-1",
+            Anchor::line("src/a.rs", 7),
+            ThreadState::Open,
+            AgentThreadState::Unsent,
+            vec![create_message("pablo", "Why clone here?", true)],
+        );
+        let answered = create_local_thread(
+            "loc-2",
+            Anchor::line("src/a.rs", 9),
+            ThreadState::Open,
+            AgentThreadState::Answered,
+            vec![
+                create_message("pablo", "Why?", true),
+                create_message("agent", "Needed for Send.", false),
+            ],
+        );
+        let resolved = create_local_thread(
+            "loc-3",
+            Anchor::line("src/a.rs", 12),
+            ThreadState::Resolved,
+            AgentThreadState::Unsent,
+            vec![create_message("pablo", "Skip", true)],
+        );
+        let threads = vec![eligible, answered, resolved];
+        let selected = select_dispatchable_threads(&threads, None);
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].id, "loc-1");
+
+        let targeted = select_dispatchable_threads(&threads, Some("loc-2"));
+        assert_eq!(targeted.len(), 1);
+        assert_eq!(targeted[0].id, "loc-2");
+    }
+
+    #[test]
+    fn formats_anchor_labels_for_all_kinds_and_sides() {
+        assert_eq!(
+            build_anchor_label_from_anchor(&Anchor::line("src/a.rs", 7)),
+            "src/a.rs:L7"
+        );
+        assert_eq!(
+            build_anchor_label_from_anchor(&Anchor::side_line("src/a.rs", Side::Left, 4)),
+            "src/a.rs:L4 (base)"
+        );
+        assert_eq!(
+            build_anchor_label_from_anchor(&Anchor::range("src/a.rs", Side::Right, 7, 9)),
+            "src/a.rs:L7-9"
+        );
+        assert_eq!(
+            build_anchor_label_from_anchor(&Anchor::file("src/a.rs")),
+            "src/a.rs"
+        );
+        assert_eq!(build_anchor_label_from_anchor(&Anchor::pr()), "PR");
+    }
+
+    #[test]
+    fn builds_numbered_batch_prompt_with_history_anchors_and_guide_command() {
+        let mut first = create_local_thread(
+            "loc-1",
+            Anchor::range("src/a.rs", Side::Right, 7, 9),
+            ThreadState::Open,
+            AgentThreadState::Unsent,
+            vec![
+                create_message("pablo", "Extract this?", true),
+                create_message("agent", "Done in abc1234.", false),
+                create_message("pablo", "Also rename the parameter.", true),
+            ],
+        );
+        first.anchor.snapshot = Some("let x = 1;\nlet y = 2;".to_owned());
+        let second = create_local_thread(
+            "loc-2",
+            Anchor::pr(),
+            ThreadState::Open,
+            AgentThreadState::Unsent,
+            vec![create_message("pablo", "Summarize migration risk.", true)],
+        );
+        let prompt = build_send_prompt_from_threads(&sample_pr(), &[&first, &second]);
+        for needle in [
+            "Address 2 local review comments",
+            "jpr-review guide",
+            "1. [loc-1] src/a.rs:L7-9",
+            "   > let x = 1;\n   > let y = 2;",
+            "Thread so far:",
+            "New comment: Also rename the parameter.",
+            "2. [loc-2] PR",
+            "jpr-review reply <thread-id> --body",
+        ] {
+            assert!(prompt.contains(needle), "missing {needle:?} in {prompt}");
+        }
+        let single = build_send_prompt_from_threads(&sample_pr(), &[&second]);
+        assert!(
+            single.contains("Address 1 local review comment on PR #"),
+            "{single}"
+        );
+    }
+
+    #[test]
+    fn prepass_prompt_references_guide_and_prepass_write() {
+        let PullRequest { number, .. } = sample_pr();
+        let prompt = build_prepass_prompt_from_pr(&sample_pr());
+        assert!(prompt.contains(&format!("PR #{number}")), "{prompt}");
+        assert!(prompt.contains("jpr-review guide"), "{prompt}");
+        assert!(prompt.contains("jpr-review prepass-write"), "{prompt}");
+    }
+}

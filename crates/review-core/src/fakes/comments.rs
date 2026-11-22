@@ -115,6 +115,8 @@ impl FakeForge {
             state: ThreadState::Open,
             outdated: false,
             messages: vec![message],
+            agent: None,
+            promoted_to: None,
         };
         state.snapshot.threads.push(thread.clone());
         state.snapshot.has_pending_review = true;
@@ -143,6 +145,8 @@ impl FakeForge {
             state: ThreadState::Open,
             outdated: false,
             messages: vec![message],
+            agent: None,
+            promoted_to: None,
         };
         state.snapshot.threads.push(thread.clone());
         drop(state);

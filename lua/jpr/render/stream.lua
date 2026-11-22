@@ -100,7 +100,9 @@ end
 
 local function add_thread_row(layout, row, line, is_expanded)
     local sign, group = threads_render.pick_sign({ row.thread })
-    local badge = ("  %s @%s: %s"):format(sign, one_line(row.thread.firstAuthor or ""), one_line(row.thread.snippet or ""))
+    local local_badge = threads_render.build_local_badge_from_thread(row.thread)
+    local local_tag = local_badge ~= "" and (" " .. local_badge) or ""
+    local badge = ("  %s @%s: %s%s"):format(sign, one_line(row.thread.firstAuthor or ""), one_line(row.thread.snippet or ""), local_tag)
     add_line_to_all_columns(layout.columns, badge, group)
     layout.threads_by_line[line] = { row.thread }
     layout.thread_lines[#layout.thread_lines + 1] = line
@@ -253,11 +255,13 @@ end
 --- and each file's counts, viewed state, and thread count. A view with the
 --- same key draws the same stream, so it need not be fetched again.
 function M.build_key_from_view(view)
+    local local_unsent_count = type(view.localUnsentCount) == "number" and view.localUnsentCount or 0
     local parts = {
         view.pr and view.pr.headSha or "",
         view.pr and view.pr.baseSha or "",
         tostring(view.threadCount or 0),
         tostring(view.draftCount or 0),
+        tostring(local_unsent_count),
         tostring(view.queuedCount or 0),
     }
     for _, file in ipairs(view.files or {}) do

@@ -1,5 +1,6 @@
 -- Floating thread inspector at the cursor: renders full messages and dispatches
--- reply (r), edit (e), delete (d), resolve (R), reaction (+), and retry (X).
+-- reply (r), edit (e), delete (d), resolve (R), reaction (+), retry (X),
+-- promote (p), and send (s).
 local render = require("jpr.render.threads")
 
 local M = {}
@@ -53,6 +54,9 @@ local function toggle_popup_reaction(session)
     if not entry then
         return
     end
+    if render.is_local_thread(entry.thread) then
+        return require("jpr").info("reactions apply only to GitHub comments")
+    end
     M.pick_reaction(function(choice)
         if session.popup ~= popup then
             return
@@ -95,7 +99,7 @@ local function delete_current_message(session)
     if not entry then
         return
     end
-    if not entry.message.viewerDidAuthor then
+    if not render.is_local_thread(entry.thread) and not entry.message.viewerDidAuthor then
         return require("jpr").error("you can only delete your own comments")
     end
     if vim.fn.confirm("Delete this comment?", "&Yes\n&No", 2) ~= 1 or session.popup ~= popup then
@@ -139,7 +143,34 @@ local function open_edit(session)
         return require("jpr").error("you can only edit your own comments")
     end
     M.close(session)
-    require("jpr.comments.compose").open_edit(session, entry.message)
+    require("jpr.comments.compose").open_edit(session, entry.message, entry.thread)
+end
+
+local function promote_current_thread(session)
+    local entry = current_entry(session)
+    if not entry then
+        return
+    end
+    if not render.is_local_thread(entry.thread) then
+        return require("jpr").info("only local threads can be promoted to GitHub")
+    end
+    if type(entry.thread.promotedTo) == "string" and entry.thread.promotedTo ~= "" then
+        return require("jpr").info("local thread was already promoted to " .. entry.thread.promotedTo)
+    end
+    M.close(session)
+    require("jpr.comments.compose").open_promote(session, entry.thread)
+end
+
+local function send_current_thread(session)
+    local entry = current_entry(session)
+    if not entry then
+        return
+    end
+    if not render.is_local_thread(entry.thread) then
+        return require("jpr").info("only local threads can be sent to the agent")
+    end
+    M.close(session)
+    require("jpr.agent").send(session, entry.thread_id)
 end
 
 local function bind_popup_keys(session, buf)
@@ -154,6 +185,8 @@ local function bind_popup_keys(session, buf)
     map("X", function() retry_current_message(session) end, "Retry failed message")
     map("r", function() open_reply(session) end, "Reply to thread")
     map("e", function() open_edit(session) end, "Edit own message")
+    map("p", function() promote_current_thread(session) end, "Promote local thread to GitHub")
+    map("s", function() send_current_thread(session) end, "Send local thread to agent")
 end
 
 local function paint_popup(popup, threads)
@@ -178,12 +211,17 @@ local function merge_updated_thread(item, updated_thread)
     if updated_thread.outdated ~= nil then
         is_outdated = updated_thread.outdated
     end
-    return vim.tbl_extend("force", item, {
+    local merged = vim.tbl_extend("force", item, {
+        origin = updated_thread.origin or item.origin,
+        kind = updated_thread.kind or item.kind,
         state = updated_thread.state,
         outdated = is_outdated,
         messages = updated_messages,
         messageCount = #updated_messages,
     })
+    merged.agent = updated_thread.agent
+    merged.promotedTo = updated_thread.promotedTo
+    return merged
 end
 
 --- Updates the open popup in place when `updated_thread` changes, clamping the
@@ -200,7 +238,7 @@ function M.refresh_from_thread(session, updated_thread)
     then
         return
     end
-    local target_id = updated_thread.id or updated_thread.threadId
+    local target_id = type(updated_thread.id) == "string" and updated_thread.id or updated_thread.threadId
     local updated_list, was_matched = {}, false
     for _, item in ipairs(popup.threads or {}) do
         if item.threadId == target_id then

@@ -1,7 +1,7 @@
 //! Pulling the pull request from the forge.
 
 use anyhow::Result;
-use review_model::{Event, PullRequest, SessionView, SyncState};
+use review_model::{Event, Origin, PullRequest, SessionView, SyncState, Thread};
 
 use super::ReviewSession;
 use crate::comments::{merge_unflushed_threads, reconcile_concurrent_edits, record_agreed_bodies};
@@ -68,18 +68,22 @@ impl ReviewSession {
         self.saved.registry.viewer_login = snapshot.viewer_login;
         self.saved.registry.mention_candidates = snapshot.mention_candidates;
         self.clear_reconciled_queued_markers();
-        merge_unflushed_threads(&mut snapshot.threads, &self.threads);
+        let (github_threads, local_threads): (Vec<Thread>, Vec<Thread>) = self
+            .threads
+            .drain(..)
+            .partition(|thread| thread.origin == Origin::Github);
+        merge_unflushed_threads(&mut snapshot.threads, &github_threads);
         self.threads = snapshot.threads;
+        self.threads.extend(local_threads);
         let _ = self.send_queued_comments();
         self.apply_pending_thread_ops();
         record_agreed_bodies(&self.threads, &mut self.saved.registry.agreed_bodies);
-        self.saved.registry.threads.clone_from(&self.threads);
         let queue = &mut self.saved.registry.queued_viewed;
         drop_stale_marks(queue, &snapshot.files);
         apply_queued(&mut snapshot.files, queue);
         self.saved.files = snapshot.files;
         self.sync = SyncState::Synced { at: now };
-        self.ports.store.save(&self.saved)?;
+        self.split_and_save_threads()?;
         let view = self.view();
         self.publish(&Event::Synced {
             view: Box::new(view.clone()),

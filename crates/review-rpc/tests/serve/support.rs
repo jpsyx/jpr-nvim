@@ -59,6 +59,8 @@ pub fn options(poll_every: Option<Duration>) -> ServeOptions {
         server_version: "9.9.9".into(),
         poll_every,
         retry_every: None,
+        socket_path: None,
+        watch_every: None,
     }
 }
 

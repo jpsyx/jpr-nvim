@@ -4,8 +4,8 @@
 use std::collections::{BTreeMap, HashSet};
 
 use review_model::{
-    AnchorKind, Message, MessageSync, Reaction, ReactionContent, SubmitDraft, SubmitPreview,
-    Thread, build_snippet_from_body,
+    AnchorKind, Message, MessageSync, Origin, Reaction, ReactionContent, SubmitDraft,
+    SubmitPreview, Thread, build_snippet_from_body,
 };
 
 use crate::ports::QueuedCommentOp;
@@ -49,7 +49,10 @@ pub fn remap_queued_ops(ops: &mut [QueuedCommentOp], from_id: &str, to_id: &str)
 /// `ReviewSession::apply_pull` so `reconcile_concurrent_edits` can detect
 /// remote edits.
 pub fn record_agreed_bodies(threads: &[Thread], agreed_bodies: &mut BTreeMap<String, String>) {
-    for thread in threads {
+    for thread in threads
+        .iter()
+        .filter(|thread| thread.origin == Origin::Github)
+    {
         for message in &thread.messages {
             if matches!(
                 message.sync,

@@ -16,11 +16,11 @@ assert(jpr.parse_pr_arg(nil) == nil, "missing")
 assert(
     vim.deep_equal(
         jpr.complete("", "Jpr "),
-        { "open", "sync", "toggle", "stream", "comment", "suggest", "expand", "conversation", "submit", "close" }
+        { "open", "sync", "toggle", "stream", "comment", "suggest", "expand", "conversation", "submit", "agent", "send", "prepass", "close" }
     ),
     "all subcommands"
 )
-assert(vim.deep_equal(jpr.complete("s", "Jpr s"), { "sync", "stream", "suggest", "submit" }), "filtered s subcommands")
+assert(vim.deep_equal(jpr.complete("s", "Jpr s"), { "sync", "stream", "suggest", "submit", "send" }), "filtered s subcommands")
 assert(vim.deep_equal(jpr.complete("c", "Jpr c"), { "comment", "conversation", "close" }), "filtered c subcommands")
 assert(vim.deep_equal(jpr.complete("", "Jpr open "), {}), "nothing after the subcommand")
 

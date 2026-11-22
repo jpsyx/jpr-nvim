@@ -261,6 +261,8 @@ fn stream_places_file_line_and_outdated_threads_without_duplicating() {
             "2026-11-20T00:00:00Z",
             Some(MessageSync::Published),
         )],
+        agent: None,
+        promoted_to: None,
     };
     let mut input = create_stream_input(
         "a.rs",

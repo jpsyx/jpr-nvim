@@ -56,21 +56,52 @@ function M.partition_threads_by_side(threads)
     return left_threads, right_threads
 end
 
+--- Whether `thread` is a local-only thread (created for the agent loop).
+function M.is_local_thread(thread)
+    return type(thread) == "table" and (thread.origin == "local" or thread.kind == "local")
+end
+
+--- Formats the agent delivery state and promotion badge for a local thread,
+--- or returns `""` for non-local threads.
+function M.build_local_badge_from_thread(thread)
+    if not M.is_local_thread(thread) then
+        return ""
+    end
+    local agent = type(thread.agent) == "table" and thread.agent or nil
+    local badge = "[local]"
+    if agent and agent.state == "unsent" then
+        badge = "[local · unsent]"
+    elseif agent and agent.state == "sent" then
+        local round = type(agent.round) == "number" and agent.round or 1
+        badge = ("[local · sent #%d]"):format(round)
+    elseif agent and agent.state == "answered" then
+        badge = "[local · answered]"
+    end
+    local is_promoted = thread.promotedTo ~= nil and thread.promotedTo ~= vim.NIL and thread.promotedTo ~= ""
+    return is_promoted and (badge .. " [promoted]") or badge
+end
+
 --- Picks the highest-priority sign character and highlight group for `threads`
---- on the same line: failed > draft > open published > resolved.
+--- on the same line: failed > draft > open local > open published > resolved.
 function M.pick_sign(threads)
-    local has_draft, has_open = false, false
+    local has_draft, has_local, has_open = false, false, false
     for _, thread in ipairs(threads or {}) do
         if thread.kind == "failed" then
             return "!", "JprThreadFailed"
         elseif thread.kind == "draft" then
             has_draft = true
         elseif thread.state ~= "resolved" then
-            has_open = true
+            if M.is_local_thread(thread) then
+                has_local = true
+            else
+                has_open = true
+            end
         end
     end
     if has_draft then
         return "✎", "JprThreadDraft"
+    elseif has_local then
+        return "◆", "JprThreadLocal"
     elseif has_open then
         return "💬", "JprThreadPublished"
     end
@@ -87,13 +118,16 @@ function M.create_eol_chunks_from_threads(threads)
     local message_count = first_thread.messageCount or #(first_thread.messages or {})
     local extra_messages = message_count - 1
     local count_tag = extra_messages > 0 and (" (+%d)"):format(extra_messages) or ""
+    local local_badge = M.build_local_badge_from_thread(first_thread)
+    local local_tag = local_badge ~= "" and (" " .. local_badge) or ""
     local more_threads = #threads > 1 and (" [+%d threads]"):format(#threads - 1) or ""
     local state_tag = first_thread.state == "resolved" and " [resolved]"
         or (first_thread.outdated and " [outdated]" or "")
-    local label = ("  @%s: %s%s%s%s"):format(
+    local label = ("  @%s: %s%s%s%s%s"):format(
         one_line(first_thread.firstAuthor or ""),
         one_line(first_thread.snippet or ""),
         count_tag,
+        local_tag,
         state_tag,
         more_threads
     )
@@ -119,14 +153,17 @@ function M.create_expanded_virt_lines_from_threads(threads, is_above_first)
     for _, thread in ipairs(threads or {}) do
         local _, group = M.pick_sign({ thread })
         local header_tag = is_above_first and "[file thread] " or ""
+        local local_badge = M.build_local_badge_from_thread(thread)
+        local local_tag = local_badge ~= "" and (" " .. local_badge) or ""
         local resolved_tag = thread.state == "resolved" and " [resolved]" or ""
         for index, message in ipairs(thread.messages or {}) do
             local badge = SYNC_BADGE[message.sync] and (" " .. SYNC_BADGE[message.sync]) or ""
             local prefix = index == 1 and header_tag or "  ↳ "
-            local header = ("  │ %s@%s%s%s"):format(
+            local header = ("  │ %s@%s%s%s%s"):format(
                 prefix,
                 one_line(message.author or ""),
                 badge,
+                index == 1 and local_tag or "",
                 index == 1 and resolved_tag or ""
             )
             virt_lines[#virt_lines + 1] = { { header, group } }
@@ -250,6 +287,39 @@ function M.append_formatted_message(layout, thread, message)
     }
 end
 
+local function append_popup_thread_title(layout, thread)
+    local status = thread.state == "resolved" and "Resolved" or "Open"
+    local outdated_tag = thread.outdated and " · Outdated" or ""
+    local title_prefix = ("Thread (%s%s)"):format(status, outdated_tag)
+    local local_badge = M.build_local_badge_from_thread(thread)
+    if local_badge == "" then
+        return layout.add(title_prefix, "JprTitle")
+    end
+    local line = #layout.lines
+    layout.add(title_prefix .. " " .. local_badge)
+    layout.highlights[#layout.highlights + 1] = {
+        line = line,
+        col_start = 0,
+        col_end = #title_prefix,
+        group = "JprTitle",
+    }
+    layout.highlights[#layout.highlights + 1] = {
+        line = line,
+        col_start = #title_prefix + 1,
+        col_end = #title_prefix + 1 + #local_badge,
+        group = "JprThreadLocal",
+    }
+end
+
+local function has_any_local_thread(threads)
+    for _, thread in ipairs(threads or {}) do
+        if M.is_local_thread(thread) then
+            return true
+        end
+    end
+    return false
+end
+
 --- Creates the lines, highlights, and cursor-to-message ranges for the thread popup.
 function M.create_popup_layout_from_threads(threads)
     local layout = M.create_message_layout()
@@ -257,15 +327,16 @@ function M.create_popup_layout_from_threads(threads)
         if index > 1 then
             layout.add(string.rep("─", 48), "JprMuted")
         end
-        local status = thread.state == "resolved" and "Resolved" or "Open"
-        local outdated_tag = thread.outdated and " · Outdated" or ""
-        layout.add(("Thread (%s%s)"):format(status, outdated_tag), "JprTitle")
+        append_popup_thread_title(layout, thread)
         for _, message in ipairs(thread.messages or {}) do
             M.append_formatted_message(layout, thread, message)
             layout.add("")
         end
     end
-    layout.add("[r]eply  [e]dit  [d]elete  [R]esolve  [+]react  [X]retry  [q]uit", "JprMuted")
+    local footer = has_any_local_thread(threads)
+            and "[r]eply  [e]dit  [d]elete  [R]esolve  [+]react  [X]retry  [p]romote  [s]end  [q]uit"
+        or "[r]eply  [e]dit  [d]elete  [R]esolve  [+]react  [X]retry  [q]uit"
+    layout.add(footer, "JprMuted")
     return layout
 end
 

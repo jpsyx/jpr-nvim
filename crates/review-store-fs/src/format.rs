@@ -5,14 +5,15 @@
 //! model later does not make existing files unreadable.
 
 use anyhow::{Context, Result, bail};
-use review_core::ports::{SessionRecord, SyncRegistry};
-use review_model::{ChangedFile, PullRequest, ViewedState};
+use review_core::ports::{LocalStoreState, SessionRecord, SyncRegistry};
+use review_model::{AgentKind, ChangedFile, PullRequest, ViewedState};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 
 /// The `session.json` shape this build writes. Version 2 added the pull
-/// request's `baseSha`.
-pub const SESSION_VERSION: u32 = 2;
+/// request's `baseSha`. Version 3 added `socket`, `agentSessionId`, and
+/// `agentKind`.
+pub const SESSION_VERSION: u32 = 3;
 /// The oldest `session.json` shape this build still reads: version 1 has no
 /// `baseSha`, which reads as empty until the next sync fills it.
 pub const OLDEST_SESSION_VERSION: u32 = 1;
@@ -25,6 +26,8 @@ pub const GITHUB_VERSION: u32 = 2;
 /// The oldest `github.json` shape this build reads: version 1 holds only
 /// `queuedViewed`, and all other `SyncRegistry` fields default to empty.
 pub const OLDEST_GITHUB_VERSION: u32 = 1;
+/// The `local.json` shape this build reads and writes.
+pub const LOCAL_VERSION: u32 = 1;
 
 /// Just the version, read before anything else in a file.
 #[derive(Deserialize)]
@@ -41,6 +44,12 @@ struct SessionFile {
     worktree: Option<String>,
     pr: Option<StoredPullRequest>,
     last_synced_at: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    socket: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    agent_session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    agent_kind: Option<AgentKind>,
 }
 
 /// `viewed.json`: the changed files and their viewed state.
@@ -58,6 +67,15 @@ struct GithubFile {
     version: u32,
     #[serde(flatten)]
     registry: SyncRegistry,
+}
+
+/// `local.json`: local-only threads and counters for the reviewer-agent loop.
+#[derive(Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+struct LocalFile {
+    version: u32,
+    #[serde(flatten)]
+    local: LocalStoreState,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -104,6 +122,9 @@ pub fn encode_session(record: &SessionRecord) -> Result<Vec<u8>> {
         worktree: record.worktree.clone(),
         pr: record.pr.clone().map(StoredPullRequest::from),
         last_synced_at: record.last_synced_at,
+        socket: record.socket.clone(),
+        agent_session_id: record.agent_session_id.clone(),
+        agent_kind: record.agent_kind,
     })
 }
 
@@ -115,6 +136,9 @@ pub fn decode_session(bytes: &[u8]) -> Result<SessionRecord> {
         worktree: file.worktree,
         pr: file.pr.map(PullRequest::from),
         last_synced_at: file.last_synced_at,
+        socket: file.socket,
+        agent_session_id: file.agent_session_id,
+        agent_kind: file.agent_kind,
     })
 }
 
@@ -144,6 +168,20 @@ pub fn encode_registry(registry: &SyncRegistry) -> Result<Vec<u8>> {
 pub fn decode_registry(bytes: &[u8]) -> Result<SyncRegistry> {
     let file: GithubFile = decode(bytes, OLDEST_GITHUB_VERSION, GITHUB_VERSION)?;
     Ok(file.registry)
+}
+
+/// `local.json`'s bytes for `local`.
+pub fn encode_local(local: &LocalStoreState) -> Result<Vec<u8>> {
+    encode(&LocalFile {
+        version: LOCAL_VERSION,
+        local: local.clone(),
+    })
+}
+
+/// `local.json`'s state.
+pub fn decode_local(bytes: &[u8]) -> Result<LocalStoreState> {
+    let file: LocalFile = decode(bytes, LOCAL_VERSION, LOCAL_VERSION)?;
+    Ok(file.local)
 }
 
 /// The version a file declares, without reading the rest of it.

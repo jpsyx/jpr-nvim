@@ -286,3 +286,89 @@ fn climbing_paths_and_options_posing_as_commits_are_refused() {
     assert!(workspace.merge_base("--help").is_err());
     assert!(workspace.renames("HEAD").is_err());
 }
+
+#[test]
+fn lists_committed_unstaged_and_untracked_changes_without_index_lock() {
+    let temp_directory = tempfile::tempdir().unwrap();
+    let root = temp_directory.path().join("widgets");
+    fs::create_dir_all(root.join("src")).unwrap();
+    git(&root, &["init", "-q", "-b", "main"]);
+    fs::write(root.join("src/lib.rs"), "pub fn a() {}\n").unwrap();
+    fs::write(root.join("src/extra.rs"), "pub fn b() {}\n").unwrap();
+    git(&root, &["add", "."]);
+    git(&root, &["commit", "-q", "-m", "base"]);
+    let base_sha = read_head_commit(&root);
+    fs::write(root.join("src/lib.rs"), "pub fn a() { let _ = 1; }\n").unwrap();
+    git(&root, &["add", "src/lib.rs"]);
+    git(&root, &["commit", "-q", "-m", "head"]);
+    fs::write(root.join("src/extra.rs"), "pub fn b() { let _ = 2; }\n").unwrap();
+    fs::write(root.join("src/new_file.rs"), "pub fn c() {}\n").unwrap();
+    let changed = GitWorkspace::new(root.clone())
+        .list_changed_files_since(&base_sha)
+        .unwrap();
+    assert_eq!(
+        changed,
+        vec!["src/extra.rs", "src/lib.rs", "src/new_file.rs"]
+    );
+    assert!(!root.join(".git/index.lock").exists());
+}
+
+#[test]
+fn list_changed_files_since_rejects_invalid_and_unknown_commits() {
+    let temp_directory = repo();
+    let root = temp_directory.path().join("widgets");
+    let base = read_head_commit(&root);
+    let short_sha = &base[..7];
+    let missing_sha = "0".repeat(40);
+    let workspace = GitWorkspace::new(root);
+    for invalid_ref in ["--all", "bad ref", "HEAD", short_sha, &missing_sha] {
+        assert!(
+            workspace.list_changed_files_since(invalid_ref).is_err(),
+            "{invalid_ref:?}"
+        );
+    }
+}
+
+#[test]
+fn list_changed_files_since_leaves_the_reviewers_index_alone() {
+    let temp_directory = repo();
+    let root = temp_directory.path().join("widgets");
+    let base = read_head_commit(&root);
+    // Same content, older modification time: a refreshing git command
+    // would rewrite `.git/index` to update stat metadata.
+    let an_hour_ago = std::time::SystemTime::now() - Duration::from_secs(3600);
+    let file = fs::File::options()
+        .write(true)
+        .open(root.join("a.txt"))
+        .unwrap();
+    file.set_modified(an_hour_ago).unwrap();
+    let index_before = fs::read(root.join(".git/index")).unwrap();
+    GitWorkspace::new(root.clone())
+        .list_changed_files_since(&base)
+        .unwrap();
+    assert_eq!(fs::read(root.join(".git/index")).unwrap(), index_before);
+    assert!(!root.join(".git/index.lock").exists());
+}
+
+#[test]
+fn lists_deleted_staged_and_renamed_changes_since_commit() {
+    let temp_directory = repo();
+    let root = temp_directory.path().join("widgets");
+    fs::write(root.join("deleted.txt"), "gone\n").unwrap();
+    fs::write(root.join("staged.txt"), "before\n").unwrap();
+    fs::write(root.join("old_name.txt"), "move me\n").unwrap();
+    git(&root, &["add", "."]);
+    git(&root, &["commit", "-q", "-m", "base"]);
+    let base_sha = read_head_commit(&root);
+    fs::remove_file(root.join("deleted.txt")).unwrap();
+    fs::write(root.join("staged.txt"), "after\n").unwrap();
+    git(&root, &["add", "staged.txt"]);
+    git(&root, &["mv", "old_name.txt", "new_name.txt"]);
+    let changed = GitWorkspace::new(root)
+        .list_changed_files_since(&base_sha)
+        .unwrap();
+    assert_eq!(
+        changed,
+        vec!["deleted.txt", "new_name.txt", "old_name.txt", "staged.txt"]
+    );
+}

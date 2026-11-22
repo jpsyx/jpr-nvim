@@ -33,12 +33,16 @@ function M.sync_text(sync, now)
     return "sync failed: " .. M.one_line(sync.message or "unknown error"), "JprError"
 end
 
---- The counts line: viewed files, threads, drafts, and viewed marks still
---- waiting for GitHub.
+--- The counts line: viewed files, threads, drafts, local unsent threads, and
+--- viewed marks still waiting for GitHub.
 function M.build_counts_text(view)
     local text = ("viewed %d/%d · threads %d"):format(view.viewedCount or 0, #(view.files or {}), view.threadCount or 0)
     if (view.draftCount or 0) > 0 then
         text = text .. (" · drafts %d"):format(view.draftCount)
+    end
+    local local_unsent_count = type(view.localUnsentCount) == "number" and view.localUnsentCount or 0
+    if local_unsent_count > 0 then
+        text = text .. (" · local unsent %d"):format(local_unsent_count)
     end
     if (view.queuedCount or 0) > 0 then
         text = text .. (" · %d waiting for GitHub"):format(view.queuedCount)

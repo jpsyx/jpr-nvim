@@ -13,7 +13,7 @@ use super::ReviewSession;
 /// The most bytes one side of a diff may hold. A bigger file, such as a
 /// generated bundle or a file stored with Git LFS, is reported as too large
 /// to show instead of diffed, so it is never kept in memory or line diffed.
-const MAX_DIFF_BYTES: usize = 4 * 1024 * 1024;
+pub(super) const MAX_DIFF_BYTES: usize = 4 * 1024 * 1024;
 
 /// The base side of the diffs, kept while the pull request's base commit
 /// stays the same: its merge base, the renames since it, and the base texts
@@ -21,7 +21,7 @@ const MAX_DIFF_BYTES: usize = 4 * 1024 * 1024;
 #[derive(Debug, Default)]
 pub(super) struct BaseCache {
     base_sha: String,
-    merge_base: String,
+    pub(super) merge_base: String,
     /// New path to old path, for files renamed since the merge base.
     renamed_from: HashMap<String, String>,
     texts: HashMap<String, FileText>,
@@ -113,7 +113,7 @@ impl ReviewSession {
 
     /// Finds the merge base for the pull request's base commit, unless it is
     /// already known, and starts a fresh cache for it.
-    fn prepare_base(&mut self) -> Result<()> {
+    pub(super) fn prepare_base(&mut self) -> Result<()> {
         let base_sha = self.synced_pr()?.base_sha.clone();
         if base_sha.is_empty() {
             bail!("the base commit is not known yet; sync with GitHub first");

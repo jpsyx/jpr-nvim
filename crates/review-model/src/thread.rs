@@ -127,6 +127,12 @@ pub struct Thread {
     pub outdated: bool,
     /// The messages, in the order the forge reports them.
     pub messages: Vec<Message>,
+    /// Delivery state for local threads in the agent loop; `None` for GitHub threads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<crate::AgentThreadState>,
+    /// GitHub thread ID if this local thread was promoted to the pull request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub promoted_to: Option<String>,
 }
 
 /// How a frontend colors a thread's sign and preview badge.
@@ -149,6 +155,8 @@ pub enum MarkerKind {
 pub struct ThreadPreview {
     /// Identifies the thread.
     pub thread_id: String,
+    /// Whether the thread lives on the forge or only on this machine.
+    pub origin: Origin,
     /// Where the thread is attached.
     pub anchor: Anchor,
     /// 1-based line in the current file where a unified overlay places the
@@ -168,6 +176,12 @@ pub struct ThreadPreview {
     pub snippet: String,
     /// Full messages for inline expansion and the popup.
     pub messages: Vec<Message>,
+    /// Delivery state for local threads in the agent loop; `None` for GitHub threads.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<crate::AgentThreadState>,
+    /// GitHub thread ID if this local thread was promoted to the pull request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub promoted_to: Option<String>,
 }
 
 /// Summarizes `thread` into a [`ThreadPreview`] at 1-based `display_line`
@@ -188,6 +202,7 @@ pub fn create_thread_preview_from_thread(thread: &Thread, display_line: u64) -> 
     });
     ThreadPreview {
         thread_id: thread.id.clone(),
+        origin: thread.origin,
         anchor: thread.anchor.clone(),
         display_line,
         kind,
@@ -197,6 +212,8 @@ pub fn create_thread_preview_from_thread(thread: &Thread, display_line: u64) -> 
         first_author,
         snippet,
         messages: thread.messages.clone(),
+        agent: thread.agent,
+        promoted_to: thread.promoted_to.clone(),
     }
 }
 

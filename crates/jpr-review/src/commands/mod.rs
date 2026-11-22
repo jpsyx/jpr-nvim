@@ -2,13 +2,23 @@
 
 /// `checkout`: put a pull request in its own worktree and say where.
 pub mod checkout;
+/// `guide`: print the agent review and reply contract.
+pub mod guide;
+/// `prepass-write`: write pre-pass findings as answered local threads.
+pub mod prepass_write;
+/// `reply`: append an agent reply to a local thread.
+pub mod reply;
 /// `serve`: one pull request's review session, as JSON-RPC on stdin/stdout.
 pub mod serve;
+/// Shared Unix socket client, target resolution, and UTC timestamp formatting.
+pub mod socket_client;
 /// `state-path`: where a pull request's review state lives on this machine.
 pub mod state_path;
+/// `threads`: list review threads as JSON.
+pub mod threads;
 
 use std::env;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
@@ -29,12 +39,126 @@ pub fn run(cli: &Cli, theme: Theme) -> Result<()> {
             worktree_cmd.as_deref(),
             theme,
         ),
+        Command::Guide => guide::run(),
         Command::Serve { pr, repo, poll } => serve::run(*pr, repo, *poll),
         Command::StatePath { pr, repo } => {
             let number = pr_number(*pr, theme)?;
             state_path::run(number, &repo_name(repo.as_deref(), theme)?)
         }
+        other => run_agent_command(other, theme),
     }
+}
+
+fn run_agent_command(command: &Command, theme: Theme) -> Result<()> {
+    match command {
+        Command::Threads {
+            pr,
+            repo,
+            socket,
+            is_local_only,
+        } => {
+            let socket_override =
+                get_socket_override_from_cli(socket.as_deref(), pr.is_some() || repo.is_some())?;
+            let target =
+                create_target_context(socket_override.as_ref(), *pr, repo.as_deref(), theme)?;
+            threads::run(target, *is_local_only)
+        }
+        Command::Reply {
+            thread_id,
+            body,
+            pr,
+            repo,
+            socket,
+        } => {
+            let socket_override =
+                get_socket_override_from_cli(socket.as_deref(), pr.is_some() || repo.is_some())?;
+            let target =
+                create_target_context(socket_override.as_ref(), *pr, repo.as_deref(), theme)?;
+            reply::run(thread_id.as_deref(), body.as_deref(), target)
+        }
+        Command::PrepassWrite {
+            input,
+            pr,
+            repo,
+            socket,
+        } => {
+            let socket_override =
+                get_socket_override_from_cli(socket.as_deref(), pr.is_some() || repo.is_some())?;
+            let target =
+                create_target_context(socket_override.as_ref(), *pr, repo.as_deref(), theme)?;
+            prepass_write::run(input.as_deref(), target)
+        }
+        Command::Checkout { .. }
+        | Command::Guide
+        | Command::Serve { .. }
+        | Command::StatePath { .. } => unreachable!("handled by commands::run"),
+    }
+}
+
+enum CliSocketOverride {
+    Explicit(PathBuf),
+    Env(PathBuf),
+}
+
+impl CliSocketOverride {
+    fn as_override(&self) -> socket_client::SocketOverride<'_> {
+        match self {
+            Self::Explicit(path) => socket_client::SocketOverride::Explicit(path),
+            Self::Env(path) => socket_client::SocketOverride::Env(path),
+        }
+    }
+}
+
+fn create_target_context<'a>(
+    socket: Option<&'a CliSocketOverride>,
+    pr: Option<u64>,
+    repo: Option<&'a str>,
+    theme: Theme,
+) -> Result<socket_client::TargetContext<'a>> {
+    Ok(socket_client::TargetContext {
+        socket: socket.map(CliSocketOverride::as_override),
+        pr: get_pr_number_from_flag_or_env(pr, repo.is_some())?,
+        repo,
+        theme,
+    })
+}
+
+fn get_socket_override_from_cli(
+    flag: Option<&Path>,
+    has_explicit_target: bool,
+) -> Result<Option<CliSocketOverride>> {
+    if let Some(path) = flag {
+        if path.as_os_str().is_empty() || path.to_string_lossy().trim().is_empty() {
+            bail!("--socket path cannot be empty");
+        }
+        return Ok(Some(CliSocketOverride::Explicit(path.to_path_buf())));
+    }
+    if has_explicit_target {
+        return Ok(None);
+    }
+    Ok(env::var_os("JPR_SOCKET")
+        .filter(|value| !value.to_string_lossy().trim().is_empty())
+        .map(PathBuf::from)
+        .map(CliSocketOverride::Env))
+}
+
+fn get_pr_number_from_flag_or_env(
+    flag: Option<u64>,
+    has_explicit_repo: bool,
+) -> Result<Option<u64>> {
+    if flag.is_some() {
+        return Ok(flag);
+    }
+    if has_explicit_repo {
+        return Ok(None);
+    }
+    let Ok(raw) = env::var("JPR_PR") else {
+        return Ok(None);
+    };
+    if raw.trim().is_empty() {
+        return Ok(None);
+    }
+    parse_pr_number(&raw).map(Some)
 }
 
 /// The pull request number: the flag, else asked for on a terminal.

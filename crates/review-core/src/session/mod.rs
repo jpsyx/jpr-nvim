@@ -2,20 +2,24 @@
 //! Each use case lives in its own submodule; this one holds the state they
 //! share.
 
+mod agent_loop;
 mod comments;
 mod diffs;
+mod local;
 mod submit;
 mod sync;
 #[cfg(test)]
 mod test_support;
 mod viewed;
+mod worktree_watch;
 
 use diffs::BaseCache;
 
+use std::collections::BTreeMap;
 use std::sync::mpsc::{self, Receiver, Sender};
 
 use anyhow::{Context, Result};
-use review_model::{Event, PullRequest, SessionView, SyncState, Thread};
+use review_model::{Event, Origin, PullRequest, SessionView, SyncState, Thread};
 
 use crate::ports::{Ports, StoreSnapshot};
 use crate::presenter::session_view;
@@ -33,6 +37,7 @@ pub struct ReviewSession {
     sync: SyncState,
     subscribers: Vec<Sender<Event>>,
     base_cache: BaseCache,
+    disk_digests: Option<BTreeMap<String, u64>>,
 }
 
 impl ReviewSession {
@@ -47,7 +52,8 @@ impl ReviewSession {
             .session
             .last_synced_at
             .map_or(SyncState::Never, |at| SyncState::Synced { at });
-        let threads = saved.registry.threads.clone();
+        let mut threads = saved.registry.threads.clone();
+        threads.extend(saved.local.threads.clone());
         Ok(Self {
             number,
             ports,
@@ -56,13 +62,26 @@ impl ReviewSession {
             sync,
             subscribers: Vec::new(),
             base_cache: BaseCache::default(),
+            disk_digests: None,
         })
     }
 
     /// Records the process serving this session, so others can find it.
     pub fn record_daemon(&mut self, pid: u32, worktree: &str) -> Result<()> {
+        self.record_daemon_with_socket(pid, worktree, None)
+    }
+
+    /// Records the process serving this session and its optional Unix domain
+    /// socket path, so CLI tools can discover and talk to it.
+    pub fn record_daemon_with_socket(
+        &mut self,
+        pid: u32,
+        worktree: &str,
+        socket: Option<&str>,
+    ) -> Result<()> {
         self.saved.session.pid = Some(pid);
         self.saved.session.worktree = Some(worktree.to_owned());
+        self.saved.session.socket = socket.map(str::to_owned);
         self.ports.store.save(&self.saved)
     }
 
@@ -83,6 +102,24 @@ impl ReviewSession {
             &self.sync,
             self.saved.registry.queued_viewed.len() + self.saved.registry.queued_ops.len(),
         )
+    }
+
+    /// Partitions GitHub and local threads into their separate store slices
+    /// before saving so `github.json` and `local.json` stay isolated.
+    pub(super) fn split_and_save_threads(&mut self) -> Result<()> {
+        self.saved.registry.threads = self
+            .threads
+            .iter()
+            .filter(|thread| thread.origin == Origin::Github)
+            .cloned()
+            .collect();
+        self.saved.local.threads = self
+            .threads
+            .iter()
+            .filter(|thread| thread.origin == Origin::Local)
+            .cloned()
+            .collect();
+        self.ports.store.save(&self.saved)
     }
 
     /// The pull request as last synced, for use cases that need it.

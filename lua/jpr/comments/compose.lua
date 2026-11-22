@@ -59,19 +59,70 @@ local function insert_suggestion_fence(session, buf, anchor)
     end)
 end
 
-local function bind_compose_keys(session, buf, initial_text, anchor, on_submit)
-    local submit = function()
-        if not vim.api.nvim_buf_is_valid(buf) then
-            return
-        end
-        local text = buffer_body(buf)
-        if vim.trim(text) == "" then
-            return require("jpr").error("comment body cannot be empty")
-        end
-        pcall(vim.cmd, "stopinsert")
-        M.close(session)
-        on_submit(text)
+local function alternate_origin(origin)
+    return origin == "local" and "github" or "local"
+end
+
+local function build_location_from_anchor(anchor)
+    if not anchor or anchor.kind == "pr" then
+        return "PR Conversation"
     end
+    local file = type(anchor.file) == "string" and anchor.file or ""
+    if anchor.kind == "file" then
+        return file
+    end
+    local start_line = type(anchor.start) == "number" and anchor.start or nil
+    local end_line = type(anchor["end"]) == "number" and anchor["end"] or nil
+    if anchor.kind == "range" and start_line and end_line and start_line ~= end_line then
+        return ("%s:%d-%d"):format(file, start_line, end_line)
+    end
+    return ("%s:%d"):format(file, end_line or start_line or 1)
+end
+
+local function build_title_from_anchor(anchor, origin)
+    local location = build_location_from_anchor(anchor)
+    if origin == "local" then
+        return "[Local → agent] " .. location
+    end
+    local badge = (anchor and anchor.kind == "pr") and "[GitHub comment]" or "[GitHub draft]"
+    return badge .. " " .. location
+end
+
+local function build_footer(allow_destination_toggle)
+    if allow_destination_toggle then
+        return " <C-s> save · <C-g> flip dest · <M-s> other dest · <C-g>s suggest · q cancel "
+    end
+    return " <C-s> save · <C-g>s suggest · @ mention · q cancel "
+end
+
+local function submit_compose(session, buf, on_submit, origin)
+    if not vim.api.nvim_buf_is_valid(buf) then
+        return
+    end
+    local text = buffer_body(buf)
+    if vim.trim(text) == "" then
+        return require("jpr").error("comment body cannot be empty")
+    end
+    pcall(vim.cmd, "stopinsert")
+    M.close(session)
+    on_submit(text, origin)
+end
+
+local function flip_destination(session, compose)
+    if not vim.api.nvim_win_is_valid(compose.win) then
+        return
+    end
+    compose.origin = alternate_origin(compose.origin)
+    session.compose_destination = compose.origin
+    vim.api.nvim_win_set_config(compose.win, {
+        title = " " .. build_title_from_anchor(compose.anchor, compose.origin) .. " ",
+        title_pos = "center",
+    })
+end
+
+local function bind_compose_keys(session, compose, opts)
+    local buf = compose.buf
+    local initial_text = opts.initial_text or ""
     local cancel = function()
         if vim.api.nvim_buf_is_valid(buf) and buffer_body(buf) ~= initial_text then
             if vim.fn.confirm("Discard unsaved comment text?", "&Discard\n&Keep editing", 2) ~= 1 then
@@ -80,11 +131,25 @@ local function bind_compose_keys(session, buf, initial_text, anchor, on_submit)
         end
         M.close(session)
     end
-    vim.keymap.set({ "n", "i" }, "<C-s>", submit, { buffer = buf, silent = true, desc = "Save comment" })
+    vim.keymap.set({ "n", "i" }, "<C-s>", function()
+        local origin = opts.allow_destination_toggle and compose.origin or nil
+        submit_compose(session, buf, opts.on_submit, origin)
+    end, { buffer = buf, silent = true, desc = "Save comment" })
+    if opts.allow_destination_toggle then
+        vim.keymap.set({ "n", "i" }, "<M-s>", function()
+            submit_compose(session, buf, opts.on_submit, alternate_origin(compose.origin))
+        end, { buffer = buf, silent = true, desc = "Save comment to other destination" })
+        vim.keymap.set("n", "<C-g>", function()
+            flip_destination(session, compose)
+        end, { buffer = buf, nowait = true, silent = true, desc = "Flip comment destination" })
+        vim.keymap.set("i", "<C-g>", function()
+            flip_destination(session, compose)
+        end, { buffer = buf, silent = true, desc = "Flip comment destination" })
+    end
     vim.keymap.set("n", "q", cancel, { buffer = buf, nowait = true, silent = true, desc = "Cancel comment" })
     vim.keymap.set("n", "<Esc>", cancel, { buffer = buf, nowait = true, silent = true, desc = "Cancel comment" })
     vim.keymap.set("i", "<C-g>s", function()
-        insert_suggestion_fence(session, buf, anchor)
+        insert_suggestion_fence(session, buf, opts.anchor)
     end, { buffer = buf, nowait = true, silent = true, desc = "Insert GitHub suggestion block" })
 end
 
@@ -108,11 +173,11 @@ local function open_editor(session, opts)
         border = "rounded",
         title = " " .. opts.title .. " ",
         title_pos = "center",
-        footer = " <C-s> save · <C-g>s suggestion · @ mention · q cancel ",
+        footer = build_footer(opts.allow_destination_toggle),
         footer_pos = "center",
     })
     vim.api.nvim_set_option_value("wrap", true, { win = win, scope = "local" })
-    local compose = { buf = buf, win = win }
+    local compose = { buf = buf, win = win, origin = opts.origin, anchor = opts.anchor }
     session.compose = compose
     vim.api.nvim_create_autocmd("BufWipeout", {
         buffer = buf,
@@ -124,21 +189,8 @@ local function open_editor(session, opts)
         end,
     })
     mentions.attach(session, buf)
-    bind_compose_keys(session, buf, initial_text, opts.anchor, opts.on_submit)
+    bind_compose_keys(session, compose, opts)
     return buf
-end
-
-local function build_title_from_anchor(anchor)
-    if anchor.kind == "pr" then
-        return "[GitHub comment] PR Conversation"
-    end
-    if anchor.kind == "file" then
-        return "[GitHub draft] " .. anchor.file
-    end
-    if anchor.kind == "range" and anchor.start and anchor["end"] and anchor.start ~= anchor["end"] then
-        return ("[GitHub draft] %s:%d-%d"):format(anchor.file, anchor.start, anchor["end"])
-    end
-    return ("[GitHub draft] %s:%d"):format(anchor.file, anchor["end"] or anchor.start or 1)
 end
 
 --- Opens the floating compose buffer for a new comment at `anchor`, optionally
@@ -147,17 +199,25 @@ function M.open_new(session, anchor, opts)
     if session.closing then
         return
     end
+    local open_opts = opts or {}
     local open_with_body = function(initial_text)
+        local origin = open_opts.initial_origin or session.compose_destination or "github"
         open_editor(session, {
-            title = build_title_from_anchor(anchor),
+            title = build_title_from_anchor(anchor, origin),
             initial_text = initial_text,
             anchor = anchor,
-            on_submit = function(body)
-                require("jpr.session").request(session, "comment", { anchor = anchor, body = body }, function() end)
+            origin = origin,
+            allow_destination_toggle = true,
+            on_submit = function(body, submit_origin)
+                require("jpr.session").request(session, "comment", {
+                    anchor = anchor,
+                    body = body,
+                    origin = submit_origin,
+                }, function() end)
             end,
         })
     end
-    if opts and opts.suggest and (anchor.kind == "line" or anchor.kind == "range") then
+    if open_opts.suggest and (anchor.kind == "line" or anchor.kind == "range") then
         local request_id = next_request_id(session)
         return require("jpr.session").request(session, "anchoredLines", { anchor = anchor }, function(result)
             if session.closing or session.compose_request_id ~= request_id then
@@ -174,8 +234,9 @@ end
 
 --- Opens the floating compose buffer to reply to `thread`.
 function M.open_reply(session, thread)
-    local badge = "[GitHub reply]"
-    if session.view and (session.view.draftCount or 0) > 0 then
+    local is_local = thread.origin == "local" or thread.kind == "local"
+    local badge = is_local and "[Local reply]" or "[GitHub reply]"
+    if not is_local and session.view and (session.view.draftCount or 0) > 0 then
         badge = "[GitHub draft]"
     end
     local thread_id = thread.threadId or thread.id
@@ -183,6 +244,7 @@ function M.open_reply(session, thread)
         title = badge .. " Reply",
         initial_text = "",
         anchor = thread.anchor,
+        allow_destination_toggle = false,
         on_submit = function(body)
             require("jpr.session").request(session, "reply", { threadId = thread_id, body = body }, function() end)
         end,
@@ -191,13 +253,50 @@ end
 
 --- Opens the floating compose buffer to edit `message` (pre-populating
 --- `recoverableBody` when present).
-function M.open_edit(session, message)
-    local initial_text = message.recoverableBody or message.body or ""
+function M.open_edit(session, message, thread)
+    local is_local = (thread ~= nil and (thread.origin == "local" or thread.kind == "local"))
+        or message.sync == nil
+        or message.sync == vim.NIL
+    local title = is_local and "[Edit local comment]" or "[Edit GitHub comment]"
+    local initial_text = (type(message.recoverableBody) == "string" and message.recoverableBody)
+        or (type(message.body) == "string" and message.body)
+        or ""
+    local anchor = type(thread) == "table" and type(thread.anchor) == "table" and thread.anchor or nil
     open_editor(session, {
-        title = "[Edit GitHub comment]",
+        title = title,
         initial_text = initial_text,
+        anchor = anchor,
+        allow_destination_toggle = false,
         on_submit = function(body)
             require("jpr.session").request(session, "editMessage", { messageId = message.id, body = body }, function() end)
+        end,
+    })
+end
+
+--- Opens the floating compose buffer to promote a local `thread`'s root
+--- comment into a GitHub draft or PR comment.
+function M.open_promote(session, thread)
+    if not session or session.closing or not thread then
+        return
+    end
+    if type(thread.promotedTo) == "string" and thread.promotedTo ~= "" then
+        return require("jpr").info("local thread was already promoted to " .. thread.promotedTo)
+    end
+    local thread_id = thread.threadId or thread.id
+    local messages = type(thread.messages) == "table" and thread.messages or {}
+    local first_message = messages[1]
+    local raw_body = type(first_message) == "table" and first_message.body or ""
+    local initial_text = type(raw_body) == "string" and raw_body or ""
+    open_editor(session, {
+        title = "[Promote → GitHub] " .. build_location_from_anchor(thread.anchor),
+        initial_text = initial_text,
+        anchor = thread.anchor,
+        allow_destination_toggle = false,
+        on_submit = function(body)
+            require("jpr.session").request(session, "promoteThread", {
+                threadId = thread_id,
+                body = body,
+            }, function() end)
         end,
     })
 end

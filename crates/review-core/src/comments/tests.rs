@@ -27,6 +27,8 @@ fn create_line_thread(
             "2026-11-20T00:00:00Z",
             sync,
         )],
+        agent: None,
+        promoted_to: None,
     }
 }
 
