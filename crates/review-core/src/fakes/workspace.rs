@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use anyhow::{Result, anyhow, bail};
 use review_model::WorktreeStatus;
 
-use crate::ports::Workspace;
+use crate::ports::{FastForwardOutcome, Workspace};
 
 /// The merge base a [`FakeWorkspace`] reports for any base commit.
 pub const FAKE_MERGE_BASE: &str = "merge000";
@@ -27,6 +27,7 @@ struct WorkspaceState {
     status_override: Option<WorktreeStatus>,
     push_failure: Option<String>,
     pushed_refs: Vec<(String, String)>,
+    fast_forward_override: Option<std::result::Result<FastForwardOutcome, String>>,
 }
 
 impl WorkspaceState {
@@ -91,6 +92,15 @@ impl FakeWorkspace {
     /// override when `None`.
     pub fn set_worktree_status(&self, status: Option<WorktreeStatus>) {
         self.lock().status_override = status;
+    }
+
+    /// Overrides what [`Workspace::fast_forward_to`] returns, or restores
+    /// default fast-forward behavior when `None`.
+    pub fn set_fast_forward_outcome(
+        &self,
+        outcome: Option<std::result::Result<FastForwardOutcome, String>>,
+    ) {
+        self.lock().fast_forward_override = outcome;
     }
 
     /// Makes [`Workspace::push_head`] fail with `message`, or succeed again
@@ -254,6 +264,36 @@ impl Workspace for FakeWorkspace {
         drop(state);
         Ok(current_head)
     }
+
+    fn fast_forward_to(&self, target_sha: &str) -> Result<FastForwardOutcome> {
+        let mut state = self.lock();
+        if let Some(override_result) = state.fast_forward_override.clone() {
+            return match override_result {
+                Ok(outcome) => {
+                    if let FastForwardOutcome::FastForwarded { head_sha, .. }
+                    | FastForwardOutcome::RestoreConflict { head_sha, .. } = &outcome
+                    {
+                        state.head_commit = Some(head_sha.clone());
+                    }
+                    drop(state);
+                    Ok(outcome)
+                }
+                Err(message) => Err(anyhow!("{message}")),
+            };
+        }
+        let previous_sha = state.current_head_commit();
+        if previous_sha == target_sha {
+            return Ok(FastForwardOutcome::AlreadyAtTarget {
+                head_sha: previous_sha,
+            });
+        }
+        state.head_commit = Some(target_sha.to_owned());
+        drop(state);
+        Ok(FastForwardOutcome::FastForwarded {
+            previous_sha,
+            head_sha: target_sha.to_owned(),
+        })
+    }
 }
 
 #[cfg(test)]
@@ -339,5 +379,61 @@ mod tests {
 
         workspace.fail_push_with(Some("remote rejected"));
         assert!(workspace.push_head("fix/widget").is_err());
+    }
+
+    #[test]
+    fn fast_forward_to_defaults_to_noop_or_advancing_head() {
+        let workspace = FakeWorkspace::default();
+        assert_eq!(
+            workspace.fast_forward_to("abc123").unwrap(),
+            FastForwardOutcome::AlreadyAtTarget {
+                head_sha: "abc123".into(),
+            }
+        );
+        assert_eq!(workspace.head_commit().unwrap(), "abc123");
+
+        assert_eq!(
+            workspace.fast_forward_to("def456").unwrap(),
+            FastForwardOutcome::FastForwarded {
+                previous_sha: "abc123".into(),
+                head_sha: "def456".into(),
+            }
+        );
+        assert_eq!(workspace.head_commit().unwrap(), "def456");
+    }
+
+    #[test]
+    fn fast_forward_to_override_steers_outcomes_and_syncs_head_commit() {
+        let workspace = FakeWorkspace::default();
+        let conflict = FastForwardOutcome::RestoreConflict {
+            previous_sha: "abc123".into(),
+            head_sha: "def456".into(),
+            conflicted_paths: vec!["src/a.rs".into()],
+        };
+        workspace.set_fast_forward_outcome(Some(Ok(conflict.clone())));
+        assert_eq!(workspace.fast_forward_to("def456").unwrap(), conflict);
+        assert_eq!(workspace.head_commit().unwrap(), "def456");
+
+        let diverged = FastForwardOutcome::Diverged {
+            head_sha: "def456".into(),
+            target_sha: "999999".into(),
+        };
+        workspace.set_fast_forward_outcome(Some(Ok(diverged.clone())));
+        assert_eq!(workspace.fast_forward_to("999999").unwrap(), diverged);
+        assert_eq!(workspace.head_commit().unwrap(), "def456");
+
+        workspace.set_fast_forward_outcome(Some(Err("fetch failed".into())));
+        assert!(workspace.fast_forward_to("000111").is_err());
+        assert_eq!(workspace.head_commit().unwrap(), "def456");
+
+        workspace.set_fast_forward_outcome(None);
+        assert_eq!(
+            workspace.fast_forward_to("fedcba").unwrap(),
+            FastForwardOutcome::FastForwarded {
+                previous_sha: "def456".into(),
+                head_sha: "fedcba".into(),
+            }
+        );
+        assert_eq!(workspace.head_commit().unwrap(), "fedcba");
     }
 }

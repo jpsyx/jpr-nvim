@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use review_core::ports::{Workspace, WorktreeStatus};
+use review_core::ports::{FastForwardOutcome, Workspace, WorktreeStatus};
 
 use crate::git_output::{
     is_batch_request_safe, is_commit_id, parse_batch_blob, parse_nul_paths,
@@ -58,7 +58,7 @@ impl GitWorkspace {
     }
 
     /// Fetches `commit` from `origin` unless this repository already has it.
-    fn ensure_commit(&self, commit: &str) -> Result<()> {
+    pub(crate) fn ensure_commit(&self, commit: &str) -> Result<()> {
         let commit_object = format!("{commit}^{{commit}}");
         if run("git", &["cat-file", "-e", &commit_object], &self.dir).is_ok() {
             return Ok(());
@@ -69,13 +69,13 @@ impl GitWorkspace {
             &self.dir,
             self.fetch_timeout,
         )
-        .with_context(|| format!("fetching the base commit {commit} from origin"))?;
+        .with_context(|| format!("fetching commit {commit} from origin"))?;
         Ok(())
     }
 }
 
 /// Fails unless `value` is a commit id, so it can never reach git as an option.
-fn require_commit_id(value: &str) -> Result<()> {
+pub fn require_commit_id(value: &str) -> Result<()> {
     if is_commit_id(value) {
         Ok(())
     } else {
@@ -168,6 +168,10 @@ impl Workspace for GitWorkspace {
 
     fn push_head(&self, head_ref: &str) -> Result<String> {
         crate::push::push_head_to_pr_branch(&self.dir, head_ref, self.fetch_timeout)
+    }
+
+    fn fast_forward_to(&self, target_sha: &str) -> Result<FastForwardOutcome> {
+        crate::fast_forward::fast_forward_worktree(self, &self.dir, target_sha)
     }
 }
 

@@ -240,6 +240,46 @@ pub trait Forge: Send {
     ) -> std::result::Result<(), ForgeWriteError>;
 }
 
+/// Result of attempting to fast-forward the local checkout to a new PR `head_sha`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FastForwardOutcome {
+    /// `HEAD` already equals `target_sha`.
+    AlreadyAtTarget {
+        /// Current `HEAD` commit SHA.
+        head_sha: String,
+    },
+    /// `HEAD` fast-forwarded cleanly from `previous_sha` to `head_sha`.
+    FastForwarded {
+        /// `HEAD` commit SHA before fast-forwarding.
+        previous_sha: String,
+        /// `HEAD` commit SHA after fast-forwarding.
+        head_sha: String,
+    },
+    /// `HEAD` fast-forwarded, but popping the auto-stash produced conflicts.
+    RestoreConflict {
+        /// `HEAD` commit SHA before fast-forwarding.
+        previous_sha: String,
+        /// `HEAD` commit SHA after fast-forwarding.
+        head_sha: String,
+        /// Sorted repository-relative conflicted paths.
+        conflicted_paths: Vec<String>,
+    },
+    /// Local `HEAD` already contains `target_sha` plus local unpushed commits; left untouched.
+    AheadOfTarget {
+        /// Current `HEAD` commit SHA.
+        head_sha: String,
+        /// Remote target SHA that is an ancestor of `HEAD`.
+        target_sha: String,
+    },
+    /// Local `HEAD` and `target_sha` diverged (neither is an ancestor of the other); left untouched.
+    Diverged {
+        /// Current `HEAD` commit SHA.
+        head_sha: String,
+        /// Divergent remote target SHA.
+        target_sha: String,
+    },
+}
+
 /// The reviewer's checkout of the pull request.
 ///
 /// It holds the checkout's git history and the files on disk. The session
@@ -264,6 +304,9 @@ pub trait Workspace: Send {
     fn worktree_status(&self, remote_head_sha: Option<&str>) -> Result<WorktreeStatus>;
     /// Pushes `HEAD` to the pull request's remote branch `head_ref` and returns the pushed `HEAD` commit SHA.
     fn push_head(&self, head_ref: &str) -> Result<String>;
+    /// Attempts to fast-forward `HEAD` to `target_sha`, stashing and restoring
+    /// local worktree changes when needed.
+    fn fast_forward_to(&self, target_sha: &str) -> Result<FastForwardOutcome>;
 }
 
 /// The running daemon and what it last saw, persisted between runs.

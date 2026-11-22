@@ -4,6 +4,7 @@
 mod checkout;
 mod custom;
 mod default_checkout;
+mod fast_forward;
 mod git_output;
 mod process;
 mod push;
