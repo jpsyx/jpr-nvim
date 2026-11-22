@@ -19,7 +19,7 @@ pub fn push_head_to_pr_branch(dir: &Path, head_ref: &str, timeout: Duration) -> 
     let refspec = format!("HEAD:{merge_ref}");
     run_unattended(
         "git",
-        &["push", "--porcelain", &remote, &refspec],
+        &["push", "--porcelain", "--", &remote, &refspec],
         dir,
         timeout,
     )
@@ -35,9 +35,14 @@ fn resolve_push_target(dir: &Path, head_ref: &str) -> Result<(String, String)> {
     let remote = read_git_config(dir, &format!("branch.{local_branch}.pushRemote"))
         .or_else(|| read_git_config(dir, &format!("branch.{local_branch}.remote")))
         .unwrap_or_else(|| "origin".to_owned());
-    let merge_ref =
-        read_git_config(dir, &format!("branch.{local_branch}.merge")).unwrap_or(default_merge_ref);
+    let merge_ref = read_git_config(dir, &format!("branch.{local_branch}.merge"))
+        .unwrap_or_else(|| default_merge_ref.clone());
     validate_push_target(&remote, &merge_ref)?;
+    if merge_ref != default_merge_ref {
+        bail!(
+            "branch {local_branch:?} tracks {merge_ref:?}, which does not match pull request head branch {default_merge_ref:?}"
+        );
+    }
     Ok((remote, merge_ref))
 }
 
@@ -98,7 +103,7 @@ fn is_safe_branch_segment(segment: &str) -> bool {
         && !segment.ends_with('.')
         && !Path::new(segment)
             .extension()
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("lock"))
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("lock"))
 }
 
 #[cfg(test)]
@@ -271,5 +276,29 @@ mod tests {
         git(&worktree, &["config", "--unset", "branch.pr-7.pushRemote"]);
         git(&worktree, &["config", "branch.pr-7.merge", "refs/tags/v1"]);
         assert!(GitWorkspace::new(worktree).push_head("fix/widget").is_err());
+    }
+
+    #[test]
+    fn refuses_to_push_when_branch_tracks_different_upstream_branch() {
+        let (_dir, worktree, origin) = create_origin_and_worktree();
+        let main_sha = read_ref_sha(&origin, "refs/heads/main");
+        git(&worktree, &["checkout", "-q", "-b", "pr-7"]);
+        git(&worktree, &["config", "branch.pr-7.remote", "origin"]);
+        git(
+            &worktree,
+            &["config", "branch.pr-7.merge", "refs/heads/main"],
+        );
+        let _local_sha = commit_change(&worktree, "accidental.txt", "do not land on main\n");
+
+        let error = GitWorkspace::new(worktree)
+            .push_head("fix/widget")
+            .unwrap_err();
+        let message = format!("{error:#}");
+
+        assert!(
+            message.contains("does not match pull request head branch"),
+            "{message}"
+        );
+        assert_eq!(read_ref_sha(&origin, "refs/heads/main"), main_sha);
     }
 }

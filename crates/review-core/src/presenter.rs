@@ -1,5 +1,7 @@
 //! Builds the read models frontends draw. Pure functions only.
 
+use std::collections::BTreeSet;
+
 use review_model::{
     AnchorKind, ChangedFile, FileRow, MessageSync, Origin, PullRequest, SessionView, SyncState,
     Thread, ViewedState, WorktreeStatus,
@@ -53,6 +55,11 @@ fn create_file_rows_from_files(
     threads: &[Thread],
     worktree_status: &WorktreeStatus,
 ) -> Vec<FileRow> {
+    let modified_set: BTreeSet<&str> = worktree_status
+        .modified_paths
+        .iter()
+        .map(String::as_str)
+        .collect();
     files
         .iter()
         .map(|file| FileRow {
@@ -64,7 +71,7 @@ fn create_file_rows_from_files(
                 .iter()
                 .filter(|thread| thread.anchor.file.as_deref() == Some(file.path.as_str()))
                 .count(),
-            is_modified: is_path_modified(&worktree_status.modified_paths, &file.path),
+            is_modified: modified_set.contains(file.path.as_str()),
             local_threads: threads
                 .iter()
                 .filter(|thread| {
@@ -74,13 +81,6 @@ fn create_file_rows_from_files(
                 .count(),
         })
         .collect()
-}
-
-fn is_path_modified(modified_paths: &[String], path: &str) -> bool {
-    modified_paths
-        .binary_search_by(|candidate| candidate.as_str().cmp(path))
-        .is_ok()
-        || modified_paths.iter().any(|candidate| candidate == path)
 }
 
 #[cfg(test)]
