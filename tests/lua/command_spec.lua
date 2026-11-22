@@ -13,14 +13,17 @@ assert(url_number == 12 and url_repo == "octo/gadgets", "a URL names its reposit
 assert(jpr.parse_pr_arg("abc") == nil, "not a number")
 assert(jpr.parse_pr_arg(nil) == nil, "missing")
 
+assert(jpr.VERSION == "0.5.0", "plugin version is 0.5.0")
+
 assert(
     vim.deep_equal(
         jpr.complete("", "Jpr "),
-        { "open", "sync", "toggle", "stream", "comment", "suggest", "expand", "conversation", "submit", "agent", "send", "prepass", "close" }
+        { "open", "sync", "toggle", "stream", "comment", "suggest", "expand", "conversation", "submit", "push", "agent", "send", "prepass", "close" }
     ),
     "all subcommands"
 )
 assert(vim.deep_equal(jpr.complete("s", "Jpr s"), { "sync", "stream", "suggest", "submit", "send" }), "filtered s subcommands")
+assert(vim.deep_equal(jpr.complete("p", "Jpr p"), { "push", "prepass" }), "filtered p subcommands")
 assert(vim.deep_equal(jpr.complete("c", "Jpr c"), { "comment", "conversation", "close" }), "filtered c subcommands")
 assert(vim.deep_equal(jpr.complete("", "Jpr open "), {}), "nothing after the subcommand")
 
@@ -30,6 +33,7 @@ assert(jpr.config.binary == "jpr-review", "setup keeps the defaults")
 assert(jpr.config.keys.comment == "gc", "setup keeps default keys")
 
 for _, group in ipairs({
+    "JprModified",
     "JprThreadPublished",
     "JprThreadDraft",
     "JprThreadFailed",
@@ -91,6 +95,9 @@ assert(messages[1].level == vim.log.levels.ERROR, "an unknown subcommand is an e
 assert(messages[1].text:find("unknown subcommand", 1, true), messages[1].text)
 jpr.command({ "open", "abc" })
 assert(messages[2].text:find("usage", 1, true), "open without a number shows the usage")
+jpr.warn("watch out")
+assert(messages[3].level == vim.log.levels.WARN, "jpr.warn emits WARN level")
+assert(messages[3].text == "jpr: watch out", messages[3].text)
 
 local opened = {}
 package.loaded["jpr.session"] = {
@@ -122,6 +129,9 @@ package.loaded["jpr.session"] = {
     submit_current = function()
         calls[#calls + 1] = { fn = "submit_current" }
     end,
+    push_current = function()
+        calls[#calls + 1] = { fn = "push_current" }
+    end,
     popup_current = function()
         calls[#calls + 1] = { fn = "popup_current" }
     end,
@@ -135,6 +145,7 @@ jpr.command({ "suggest" })
 jpr.command({ "expand" })
 jpr.command({ "conversation" })
 jpr.command({ "submit" })
+jpr.command({ "push" })
 
 local range_buf = vim.api.nvim_create_buf(false, true)
 vim.api.nvim_win_set_buf(0, range_buf)
@@ -153,13 +164,14 @@ assert(calls[2].fn == "suggest_current")
 assert(calls[3].fn == "expand_current")
 assert(calls[4].fn == "conversation_current")
 assert(calls[5].fn == "submit_current")
-assert(calls[6].fn == "comment_current" and calls[6].opts.line1 == 1 and calls[6].opts.line2 == 2 and calls[6].opts.range == 2)
-assert(calls[7].fn == "comment_current" and not calls[7].opts.suggest and not calls[7].opts.file)
-assert(calls[8].fn == "comment_current" and calls[8].opts.suggest == true)
-assert(calls[9].fn == "comment_current" and calls[9].opts.file == true)
-assert(calls[10].fn == "popup_current")
-assert(calls[11].fn == "jump_thread_current" and calls[11].step == 1)
-assert(calls[12].fn == "jump_thread_current" and calls[12].step == -1)
+assert(calls[6].fn == "push_current")
+assert(calls[7].fn == "comment_current" and calls[7].opts.line1 == 1 and calls[7].opts.line2 == 2 and calls[7].opts.range == 2)
+assert(calls[8].fn == "comment_current" and not calls[8].opts.suggest and not calls[8].opts.file)
+assert(calls[9].fn == "comment_current" and calls[9].opts.suggest == true)
+assert(calls[10].fn == "comment_current" and calls[10].opts.file == true)
+assert(calls[11].fn == "popup_current")
+assert(calls[12].fn == "jump_thread_current" and calls[12].step == 1)
+assert(calls[13].fn == "jump_thread_current" and calls[13].step == -1)
 
 jpr.bind_buffer_keys(range_buf)
 vim.api.nvim_win_set_cursor(0, { 1, 0 })

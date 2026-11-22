@@ -1,6 +1,9 @@
 -- jpr: review GitHub pull requests in Neovim, backed by the jpr-review engine.
 local M = {}
 
+--- Release version of the Neovim plugin, paired with the jpr-review binary.
+M.VERSION = "0.5.0"
+
 --- The options `setup` starts from; a user's options override any of them.
 M.defaults = {
     -- The engine binary.
@@ -49,6 +52,7 @@ M.subcommands = {
     "expand",
     "conversation",
     "submit",
+    "push",
     "agent",
     "send",
     "prepass",
@@ -64,6 +68,7 @@ function M.define_highlights()
         JprMuted = "Comment",
         JprViewed = "DiagnosticOk",
         JprDismissed = "DiagnosticWarn",
+        JprModified = "Special",
         JprAdded = "Added",
         JprRemoved = "Removed",
         JprError = "DiagnosticError",
@@ -143,9 +148,23 @@ function M.error(message)
     vim.notify("jpr: " .. message, vim.log.levels.ERROR)
 end
 
+--- Warns the user about a non-fatal condition, as a `jpr:` warning notification.
+function M.warn(message)
+    vim.notify("jpr: " .. message, vim.log.levels.WARN)
+end
+
 --- Tells the user what the plugin is doing, as a `jpr:` notification.
 function M.info(message)
     vim.notify("jpr: " .. message, vim.log.levels.INFO)
+end
+
+--- Short statusline summary for the current tab's review session, or `""`.
+function M.statusline()
+    local session_module = package.loaded["jpr.session"]
+    if not session_module then
+        return ""
+    end
+    return require("jpr.render.statusline").build_statusline_from_session(session_module.current())
 end
 
 --- Runs `:Jpr <fargs>` with optional command options `cmd_opts` (such as range).
@@ -170,6 +189,7 @@ function M.command(fargs, cmd_opts)
         expand = session.expand_current,
         conversation = session.conversation_current,
         submit = session.submit_current,
+        push = session.push_current,
         agent = session.agent_current,
         send = session.send_current,
         prepass = session.prepass_current,
