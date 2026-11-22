@@ -129,9 +129,10 @@ fn set_viewed_announces_the_change_before_answering() {
 fn bad_params_are_invalid_params_errors() {
     let input = build_request_with_params(1, "stream", r#"{"mode":"sideways"}"#)
         + &build_request_with_params(2, "fileDiff", "{}")
-        + &build_request_with_params(3, "setViewed", r#"{"path":"a"}"#);
+        + &build_request_with_params(3, "setViewed", r#"{"path":"a"}"#)
+        + &build_request_with_params(4, "prepareConflictResolution", "{}");
     let written = run(&input, &forge());
-    for id in 1..=3 {
+    for id in 1..=4 {
         assert_eq!(
             response(&written, id)["error"]["code"],
             -32602,
@@ -349,29 +350,28 @@ fn push_over_stdio_pushes_head_and_returns_push_result() {
     )
     .unwrap();
     let written = messages(&output);
+    let head_moved = written
+        .iter()
+        .position(|message| message["params"]["type"] == "headMoved")
+        .expect("a headMoved event");
+    let synced = written
+        .iter()
+        .position(|message| message["params"]["type"] == "synced")
+        .expect("a synced event");
+    let answer = written
+        .iter()
+        .position(|message| message["id"] == 1)
+        .unwrap();
+    assert!(head_moved < synced && synced < answer, "{written:?}");
     let result = &response(&written, 1)["result"];
     assert_eq!(result["isPushed"], true, "{written:?}");
     assert_eq!(result["headSha"], "def456", "{written:?}");
 }
 
-#[test]
-fn prepare_conflict_resolution_and_confirm_send_round_trip_cleanly() {
-    let shared = session(&forge());
-    let output = Arc::new(Mutex::new(Vec::<u8>::new()));
-    let prepare_input = request(1, "sync")
-        + &build_request_with_params(
-            2,
-            "prepareConflictResolution",
-            r#"{"paths":["src/a.rs"],"agent":"claude"}"#,
-        );
-    serve(Cursor::new(prepare_input), &output, &shared, &options(None)).unwrap();
-    let prepare_written = messages(&output);
-    let dispatch = &response(&prepare_written, 2)["result"];
-    assert_eq!(dispatch["kind"], "conflict", "{prepare_written:?}");
-    assert_eq!(dispatch["threadIds"], json!([]), "{prepare_written:?}");
-    let prompt = dispatch["prompt"].as_str().expect("conflict prompt string");
-    assert!(prompt.contains("src/a.rs"), "{prompt}");
-
+fn confirm_conflict_round_over_stdio(
+    shared: &Arc<Mutex<ReviewSession>>,
+    prompt: &str,
+) -> Vec<Value> {
     let confirm_output = Arc::new(Mutex::new(Vec::<u8>::new()));
     let confirm_params = json!({
         "round": 1,
@@ -384,15 +384,114 @@ fn prepare_conflict_resolution_and_confirm_send_round_trip_cleanly() {
     serve(
         Cursor::new(confirm_input),
         &confirm_output,
-        &shared,
+        shared,
         &options(None),
     )
     .unwrap();
-    let confirm_written = messages(&confirm_output);
+    messages(&confirm_output)
+}
+
+fn prepare_conflict_dispatch_over_stdio(shared: &Arc<Mutex<ReviewSession>>) -> Value {
+    let output = Arc::new(Mutex::new(Vec::<u8>::new()));
+    let prepare_input = request(1, "sync")
+        + &build_request_with_params(
+            2,
+            "prepareConflictResolution",
+            r#"{"paths":["src/a.rs"],"agent":"claude"}"#,
+        );
+    serve(Cursor::new(prepare_input), &output, shared, &options(None)).unwrap();
+    let prepare_written = messages(&output);
+    response(&prepare_written, 2)["result"].clone()
+}
+
+#[test]
+fn prepare_conflict_resolution_and_confirm_send_round_trip_cleanly() {
+    let shared = session(&forge());
+    let dispatch = prepare_conflict_dispatch_over_stdio(&shared);
+    assert_eq!(dispatch["kind"], "conflict", "{dispatch:?}");
+    assert_eq!(dispatch["threadIds"], json!([]), "{dispatch:?}");
+    let prompt = dispatch["prompt"].as_str().expect("conflict prompt string");
+    assert!(prompt.contains("src/a.rs"), "{prompt}");
+
+    let confirm_written = confirm_conflict_round_over_stdio(&shared, prompt);
+    assert!(
+        confirm_written
+            .iter()
+            .all(|message| message["params"]["type"] != "threadsChanged"),
+        "{confirm_written:?}"
+    );
+    let agent_round_index = confirm_written
+        .iter()
+        .position(|message| message["params"]["type"] == "agentRound")
+        .expect("an agentRound event");
+    let answer_index = confirm_written
+        .iter()
+        .position(|message| message["id"] == 3)
+        .unwrap();
+    assert!(agent_round_index < answer_index, "{confirm_written:?}");
     let round_result = &response(&confirm_written, 3)["result"]["round"];
     assert_eq!(round_result["kind"], "conflict", "{confirm_written:?}");
     assert_eq!(round_result["threadIds"], json!([]));
     assert_eq!(round_result["prompt"], prompt);
+}
+
+#[cfg(unix)]
+struct TempSocketGuard(std::path::PathBuf);
+
+#[cfg(unix)]
+impl Drop for TempSocketGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+#[cfg(unix)]
+fn create_temp_socket_path() -> TempSocketGuard {
+    use std::sync::atomic::AtomicU64;
+
+    static NEXT_SERVE_SOCKET_ID: AtomicU64 = AtomicU64::new(1);
+    let sequence = NEXT_SERVE_SOCKET_ID.fetch_add(1, Ordering::Relaxed);
+    TempSocketGuard(std::path::PathBuf::from(format!(
+        "/tmp/jpr-serve-v5-{}-{sequence}.sock",
+        std::process::id()
+    )))
+}
+
+#[cfg(unix)]
+fn connect_unix_socket(socket_path: &std::path::Path) -> std::os::unix::net::UnixStream {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        if let Ok(connected) = std::os::unix::net::UnixStream::connect(socket_path) {
+            return connected;
+        }
+        assert!(Instant::now() < deadline, "timed out connecting to socket");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+#[cfg(unix)]
+fn spawn_socket_test_server(
+    socket_path: std::path::PathBuf,
+    is_done: &Arc<AtomicBool>,
+) -> std::thread::JoinHandle<anyhow::Result<()>> {
+    let is_reader_done = Arc::clone(is_done);
+    let shared = session(&forge());
+    let serve_options = ServeOptions {
+        socket_path: Some(socket_path),
+        ..options(None)
+    };
+    std::thread::spawn(move || {
+        let reader = BufReader::new(EndsWhen {
+            done: move || is_reader_done.load(Ordering::Acquire),
+            deadline: Instant::now() + Duration::from_secs(5),
+        });
+        serve(
+            reader,
+            &Arc::new(Mutex::new(Vec::<u8>::new())),
+            &shared,
+            &serve_options,
+        )
+    })
 }
 
 #[cfg(unix)]
@@ -423,38 +522,10 @@ fn assert_socket_refuses_method(stream: &mut std::os::unix::net::UnixStream, lin
 #[cfg(unix)]
 #[test]
 fn unix_socket_refuses_push_and_prepare_conflict_resolution() {
-    use std::os::unix::net::UnixStream;
-    use std::path::PathBuf;
-
-    let socket_path = PathBuf::from(format!("/tmp/jpr-serve-v5-{}.sock", std::process::id()));
-    let _ = std::fs::remove_file(&socket_path);
-    let done = Arc::new(AtomicBool::new(false));
-    let reader_done = Arc::clone(&done);
-    let shared = session(&forge());
-    let serve_options = ServeOptions {
-        socket_path: Some(socket_path.clone()),
-        ..options(None)
-    };
-    let server_handle = std::thread::spawn(move || {
-        let reader = BufReader::new(EndsWhen {
-            done: move || reader_done.load(Ordering::Acquire),
-            deadline: Instant::now() + Duration::from_secs(5),
-        });
-        serve(
-            reader,
-            &Arc::new(Mutex::new(Vec::<u8>::new())),
-            &shared,
-            &serve_options,
-        )
-    });
-    let deadline = Instant::now() + Duration::from_secs(3);
-    let mut stream = loop {
-        if let Ok(connected) = UnixStream::connect(&socket_path) {
-            break connected;
-        }
-        assert!(Instant::now() < deadline, "timed out connecting to socket");
-        std::thread::sleep(Duration::from_millis(10));
-    };
+    let socket_guard = create_temp_socket_path();
+    let is_done = Arc::new(AtomicBool::new(false));
+    let server_handle = spawn_socket_test_server(socket_guard.0.clone(), &is_done);
+    let mut stream = connect_unix_socket(&socket_guard.0);
     assert_socket_refuses_method(&mut stream, &request(1, "push"));
     assert_socket_refuses_method(
         &mut stream,
@@ -464,8 +535,16 @@ fn unix_socket_refuses_push_and_prepare_conflict_resolution() {
             r#"{"paths":["src/a.rs"],"agent":"claude"}"#,
         ),
     );
+    assert_socket_refuses_method(
+        &mut stream,
+        &build_request_with_params(
+            3,
+            "confirmSend",
+            r#"{"round":1,"kind":"conflict","threadIds":[],"prompt":"Resolve src/a.rs"}"#,
+        ),
+    );
     drop(stream);
-    done.store(true, Ordering::Release);
+    is_done.store(true, Ordering::Release);
     server_handle.join().unwrap().unwrap();
 }
 
