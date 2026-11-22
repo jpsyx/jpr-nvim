@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::Result;
+pub use review_model::WorktreeStatus;
 use review_model::{
     AgentKind, AgentRound, Anchor, AnchorKind, ChangedFile, MentionCandidate, Message, PullRequest,
     Reaction, ReactionContent, ReviewEvent, Thread,
@@ -257,6 +258,12 @@ pub trait Workspace: Send {
     /// Sorted repo-relative paths whose worktree content differs from `commit`
     /// or are untracked.
     fn list_changed_files_since(&self, commit: &str) -> Result<Vec<String>>;
+    /// Current `HEAD` commit identifier of the checkout.
+    fn head_commit(&self) -> Result<String>;
+    /// Dirty paths and ahead/behind counts relative to `remote_head_sha` (when known).
+    fn worktree_status(&self, remote_head_sha: Option<&str>) -> Result<WorktreeStatus>;
+    /// Pushes `HEAD` to the pull request's remote branch `head_ref` and returns the pushed `HEAD` commit SHA.
+    fn push_head(&self, head_ref: &str) -> Result<String>;
 }
 
 /// The running daemon and what it last saw, persisted between runs.

@@ -113,6 +113,11 @@ impl FakeForge {
         self.lock().failure = message.map(str::to_owned);
     }
 
+    /// Replaces what `pull_request` reports.
+    pub fn set_pr(&self, pr: PullRequest) {
+        self.lock().pr = Some(pr);
+    }
+
     /// Replaces what `fetch` reports.
     pub fn set_snapshot(&self, snapshot: ForgeSnapshot) {
         self.lock().snapshot = snapshot;

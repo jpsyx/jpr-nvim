@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use review_core::ports::Workspace;
+use review_core::ports::{Workspace, WorktreeStatus};
 
 use crate::git_output::{
     is_batch_request_safe, is_commit_id, parse_batch_blob, parse_nul_paths,
@@ -156,6 +156,18 @@ impl Workspace for GitWorkspace {
             }
         }
         Ok(paths.into_iter().collect())
+    }
+
+    fn head_commit(&self) -> Result<String> {
+        crate::status::read_head_commit(&self.dir)
+    }
+
+    fn worktree_status(&self, remote_head_sha: Option<&str>) -> Result<WorktreeStatus> {
+        crate::status::read_worktree_status(&self.dir, remote_head_sha)
+    }
+
+    fn push_head(&self, head_ref: &str) -> Result<String> {
+        crate::push::push_head_to_pr_branch(&self.dir, head_ref, self.fetch_timeout)
     }
 }
 

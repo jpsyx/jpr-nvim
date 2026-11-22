@@ -1,8 +1,8 @@
 //! Builds the read models frontends draw. Pure functions only.
 
 use review_model::{
-    AnchorKind, ChangedFile, FileRow, MessageSync, PullRequest, SessionView, SyncState, Thread,
-    ViewedState, WorktreeStatus,
+    AnchorKind, ChangedFile, FileRow, MessageSync, Origin, PullRequest, SessionView, SyncState,
+    Thread, ViewedState, WorktreeStatus,
 };
 
 use crate::comments::count_code_threads;
@@ -18,10 +18,11 @@ pub fn session_view(
     threads: &[Thread],
     sync: &SyncState,
     queued_count: usize,
+    worktree_status: &WorktreeStatus,
 ) -> SessionView {
     SessionView {
         pr: pr.cloned(),
-        files: create_file_rows_from_files(files, threads),
+        files: create_file_rows_from_files(files, threads, worktree_status),
         tree: create_file_tree_from_paths(files.iter().map(|file| file.path.as_str())),
         viewed_count: files
             .iter()
@@ -43,11 +44,15 @@ pub fn session_view(
             .count(),
         queued_count,
         sync: sync.clone(),
-        worktree_status: WorktreeStatus::default(),
+        worktree_status: worktree_status.clone(),
     }
 }
 
-fn create_file_rows_from_files(files: &[ChangedFile], threads: &[Thread]) -> Vec<FileRow> {
+fn create_file_rows_from_files(
+    files: &[ChangedFile],
+    threads: &[Thread],
+    worktree_status: &WorktreeStatus,
+) -> Vec<FileRow> {
     files
         .iter()
         .map(|file| FileRow {
@@ -59,10 +64,23 @@ fn create_file_rows_from_files(files: &[ChangedFile], threads: &[Thread]) -> Vec
                 .iter()
                 .filter(|thread| thread.anchor.file.as_deref() == Some(file.path.as_str()))
                 .count(),
-            is_modified: false,
-            local_threads: 0,
+            is_modified: is_path_modified(&worktree_status.modified_paths, &file.path),
+            local_threads: threads
+                .iter()
+                .filter(|thread| {
+                    thread.origin == Origin::Local
+                        && thread.anchor.file.as_deref() == Some(file.path.as_str())
+                })
+                .count(),
         })
         .collect()
+}
+
+fn is_path_modified(modified_paths: &[String], path: &str) -> bool {
+    modified_paths
+        .binary_search_by(|candidate| candidate.as_str().cmp(path))
+        .is_ok()
+        || modified_paths.iter().any(|candidate| candidate == path)
 }
 
 #[cfg(test)]
@@ -134,6 +152,7 @@ mod tests {
             &threads,
             &SyncState::Synced { at: 5 },
             0,
+            &WorktreeStatus::default(),
         );
         let counts: Vec<(&str, usize)> = view
             .files
@@ -156,9 +175,48 @@ mod tests {
             changed_file("z.rs", ViewedState::Unviewed),
             changed_file("a.rs", ViewedState::Unviewed),
         ];
-        let view = session_view(None, &files, &[], &SyncState::Never, 0);
+        let view = session_view(
+            None,
+            &files,
+            &[],
+            &SyncState::Never,
+            0,
+            &WorktreeStatus::default(),
+        );
         let paths: Vec<&str> = view.files.iter().map(|row| row.path.as_str()).collect();
         assert_eq!(paths, ["z.rs", "a.rs"]);
         assert!(view.pr.is_none());
+    }
+
+    #[test]
+    fn marks_modified_files_and_counts_local_threads_per_file() {
+        let files = [
+            changed_file("a.rs", ViewedState::Viewed),
+            changed_file("b.rs", ViewedState::Unviewed),
+        ];
+        let threads = [
+            github_thread("T1", "a.rs"),
+            create_local_unsent_thread("loc-1", "a.rs"),
+            create_local_unsent_thread("loc-2", "b.rs"),
+        ];
+        let status = WorktreeStatus {
+            is_dirty: true,
+            ahead: 1,
+            behind: 0,
+            modified_paths: vec!["b.rs".into(), "untracked.rs".into()],
+        };
+        let view = session_view(
+            Some(&sample_pr()),
+            &files,
+            &threads,
+            &SyncState::Synced { at: 5 },
+            0,
+            &status,
+        );
+        assert_eq!(view.worktree_status, status);
+        assert!(!view.files[0].is_modified);
+        assert_eq!((view.files[0].threads, view.files[0].local_threads), (2, 1));
+        assert!(view.files[1].is_modified);
+        assert_eq!((view.files[1].threads, view.files[1].local_threads), (1, 1));
     }
 }

@@ -5,11 +5,14 @@ use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use anyhow::{Result, anyhow, bail};
+use review_model::WorktreeStatus;
 
 use crate::ports::Workspace;
 
 /// The merge base a [`FakeWorkspace`] reports for any base commit.
 pub const FAKE_MERGE_BASE: &str = "merge000";
+
+const DEFAULT_HEAD_COMMIT: &str = "abc123";
 
 #[derive(Debug, Default)]
 struct WorkspaceState {
@@ -20,6 +23,18 @@ struct WorkspaceState {
     failure: Option<String>,
     list_changed_failure: Option<String>,
     disk_read_failures: HashMap<String, String>,
+    head_commit: Option<String>,
+    status_override: Option<WorktreeStatus>,
+    push_failure: Option<String>,
+    pushed_refs: Vec<(String, String)>,
+}
+
+impl WorkspaceState {
+    fn current_head_commit(&self) -> String {
+        self.head_commit
+            .clone()
+            .unwrap_or_else(|| DEFAULT_HEAD_COMMIT.to_owned())
+    }
 }
 
 /// A checkout held in memory, for session and server tests.
@@ -67,6 +82,29 @@ impl FakeWorkspace {
         self.lock().renames.push((old.to_owned(), new.to_owned()));
     }
 
+    /// Sets the `HEAD` commit SHA reported by [`Workspace::head_commit`].
+    pub fn set_head_commit(&self, sha: &str) {
+        self.lock().head_commit = Some(sha.to_owned());
+    }
+
+    /// Overrides what [`Workspace::worktree_status`] returns, or clears the
+    /// override when `None`.
+    pub fn set_worktree_status(&self, status: Option<WorktreeStatus>) {
+        self.lock().status_override = status;
+    }
+
+    /// Makes [`Workspace::push_head`] fail with `message`, or succeed again
+    /// when `None`.
+    pub fn fail_push_with(&self, message: Option<&str>) {
+        self.lock().push_failure = message.map(str::to_owned);
+    }
+
+    /// Every `(head_ref, head_commit)` pushed through [`Workspace::push_head`].
+    #[must_use]
+    pub fn pushed_refs(&self) -> Vec<(String, String)> {
+        self.lock().pushed_refs.clone()
+    }
+
     /// Makes finding the merge base fail with `message`, or succeed again
     /// with `None`.
     pub fn fail_with(&self, message: Option<&str>) {
@@ -103,6 +141,27 @@ impl FakeWorkspace {
             .lock()
             .expect("the fake workspace lock is poisoned")
     }
+}
+
+fn collect_changed_paths(
+    disk: &HashMap<String, Vec<u8>>,
+    commit_files: Option<&HashMap<String, Vec<u8>>>,
+) -> Vec<String> {
+    let mut changed: BTreeSet<String> = disk
+        .iter()
+        .filter(|(path, disk_bytes)| {
+            commit_files.and_then(|files| files.get(*path)) != Some(*disk_bytes)
+        })
+        .map(|(path, _)| path.clone())
+        .collect();
+    if let Some(files) = commit_files {
+        for path in files.keys() {
+            if !disk.contains_key(path) {
+                changed.insert(path.clone());
+            }
+        }
+    }
+    changed.into_iter().collect()
 }
 
 impl Workspace for FakeWorkspace {
@@ -152,24 +211,48 @@ impl Workspace for FakeWorkspace {
         if let Some(message) = &state.list_changed_failure {
             return Err(anyhow!("{message}"));
         }
-        let commit_files = state.commits.get(commit);
-        let mut changed: BTreeSet<String> = state
-            .disk
-            .iter()
-            .filter(|(path, disk_bytes)| {
-                commit_files.and_then(|files| files.get(*path)) != Some(*disk_bytes)
-            })
-            .map(|(path, _)| path.clone())
-            .collect();
-        if let Some(files) = commit_files {
-            for path in files.keys() {
-                if !state.disk.contains_key(path) {
-                    changed.insert(path.clone());
-                }
-            }
+        let changed = collect_changed_paths(&state.disk, state.commits.get(commit));
+        drop(state);
+        Ok(changed)
+    }
+
+    fn head_commit(&self) -> Result<String> {
+        Ok(self.lock().current_head_commit())
+    }
+
+    fn worktree_status(&self, _remote_head_sha: Option<&str>) -> Result<WorktreeStatus> {
+        let state = self.lock();
+        if let Some(status) = &state.status_override {
+            return Ok(status.clone());
+        }
+        let head = state.current_head_commit();
+        let Some(head_files) = state.commits.get(&head) else {
+            return Ok(WorktreeStatus::default());
+        };
+        let modified_paths = collect_changed_paths(&state.disk, Some(head_files));
+        drop(state);
+        Ok(WorktreeStatus {
+            is_dirty: !modified_paths.is_empty(),
+            ahead: 0,
+            behind: 0,
+            modified_paths,
+        })
+    }
+
+    fn push_head(&self, head_ref: &str) -> Result<String> {
+        let mut state = self.lock();
+        if let Some(message) = &state.push_failure {
+            return Err(anyhow!("{message}"));
+        }
+        let current_head = state.current_head_commit();
+        state
+            .pushed_refs
+            .push((head_ref.to_owned(), current_head.clone()));
+        if let Some(status) = &mut state.status_override {
+            status.ahead = 0;
         }
         drop(state);
-        Ok(changed.into_iter().collect())
+        Ok(current_head)
     }
 }
 
@@ -223,5 +306,38 @@ mod tests {
             workspace.list_changed_files_since("head1").unwrap(),
             vec!["src/deleted.rs", "src/modified.rs", "src/untracked.rs"]
         );
+    }
+
+    #[test]
+    fn tracks_head_commit_worktree_status_and_pushed_refs() {
+        let workspace = FakeWorkspace::default();
+        assert_eq!(workspace.head_commit().unwrap(), "abc123");
+        assert_eq!(
+            workspace.worktree_status(Some("abc123")).unwrap(),
+            review_model::WorktreeStatus::default()
+        );
+
+        workspace.put_at("abc123", "src/a.rs", "clean\n");
+        workspace.put_disk("src/a.rs", "dirty\n");
+        let derived = workspace.worktree_status(Some("abc123")).unwrap();
+        assert!(derived.is_dirty);
+        assert_eq!(derived.modified_paths, vec!["src/a.rs"]);
+
+        workspace.set_head_commit("def456");
+        workspace.set_worktree_status(Some(review_model::WorktreeStatus {
+            is_dirty: false,
+            ahead: 2,
+            behind: 0,
+            modified_paths: Vec::new(),
+        }));
+        assert_eq!(workspace.push_head("fix/widget").unwrap(), "def456");
+        assert_eq!(
+            workspace.pushed_refs(),
+            vec![("fix/widget".to_owned(), "def456".to_owned())]
+        );
+        assert_eq!(workspace.worktree_status(Some("def456")).unwrap().ahead, 0);
+
+        workspace.fail_push_with(Some("remote rejected"));
+        assert!(workspace.push_head("fix/widget").is_err());
     }
 }

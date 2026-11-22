@@ -6,7 +6,9 @@ mod custom;
 mod default_checkout;
 mod git_output;
 mod process;
+mod push;
 mod repo;
+mod status;
 #[cfg(test)]
 mod test_support;
 mod unattended;

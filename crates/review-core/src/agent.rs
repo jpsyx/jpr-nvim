@@ -126,6 +126,25 @@ pub fn build_prepass_prompt_from_pr(pr: &PullRequest) -> String {
     )
 }
 
+/// Builds a prompt instructing the agent to resolve stash-restore merge conflicts
+/// in `conflicted_paths` without pushing or touching GitHub.
+#[must_use]
+pub fn build_conflict_prompt_from_paths(pr: &PullRequest, conflicted_paths: &[String]) -> String {
+    let mut output = String::new();
+    let _ = writeln!(
+        output,
+        "PR #{} ({}/{}) fast-forwarded to `{}` and popping local uncommitted edits left merge conflicts in:",
+        pr.number, pr.owner, pr.repo, pr.head_sha
+    );
+    for path in conflicted_paths {
+        let _ = writeln!(output, "- `{path}`");
+    }
+    output.push_str(
+        "\nResolve the conflict markers in those files while preserving both the upstream PR update and the local edits, stage the resolved files, and leave `git stash` intact if anything remains unclear. Never push and never touch GitHub.",
+    );
+    output
+}
+
 const fn splitmix64(mut state: u64) -> u64 {
     state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
     state = (state ^ (state >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
@@ -303,5 +322,18 @@ mod tests {
         assert!(prompt.contains(&format!("PR #{number}")), "{prompt}");
         assert!(prompt.contains("jpr-review guide"), "{prompt}");
         assert!(prompt.contains("jpr-review prepass-write"), "{prompt}");
+    }
+
+    #[test]
+    fn conflict_prompt_lists_conflicted_paths_and_forbids_pushing() {
+        let paths = vec!["src/a.rs".to_owned(), "src/b.rs".to_owned()];
+        let prompt = build_conflict_prompt_from_paths(&sample_pr(), &paths);
+        assert!(prompt.contains("PR #7"), "{prompt}");
+        assert!(prompt.contains("src/a.rs"), "{prompt}");
+        assert!(prompt.contains("src/b.rs"), "{prompt}");
+        assert!(
+            prompt.contains("Never push and never touch GitHub"),
+            "{prompt}"
+        );
     }
 }

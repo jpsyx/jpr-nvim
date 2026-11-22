@@ -95,12 +95,24 @@ impl ReviewSession {
     /// The current status view.
     #[must_use]
     pub fn view(&self) -> SessionView {
+        let remote_head_sha = self
+            .saved
+            .session
+            .pr
+            .as_ref()
+            .map(|pr| pr.head_sha.as_str());
+        let worktree_status = self
+            .ports
+            .workspace
+            .worktree_status(remote_head_sha)
+            .unwrap_or_default();
         session_view(
             self.saved.session.pr.as_ref(),
             &self.saved.files,
             &self.threads,
             &self.sync,
             self.saved.registry.queued_viewed.len() + self.saved.registry.queued_ops.len(),
+            &worktree_status,
         )
     }
 
