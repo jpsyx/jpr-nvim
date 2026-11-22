@@ -1,6 +1,8 @@
 //! Pure readers of git's output and guards for its input, so the commands
 //! that run git stay thin.
 
+use std::collections::BTreeSet;
+
 use anyhow::{Context, Result, bail};
 
 /// Whether `value` is a full commit id: exactly 40 (SHA-1) or 64 (SHA-256)
@@ -119,6 +121,35 @@ pub fn parse_porcelain_z_paths(bytes: &[u8]) -> Vec<String> {
         if has_original_path {
             let original_path = entries.next().unwrap_or_default();
             push_utf8_path(&mut paths, original_path);
+        }
+    }
+    paths
+}
+
+/// Untracked (`??`) file paths reported by `git status --porcelain=v1 -z --untracked-files=all`.
+///
+/// Consumes rename and copy (`R`/`C`) second-path records so an original path
+/// beginning with `"?? "` is never misread as an untracked entry.
+#[must_use]
+pub fn parse_untracked_porcelain_z_paths(bytes: &[u8]) -> BTreeSet<String> {
+    let mut entries = bytes
+        .split(|byte| *byte == 0)
+        .filter(|entry| !entry.is_empty());
+    let mut paths = BTreeSet::new();
+    while let Some(entry) = entries.next() {
+        if entry.len() < 4 || entry[2] != b' ' {
+            continue;
+        }
+        let has_original_path = matches!(entry[0], b'R' | b'C') || matches!(entry[1], b'R' | b'C');
+        if has_original_path {
+            let _ = entries.next();
+            continue;
+        }
+        if let Some(raw_path) = entry.strip_prefix(b"?? ")
+            && let Ok(path) = std::str::from_utf8(raw_path)
+            && !path.is_empty()
+        {
+            paths.insert(path.to_owned());
         }
     }
     paths
@@ -267,5 +298,16 @@ mod tests {
                 "after.rs".to_owned(),
             ]
         );
+    }
+
+    #[test]
+    fn parses_untracked_porcelain_z_paths_without_misreading_rename_sources() {
+        let output =
+            b"?? scratch.rs\0 M tracked.rs\0R  renamed.rs\0?? old_name.rs\0C  copy.rs\0?? src.rs\0?? nested/new.rs\0";
+        assert_eq!(
+            parse_untracked_porcelain_z_paths(output),
+            BTreeSet::from(["nested/new.rs".to_owned(), "scratch.rs".to_owned()])
+        );
+        assert!(parse_untracked_porcelain_z_paths(b"").is_empty());
     }
 }
