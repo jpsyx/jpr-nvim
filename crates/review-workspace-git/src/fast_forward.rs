@@ -1,13 +1,14 @@
 //! Dirty-worktree auto-stash, `--ff-only` fast-forward, and stash-pop conflict detection.
 
 use std::collections::BTreeSet;
+use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use review_core::ports::FastForwardOutcome;
 
 use crate::GitWorkspace;
-use crate::git_output::{parse_nul_paths, parse_porcelain_z_paths};
+use crate::git_output::parse_nul_paths;
 use crate::process::{create_command, run, run_bytes_unlocked};
 use crate::status::read_head_commit;
 use crate::workspace::require_commit_id;
@@ -20,6 +21,14 @@ const STASH_IDENTITY_ARGS: [&str; 4] = [
     "user.email=jpr-review@localhost",
 ];
 
+const ACTIVE_GIT_STATE_NAMES: [&str; 5] = [
+    "rebase-merge",
+    "rebase-apply",
+    "MERGE_HEAD",
+    "CHERRY_PICK_HEAD",
+    "REVERT_HEAD",
+];
+
 /// Attempts to fast-forward the worktree at `dir` to `target_sha`, stashing and
 /// restoring dirty tracked and untracked changes when needed.
 pub fn fast_forward_worktree(
@@ -28,13 +37,13 @@ pub fn fast_forward_worktree(
     target_sha: &str,
 ) -> Result<FastForwardOutcome> {
     require_commit_id(target_sha)?;
-    workspace.ensure_commit(target_sha)?;
     let previous_sha = read_head_commit(dir)?;
     if previous_sha == target_sha {
         return Ok(FastForwardOutcome::AlreadyAtTarget {
             head_sha: previous_sha,
         });
     }
+    workspace.ensure_commit(target_sha)?;
     if is_ancestor(dir, target_sha, &previous_sha)? {
         return Ok(FastForwardOutcome::AheadOfTarget {
             head_sha: previous_sha,
@@ -47,6 +56,7 @@ pub fn fast_forward_worktree(
             target_sha: target_sha.to_owned(),
         });
     }
+    ensure_no_active_git_operation(dir)?;
     if !is_worktree_dirty(dir)? {
         merge_fast_forward_only(dir, target_sha)?;
         return Ok(FastForwardOutcome::FastForwarded {
@@ -55,6 +65,26 @@ pub fn fast_forward_worktree(
         });
     }
     stash_fast_forward_and_restore(dir, &previous_sha, target_sha)
+}
+
+fn ensure_no_active_git_operation(dir: &Path) -> Result<()> {
+    let mut args = vec!["rev-parse"];
+    for state_name in ACTIVE_GIT_STATE_NAMES {
+        args.extend(["--git-path", state_name]);
+    }
+    let output = run_bytes_unlocked("git", &args, dir)
+        .context("checking for in-progress git operations before fast-forward")?;
+    let resolved_text =
+        std::str::from_utf8(&output).context("decoding git-path output as UTF-8")?;
+    for (state_name, resolved_line) in ACTIVE_GIT_STATE_NAMES
+        .into_iter()
+        .zip(resolved_text.lines())
+    {
+        if fs::symlink_metadata(dir.join(resolved_line.trim())).is_ok() {
+            bail!("cannot fast-forward worktree while git operation ({state_name}) is in progress");
+        }
+    }
+    Ok(())
 }
 
 fn is_ancestor(dir: &Path, ancestor: &str, descendant: &str) -> Result<bool> {
@@ -99,7 +129,7 @@ fn read_optional_ref(dir: &Path, reference: &str) -> Option<String> {
     (!resolved_sha.is_empty()).then(|| resolved_sha.to_owned())
 }
 
-fn push_auto_stash(dir: &Path) -> Result<bool> {
+fn push_auto_stash(dir: &Path) -> Result<Option<String>> {
     let stash_before = read_optional_ref(dir, "refs/stash");
     let mut args = STASH_IDENTITY_ARGS.to_vec();
     args.extend([
@@ -111,7 +141,42 @@ fn push_auto_stash(dir: &Path) -> Result<bool> {
     ]);
     run("git", &args, dir).context("stashing local changes before fast-forward")?;
     let stash_after = read_optional_ref(dir, "refs/stash");
-    Ok(stash_after.is_some() && stash_after != stash_before)
+    Ok(stash_after.filter(|after_sha| Some(after_sha.as_str()) != stash_before.as_deref()))
+}
+
+fn verify_top_stash_matches(dir: &Path, expected_stash_sha: &str) -> Result<()> {
+    let current_stash_sha = read_optional_ref(dir, "refs/stash");
+    if current_stash_sha.as_deref() == Some(expected_stash_sha) {
+        return Ok(());
+    }
+    bail!(
+        "refs/stash moved unexpectedly to {current_stash_sha:?}; refusing to pop another stash while local changes remain saved in git stash {expected_stash_sha}"
+    )
+}
+
+fn build_failure_detail_from_output(output: &std::process::Output) -> String {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    match (stdout.trim(), stderr.trim()) {
+        ("", "") => format!("exited with {}", output.status),
+        (only_stdout, "") => only_stdout.to_owned(),
+        ("", only_stderr) => only_stderr.to_owned(),
+        (both_stdout, both_stderr) => format!("{both_stdout} ({both_stderr})"),
+    }
+}
+
+fn rollback_auto_stash(dir: &Path, created_stash_sha: &str) -> Result<()> {
+    verify_top_stash_matches(dir, created_stash_sha)?;
+    let mut rollback_args = STASH_IDENTITY_ARGS.to_vec();
+    rollback_args.extend(["stash", "pop"]);
+    let output = create_command("git", &rollback_args, dir)
+        .output()
+        .with_context(|| format!("popping auto-stash {created_stash_sha} during rollback"))?;
+    if output.status.success() {
+        return Ok(());
+    }
+    let detail = build_failure_detail_from_output(&output);
+    bail!("popping auto-stash {created_stash_sha} during rollback failed: {detail}")
 }
 
 fn stash_fast_forward_and_restore(
@@ -119,39 +184,63 @@ fn stash_fast_forward_and_restore(
     previous_sha: &str,
     target_sha: &str,
 ) -> Result<FastForwardOutcome> {
-    let has_created_stash = push_auto_stash(dir)?;
+    let created_stash = push_auto_stash(dir)?;
     if let Err(merge_error) = merge_fast_forward_only(dir, target_sha) {
-        if has_created_stash {
-            let mut rollback_args = STASH_IDENTITY_ARGS.to_vec();
-            rollback_args.extend(["stash", "pop", "--quiet"]);
-            let _ = create_command("git", &rollback_args, dir).output();
+        if let Some(created_stash_sha) = &created_stash
+            && let Err(rollback_error) = rollback_auto_stash(dir, created_stash_sha)
+        {
+            return Err(merge_error.context(format!(
+                "fast-forward failed and rolling back auto-stash {created_stash_sha} also failed: {rollback_error:#}"
+            )));
         }
         return Err(merge_error);
     }
     let head_sha = read_head_commit(dir)?;
-    if !has_created_stash {
+    let Some(created_stash_sha) = created_stash else {
         return Ok(FastForwardOutcome::FastForwarded {
             previous_sha: previous_sha.to_owned(),
             head_sha,
         });
-    }
+    };
+    restore_auto_stash_after_fast_forward(dir, previous_sha, &head_sha, &created_stash_sha)
+}
+
+fn restore_auto_stash_after_fast_forward(
+    dir: &Path,
+    previous_sha: &str,
+    head_sha: &str,
+    created_stash_sha: &str,
+) -> Result<FastForwardOutcome> {
+    verify_top_stash_matches(dir, created_stash_sha)
+        .with_context(|| format!("HEAD fast-forwarded to {head_sha}"))?;
     let mut pop_args = STASH_IDENTITY_ARGS.to_vec();
     pop_args.extend(["stash", "pop"]);
     let pop_output = create_command("git", &pop_args, dir)
         .output()
-        .context("restoring stashed local changes after fast-forward")?;
+        .with_context(|| {
+            format!(
+                "restoring stashed local changes from git stash {created_stash_sha} after HEAD fast-forwarded to {head_sha}"
+            )
+        })?;
     if pop_output.status.success() {
         return Ok(FastForwardOutcome::FastForwarded {
             previous_sha: previous_sha.to_owned(),
-            head_sha,
+            head_sha: head_sha.to_owned(),
         });
     }
-    let conflicted_paths = read_restore_conflict_paths(dir)?;
-    Ok(FastForwardOutcome::RestoreConflict {
-        previous_sha: previous_sha.to_owned(),
-        head_sha,
-        conflicted_paths,
-    })
+    let conflicted_paths = read_restore_conflict_paths(dir, created_stash_sha)?;
+    if !conflicted_paths.is_empty() {
+        return Ok(FastForwardOutcome::RestoreConflict {
+            previous_sha: previous_sha.to_owned(),
+            head_sha: head_sha.to_owned(),
+            conflicted_paths,
+        });
+    }
+    let detail = build_failure_detail_from_output(&pop_output);
+    bail!(
+        "git stash pop failed ({}): {detail}; HEAD fast-forwarded to {head_sha} and local changes remain saved in git stash {created_stash_sha}",
+        pop_output.status
+    )
 }
 
 fn collect_safe_sorted_paths(raw_paths: Vec<String>) -> Vec<String> {
@@ -163,7 +252,66 @@ fn collect_safe_sorted_paths(raw_paths: Vec<String>) -> Vec<String> {
         .collect()
 }
 
-fn read_restore_conflict_paths(dir: &Path) -> Result<Vec<String>> {
+fn parse_untracked_porcelain_z_paths(bytes: &[u8]) -> BTreeSet<String> {
+    bytes
+        .split(|byte| *byte == 0)
+        .filter_map(|entry| entry.strip_prefix(b"?? "))
+        .filter_map(|raw_path| std::str::from_utf8(raw_path).ok())
+        .filter(|path| !path.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+fn has_worktree_path_collision(dir: &Path, relative_path: &str) -> bool {
+    let Ok(safe_relative) = path_to_safe_relative(relative_path) else {
+        return false;
+    };
+    let mut current_path = dir.to_path_buf();
+    let mut components = safe_relative.components().peekable();
+    while let Some(component) = components.next() {
+        current_path.push(component);
+        let is_parent_component = components.peek().is_some();
+        if is_parent_component {
+            if fs::symlink_metadata(&current_path)
+                .is_ok_and(|metadata| !metadata.file_type().is_dir())
+            {
+                return true;
+            }
+        } else if fs::symlink_metadata(&current_path).is_ok() {
+            return true;
+        }
+    }
+    false
+}
+
+fn read_colliding_stash_untracked_paths(
+    dir: &Path,
+    created_stash_sha: &str,
+) -> Result<Vec<String>> {
+    let untracked_tree = format!("{created_stash_sha}^3");
+    let Ok(stash_untracked_output) = run_bytes_unlocked(
+        "git",
+        &["ls-tree", "-r", "--name-only", "-z", &untracked_tree],
+        dir,
+    ) else {
+        return Ok(Vec::new());
+    };
+    let status_output = run_bytes_unlocked(
+        "git",
+        &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
+        dir,
+    )
+    .context("listing worktree status after stash restore failure")?;
+    let restored_untracked = parse_untracked_porcelain_z_paths(&status_output);
+    let colliding_paths = parse_nul_paths(&stash_untracked_output)
+        .into_iter()
+        .filter(|path| !restored_untracked.contains(path))
+        .filter(|path| has_worktree_path_collision(dir, path))
+        .collect();
+    Ok(collect_safe_sorted_paths(colliding_paths))
+}
+
+fn read_restore_conflict_paths(dir: &Path, created_stash_sha: &str) -> Result<Vec<String>> {
     let unmerged_output = run_bytes_unlocked(
         "git",
         &["diff", "--name-only", "--diff-filter=U", "-z"],
@@ -174,25 +322,7 @@ fn read_restore_conflict_paths(dir: &Path) -> Result<Vec<String>> {
     if !unmerged_paths.is_empty() {
         return Ok(unmerged_paths);
     }
-    let status_output = run_bytes_unlocked(
-        "git",
-        &["status", "--porcelain=v1", "-z", "--untracked-files=all"],
-        dir,
-    )
-    .context("listing dirty paths after stash restore conflict")?;
-    let status_paths = collect_safe_sorted_paths(parse_porcelain_z_paths(&status_output));
-    if !status_paths.is_empty() {
-        return Ok(status_paths);
-    }
-    let stash_untracked_output = run_bytes_unlocked(
-        "git",
-        &["ls-tree", "-r", "--name-only", "-z", "refs/stash^3"],
-        dir,
-    )
-    .unwrap_or_default();
-    Ok(collect_safe_sorted_paths(parse_nul_paths(
-        &stash_untracked_output,
-    )))
+    read_colliding_stash_untracked_paths(dir, created_stash_sha)
 }
 
 #[cfg(test)]
@@ -454,13 +584,14 @@ mod tests {
     }
 
     #[test]
-    fn untracked_file_collision_on_stash_restore_reports_conflict_and_preserves_stash() {
+    fn mixed_untracked_stash_reports_only_colliding_paths_and_preserves_stash() {
         let (temp_dir, worktree_dir, origin_dir) = create_origin_and_worktree();
         let initial_sha = read_head_commit(&worktree_dir).unwrap();
         let peer_dir = create_peer_clone(temp_dir.path(), &origin_dir);
         let target_sha = commit_file_change(&peer_dir, "collided.txt", "remote tracked\n");
         git(&peer_dir, &["push", "-q", "origin", "main"]);
         fs::write(worktree_dir.join("collided.txt"), "local untracked\n").unwrap();
+        fs::write(worktree_dir.join("scratch.txt"), "unrelated local note\n").unwrap();
 
         let outcome = GitWorkspace::new(worktree_dir.clone())
             .fast_forward_to(&target_sha)
@@ -475,14 +606,148 @@ mod tests {
             }
         );
         assert_eq!(read_head_commit(&worktree_dir).unwrap(), target_sha);
-        assert!(
-            run(
-                "git",
-                &["rev-parse", "--verify", "refs/stash"],
-                &worktree_dir
-            )
-            .is_ok()
+        assert!(has_stash_ref(&worktree_dir));
+    }
+
+    #[cfg(unix)]
+    fn write_executable_hook(worktree_dir: &Path, hook_name: &str, script: &str) {
+        use std::os::unix::fs::PermissionsExt;
+
+        let hooks_dir = worktree_dir.join(".git/hooks");
+        fs::create_dir_all(&hooks_dir).unwrap();
+        let hook_path = hooks_dir.join(hook_name);
+        fs::write(&hook_path, script).unwrap();
+        fs::set_permissions(&hook_path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn non_conflict_stash_pop_failure_returns_error_naming_head_and_stash() {
+        let (temp_dir, worktree_dir, origin_dir) = create_origin_and_worktree();
+        let _initial_sha = commit_file_change(&worktree_dir, "tracked.txt", "before\n");
+        git(&worktree_dir, &["push", "-q", "origin", "main"]);
+        let peer_dir = create_peer_clone(temp_dir.path(), &origin_dir);
+        let target_sha = commit_file_change(&peer_dir, "a.txt", "upstream\n");
+        git(&peer_dir, &["push", "-q", "origin", "main"]);
+        fs::write(worktree_dir.join("tracked.txt"), "local dirty\n").unwrap();
+        write_executable_hook(
+            &worktree_dir,
+            "post-merge",
+            "#!/bin/sh\n: > \"$(git rev-parse --git-dir)/index.lock\"\n",
         );
+
+        let error = GitWorkspace::new(worktree_dir.clone())
+            .fast_forward_to(&target_sha)
+            .unwrap_err();
+
+        let stash_sha = run("git", &["rev-parse", "refs/stash"], &worktree_dir)
+            .unwrap()
+            .trim()
+            .to_owned();
+        let message = format!("{error:#}");
+        assert_eq!(read_head_commit(&worktree_dir).unwrap(), target_sha);
+        assert!(message.contains("HEAD"), "{message}");
+        assert!(message.contains(&target_sha), "{message}");
+        assert!(message.contains("stash"), "{message}");
+        assert!(message.contains(&stash_sha), "{message}");
+        assert!(message.contains("The stash entry is kept"), "{message}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn refuses_to_pop_wrong_stash_when_shared_stash_ref_moves_concurrently() {
+        let (temp_dir, worktree_dir, origin_dir) = create_origin_and_worktree();
+        let _initial_sha = commit_file_change(&worktree_dir, "tracked.txt", "before\n");
+        git(&worktree_dir, &["push", "-q", "origin", "main"]);
+        let linked_dir = temp_dir.path().join("linked");
+        git(
+            &worktree_dir,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "--detach",
+                linked_dir.to_str().unwrap(),
+            ],
+        );
+        fs::write(linked_dir.join("other.txt"), "other worktree stash\n").unwrap();
+        let peer_dir = create_peer_clone(temp_dir.path(), &origin_dir);
+        let target_sha = commit_file_change(&peer_dir, "a.txt", "upstream\n");
+        git(&peer_dir, &["push", "-q", "origin", "main"]);
+        fs::write(worktree_dir.join("tracked.txt"), "local dirty\n").unwrap();
+        let hook_script = format!(
+            "#!/bin/sh\ngit -C '{}' -c user.name=other -c user.email=other@localhost stash push -u -q\n",
+            linked_dir.display()
+        );
+        write_executable_hook(&worktree_dir, "post-merge", &hook_script);
+
+        let error = GitWorkspace::new(worktree_dir.clone())
+            .fast_forward_to(&target_sha)
+            .unwrap_err();
+
+        let top_stash_sha = run("git", &["rev-parse", "refs/stash"], &worktree_dir)
+            .unwrap()
+            .trim()
+            .to_owned();
+        let previous_stash_sha = run("git", &["rev-parse", "refs/stash@{1}"], &worktree_dir)
+            .unwrap()
+            .trim()
+            .to_owned();
+        let message = format!("{error:#}");
+        assert!(message.contains("refs/stash"), "{message}");
+        assert!(message.contains(&previous_stash_sha), "{message}");
+        assert!(!top_stash_sha.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn surfaces_rollback_error_when_fast_forward_and_stash_rollback_both_fail() {
+        let (temp_dir, worktree_dir, origin_dir) = create_origin_and_worktree();
+        let initial_sha = commit_file_change(&worktree_dir, "tracked.txt", "before\n");
+        git(&worktree_dir, &["push", "-q", "origin", "main"]);
+        let peer_dir = create_peer_clone(temp_dir.path(), &origin_dir);
+        let target_sha = commit_file_change(&peer_dir, "a.txt", "upstream\n");
+        git(&peer_dir, &["push", "-q", "origin", "main"]);
+        fs::write(worktree_dir.join("tracked.txt"), "local dirty\n").unwrap();
+        let hook_script = format!(
+            "#!/bin/sh\nif [ \"$1\" = \"prepared\" ] && grep -q '{target_sha} refs/heads/main'; then\n  : > \"${{GIT_DIR:-.git}}/index.lock\"\n  exit 1\nfi\n"
+        );
+        write_executable_hook(&worktree_dir, "reference-transaction", &hook_script);
+
+        let error = GitWorkspace::new(worktree_dir.clone())
+            .fast_forward_to(&target_sha)
+            .unwrap_err();
+
+        let stash_sha = run("git", &["rev-parse", "refs/stash"], &worktree_dir)
+            .unwrap()
+            .trim()
+            .to_owned();
+        let message = format!("{error:#}");
+        assert_eq!(read_head_commit(&worktree_dir).unwrap(), initial_sha);
+        assert!(message.contains("rolling back auto-stash"), "{message}");
+        assert!(message.contains(&stash_sha), "{message}");
+        assert!(message.contains("ref updates aborted by hook"), "{message}");
+    }
+
+    #[test]
+    fn refuses_fast_forward_when_rebase_is_in_progress_on_detached_head() {
+        let (_temp_dir, worktree_dir, _origin_dir) = create_origin_and_worktree();
+        let ancestor_sha = commit_file_change(&worktree_dir, "step1.txt", "one\n");
+        let target_sha = commit_file_change(&worktree_dir, "step2.txt", "two\n");
+        git(&worktree_dir, &["push", "-q", "origin", "main"]);
+        git(
+            &worktree_dir,
+            &["checkout", "-q", "--detach", &ancestor_sha],
+        );
+        fs::create_dir_all(worktree_dir.join(".git/rebase-merge")).unwrap();
+
+        let error = GitWorkspace::new(worktree_dir.clone())
+            .fast_forward_to(&target_sha)
+            .unwrap_err();
+
+        let message = format!("{error:#}");
+        assert!(message.contains("rebase-merge"), "{message}");
+        assert_eq!(read_head_commit(&worktree_dir).unwrap(), ancestor_sha);
     }
 
     #[test]
@@ -523,5 +788,31 @@ mod tests {
             .trim()
             .to_owned();
         assert_eq!(remaining_stash_sha, preexisting_stash_sha);
+    }
+
+    #[test]
+    fn parent_file_collision_with_nested_untracked_stash_reports_only_nested_path() {
+        let (temp_dir, worktree_dir, origin_dir) = create_origin_and_worktree();
+        let initial_sha = read_head_commit(&worktree_dir).unwrap();
+        let peer_dir = create_peer_clone(temp_dir.path(), &origin_dir);
+        let target_sha = commit_file_change(&peer_dir, "nested", "upstream regular file\n");
+        git(&peer_dir, &["push", "-q", "origin", "main"]);
+        fs::create_dir_all(worktree_dir.join("nested")).unwrap();
+        fs::write(worktree_dir.join("nested/child.txt"), "local nested\n").unwrap();
+        fs::write(worktree_dir.join("scratch.txt"), "safe note\n").unwrap();
+
+        let outcome = GitWorkspace::new(worktree_dir.clone())
+            .fast_forward_to(&target_sha)
+            .unwrap();
+
+        assert_eq!(
+            outcome,
+            FastForwardOutcome::RestoreConflict {
+                previous_sha: initial_sha,
+                head_sha: target_sha,
+                conflicted_paths: vec!["nested/child.txt".to_owned()],
+            }
+        );
+        assert!(has_stash_ref(&worktree_dir));
     }
 }
