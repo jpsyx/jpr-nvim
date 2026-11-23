@@ -35,6 +35,8 @@ local function setup_test_context()
     view_mode.path = vim.fn.tempname()
     local engine_log = vim.fn.tempname()
     local capture_file = vim.fn.tempname()
+    local diff_override_file = vim.fn.tempname()
+    local stream_override_file = vim.fn.tempname()
     local worktree = vim.fn.tempname()
     vim.fn.mkdir(worktree, "p")
     vim.fn.writefile({ "hello", "new" }, worktree .. "/README.md")
@@ -47,6 +49,8 @@ local function setup_test_context()
     end
 
     vim.env.FAKE_ENGINE_LOG = engine_log
+    vim.env.FAKE_ENGINE_DIFF_FILE = diff_override_file
+    vim.env.FAKE_ENGINE_STREAM_FILE = stream_override_file
     jpr.setup({
         binary = root .. "/tests/lua/fixtures/fake_engine.sh",
         claude_cmd = fake_agent,
@@ -65,6 +69,8 @@ local function setup_test_context()
         worktree = worktree,
         engine_log = engine_log,
         capture_file = capture_file,
+        diff_override_file = diff_override_file,
+        stream_override_file = stream_override_file,
         notifications = notifications,
     }
 end
@@ -251,14 +257,125 @@ local function test_restore_conflict_ask_agent(context)
     assert(vim.deep_equal(prepare_requests[1].params.paths, { "README.md" }), "passes validated conflictedPaths")
     assert(prepare_requests[1].params.agent == "claude", "passes configured agent")
 
-    local expected_paste = "\27[200~Resolve conflicts in README.md\27[201~\r"
+    local expected_pattern = "\27%[200~Resolve conflicts in README%.md\27%[201~[\r\n]"
     assert(vim.wait(3000, function()
-        return read_bytes(context.capture_file):find(expected_paste, 1, true) ~= nil
-    end), "delivers conflict prompt to agent terminal")
+        return read_bytes(context.capture_file):find(expected_pattern) ~= nil
+    end), "delivers conflict prompt to agent terminal: " .. vim.inspect(read_bytes(context.capture_file)))
 
     local confirm_request = helpers.read_requests(context.engine_log, "confirmSend")[1]
     assert(confirm_request.params.kind == "conflict", "confirmSend kind is conflict")
     assert(vim.deep_equal(confirm_request.params.threadIds, {}), "confirmSend threadIds is empty")
+end
+
+local function write_healed_engine_fixtures(context)
+    local healed_diff = vim.json.encode({
+        path = "README.md",
+        binary = false,
+        baseText = "hello\nhealed-base\n",
+        added = { { line = 2, words = {} }, { line = 3, words = {} } },
+        removed = { { above = 2, lines = { { text = "healed-base", words = {} } } } },
+        threads = {},
+    })
+    local healed_stream = vim.json.encode({
+        mode = "unified",
+        rows = {
+            { kind = "file", path = "README.md", additions = 2, deletions = 1, viewed = "UNVIEWED", folded = false },
+            { kind = "hunk", path = "README.md", header = "@@ -1,2 +1,3 @@", target = 1 },
+            {
+                kind = "line",
+                path = "README.md",
+                left = nil,
+                right = { line = 2, text = "healed-stream-line", change = "added", words = {} },
+                target = 2,
+            },
+        },
+    })
+    vim.fn.writefile({ healed_diff }, context.diff_override_file)
+    vim.fn.writefile({ healed_stream }, context.stream_override_file)
+end
+
+local function buffer_has_healed_diff_extmark(buf, diff_namespace)
+    local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+    if not vim.deep_equal(lines, { "hello", "healed line 2", "healed line 3" }) then
+        return false
+    end
+    local marks = vim.api.nvim_buf_get_extmarks(buf, diff_namespace, 0, -1, { details = true })
+    return vim.inspect(marks):find("healed%-base") ~= nil
+end
+
+local function emit_head_moved(review, head_sha, outcome, view, conflicted_paths)
+    session.on_notification(review, "event", {
+        type = "headMoved",
+        previousSha = "abc123",
+        headSha = head_sha,
+        outcome = outcome,
+        conflictedPaths = conflicted_paths or {},
+        view = view,
+    })
+end
+
+local function test_self_healed_head_moved_unified(context)
+    require("jpr.agent").close(context.review)
+    session.stream_current()
+    assert(vim.wait(3000, function()
+        return require("jpr.views.stream").is_visible(context.review)
+    end), "initial stream visible")
+    local stream_win = vim.fn.win_findbuf(context.review.stream.buffers.main)[1]
+
+    local file_win = vim.api.nvim_open_win(0, true, { split = "below", win = stream_win })
+    vim.cmd.edit(vim.fn.fnameescape(context.worktree .. "/README.md"))
+    local readme_buf = vim.api.nvim_win_get_buf(file_win)
+    local diff_namespace = vim.api.nvim_create_namespace("jpr-diff")
+    local def_view = vim.deepcopy(context.review.view)
+    def_view.pr.headSha = "def456"
+    emit_head_moved(context.review, "def456", "failed", def_view)
+    assert(vim.wait(3000, function()
+        local has_marks = #vim.api.nvim_buf_get_extmarks(readme_buf, diff_namespace, 0, -1, {}) > 0
+        return has_marks and (context.review.stream.key or ""):find("def456", 1, true) ~= nil
+    end), "Sync #1 failed headMoved draws pre-heal diff and stream at headSha=def456")
+
+    vim.fn.writefile({ "hello", "healed line 2", "healed line 3" }, context.worktree .. "/README.md")
+    write_healed_engine_fixtures(context)
+    emit_head_moved(context.review, "def456", "fastForwarded", vim.deepcopy(def_view))
+    assert(vim.wait(3000, function()
+        return buffer_has_healed_diff_extmark(readme_buf, diff_namespace)
+    end), "Sync #2 self-healed fastForwarded redraws unified diff overlay")
+    assert(vim.wait(3000, function()
+        local lines = vim.api.nvim_buf_get_lines(context.review.stream.buffers.main, 0, -1, false)
+        return table.concat(lines, "\n"):find("healed-stream-line", 1, true) ~= nil
+    end), "Sync #2 self-healed fastForwarded force-refreshes jpr://stream")
+    vim.api.nvim_win_close(file_win, true)
+end
+
+local function test_self_healed_head_moved_split_base(context)
+    vim.fn.delete(context.diff_override_file)
+    vim.fn.delete(context.stream_override_file)
+    session.toggle_view()
+    local main_win = require("jpr.views.main_window").find(context.review)
+    require("jpr.views.main_window").edit(context.review, main_win, "README.md")
+    local split_view = vim.deepcopy(context.review.view)
+    split_view.pr.headSha = "splitdef"
+    emit_head_moved(context.review, "splitdef", "failed", split_view)
+    assert(vim.wait(3000, function()
+        local split_record = context.review.diff.splits[main_win]
+        return split_record ~= nil and vim.api.nvim_buf_is_valid(split_record.base_buf)
+    end), "Sync #1 failed headMoved opens initial split base buffer")
+
+    write_healed_engine_fixtures(context)
+    local original_select = vim.ui.select
+    vim.ui.select = function(_, _, on_choice)
+        on_choice(nil)
+    end
+    emit_head_moved(context.review, "splitdef", "restoreConflict", vim.deepcopy(split_view), { "README.md" })
+    vim.ui.select = original_select
+    assert(vim.wait(3000, function()
+        local split_record = context.review.diff.splits[main_win]
+        local is_valid = split_record and vim.api.nvim_buf_is_valid(split_record.base_buf)
+        return is_valid and vim.deep_equal(vim.api.nvim_buf_get_lines(split_record.base_buf, 0, -1, false), { "hello", "healed-base" })
+    end), "Sync #2 self-healed restoreConflict refreshes split base buffer")
+    session.toggle_view()
+    vim.fn.delete(context.diff_override_file)
+    vim.fn.delete(context.stream_override_file)
 end
 
 local context = setup_test_context()
@@ -268,7 +385,11 @@ test_head_moved_fast_forward(context)
 test_head_moved_warnings(context)
 test_restore_conflict_resolve_myself(context)
 test_restore_conflict_ask_agent(context)
+test_self_healed_head_moved_unified(context)
+test_self_healed_head_moved_split_base(context)
 session.close_current()
 vim.env.FAKE_ENGINE_LOG = nil
+vim.env.FAKE_ENGINE_DIFF_FILE = nil
+vim.env.FAKE_ENGINE_STREAM_FILE = nil
 
 print("push_and_head_moved_spec: ok")

@@ -5,7 +5,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use anyhow::{Result, anyhow, bail};
-use review_model::WorktreeStatus;
+use review_model::{PullRequest, WorktreeStatus};
 
 use crate::ports::{FastForwardOutcome, Workspace};
 
@@ -29,6 +29,7 @@ struct WorkspaceState {
     status_override: Option<WorktreeStatus>,
     push_failure: Option<String>,
     pushed_refs: Vec<(String, String)>,
+    pushed_prs: Vec<PullRequest>,
     fast_forward_override: Option<std::result::Result<FastForwardOutcome, String>>,
 }
 
@@ -115,6 +116,12 @@ impl FakeWorkspace {
     #[must_use]
     pub fn pushed_refs(&self) -> Vec<(String, String)> {
         self.lock().pushed_refs.clone()
+    }
+
+    /// Every [`PullRequest`] passed to [`Workspace::push_head`].
+    #[must_use]
+    pub fn pushed_prs(&self) -> Vec<PullRequest> {
+        self.lock().pushed_prs.clone()
     }
 
     /// Makes finding the merge base fail with `message`, or succeed again
@@ -268,7 +275,7 @@ impl Workspace for FakeWorkspace {
         })
     }
 
-    fn push_head(&self, head_ref: &str) -> Result<String> {
+    fn push_head(&self, pr: &PullRequest) -> Result<String> {
         let mut state = self.lock();
         if let Some(message) = &state.push_failure {
             return Err(anyhow!("{message}"));
@@ -276,7 +283,8 @@ impl Workspace for FakeWorkspace {
         let current_head = state.current_head_commit();
         state
             .pushed_refs
-            .push((head_ref.to_owned(), current_head.clone()));
+            .push((pr.head_ref.clone(), current_head.clone()));
+        state.pushed_prs.push(pr.clone());
         if let Some(status) = &mut state.status_override {
             status.ahead = 0;
         }
@@ -382,6 +390,7 @@ mod tests {
         assert!(derived.is_dirty);
         assert_eq!(derived.modified_paths, vec!["src/a.rs"]);
 
+        let pr = crate::fakes::sample_pr();
         workspace.set_head_commit("def456");
         workspace.set_worktree_status(Some(review_model::WorktreeStatus {
             is_dirty: false,
@@ -389,15 +398,16 @@ mod tests {
             behind: 0,
             modified_paths: Vec::new(),
         }));
-        assert_eq!(workspace.push_head("fix/widget").unwrap(), "def456");
+        assert_eq!(workspace.push_head(&pr).unwrap(), "def456");
         assert_eq!(
             workspace.pushed_refs(),
             vec![("fix/widget".to_owned(), "def456".to_owned())]
         );
+        assert_eq!(workspace.pushed_prs(), vec![pr.clone()]);
         assert_eq!(workspace.worktree_status(Some("def456")).unwrap().ahead, 0);
 
         workspace.fail_push_with(Some("remote rejected"));
-        assert!(workspace.push_head("fix/widget").is_err());
+        assert!(workspace.push_head(&pr).is_err());
     }
 
     #[test]

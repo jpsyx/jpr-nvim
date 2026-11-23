@@ -70,9 +70,19 @@ while IFS= read -r line; do
     *'"method":"fileDiff"'*'"BROKEN.md"'*|*'"BROKEN.md"'*'"method":"fileDiff"'*)
       printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32000,"message":"BROKEN.md is not at the base"}}\n' "$id" ;;
     *'"method":"fileDiff"'*'"NULL.md"'*|*'"NULL.md"'*'"method":"fileDiff"'*) reply null ;;
-    *'"method":"fileDiff"'*) reply "$file_diff" ;;
+    *'"method":"fileDiff"'*)
+      if [ -n "$FAKE_ENGINE_DIFF_FILE" ] && [ -f "$FAKE_ENGINE_DIFF_FILE" ]; then
+        reply "$(cat "$FAKE_ENGINE_DIFF_FILE")"
+      else
+        reply "$file_diff"
+      fi ;;
     *'"method":"stream"'*'"split"'*|*'"split"'*'"method":"stream"'*) reply "$stream_split" ;;
-    *'"method":"stream"'*) reply "$stream_unified" ;;
+    *'"method":"stream"'*)
+      if [ -n "$FAKE_ENGINE_STREAM_FILE" ] && [ -f "$FAKE_ENGINE_STREAM_FILE" ]; then
+        reply "$(cat "$FAKE_ENGINE_STREAM_FILE")"
+      else
+        reply "$stream_unified"
+      fi ;;
     *'"method":"setViewed"'*'"BROKEN.md"'*|*'"BROKEN.md"'*'"method":"setViewed"'*)
       printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32000,"message":"GitHub refused BROKEN.md"}}\n' "$id" ;;
     *'"method":"setViewed"'*) announce viewedChanged "$view_viewed"; reply "$view_viewed" ;;

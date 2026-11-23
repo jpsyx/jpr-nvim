@@ -10,13 +10,10 @@ impl ReviewSession {
     /// forge sync. When `git push` succeeds and the follow-up sync fails,
     /// returns `Ok` with `is_pushed: true` and `sync_error: Some(..)`.
     pub fn push(&mut self) -> Result<PushResult> {
-        let (head_ref, pr_head_sha) = {
-            let pr = self.synced_pr()?;
-            (pr.head_ref.clone(), pr.head_sha.clone())
-        };
+        let pr = self.synced_pr()?.clone();
         let effective_remote_sha = self
             .effective_remote_head_sha()
-            .unwrap_or(&pr_head_sha)
+            .unwrap_or(&pr.head_sha)
             .to_owned();
         let local_head_sha = self.ports.workspace.head_commit()?;
         let status = self
@@ -24,9 +21,9 @@ impl ReviewSession {
             .workspace
             .worktree_status(Some(&effective_remote_sha))?;
         validate_push_status(&status, &local_head_sha, &effective_remote_sha)?;
-        let head_sha = self.ports.workspace.push_head(&head_ref)?;
+        let head_sha = self.ports.workspace.push_head(&pr)?;
         self.pushed_head = Some(PushedHead {
-            base_pr_head_sha: pr_head_sha,
+            base_pr_head_sha: pr.head_sha,
             pushed_sha: head_sha.clone(),
         });
         match self.sync() {
@@ -278,5 +275,44 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn push_forwards_cross_repository_pr_context_and_surfaces_refusal() {
+        let fakes = Fakes::new(100);
+        let mut fork_pr = sample_pr();
+        fork_pr.head_ref = "main".into();
+        fork_pr.is_cross_repository = true;
+        fakes.forge.set_pr(fork_pr.clone());
+        let mut session = fakes.open_synced();
+        fakes.workspace.set_head_commit("forkhead1");
+        fakes.workspace.set_worktree_status(Some(WorktreeStatus {
+            is_dirty: false,
+            ahead: 1,
+            behind: 0,
+            modified_paths: Vec::new(),
+        }));
+        fakes.workspace.fail_push_with(Some(
+            "refusing to push cross-repository (fork) pull request",
+        ));
+
+        let refusal = session.push().unwrap_err();
+        assert!(
+            refusal.to_string().contains("cross-repository"),
+            "{refusal}"
+        );
+        assert!(fakes.workspace.pushed_prs().is_empty());
+
+        fakes.workspace.fail_push_with(None);
+        let mut advanced_pr = fork_pr.clone();
+        advanced_pr.head_sha = "forkhead1".into();
+        fakes.forge.set_pr(advanced_pr);
+        let mut updated_snapshot = create_snapshot();
+        updated_snapshot.head_sha = "forkhead1".into();
+        fakes.forge.set_snapshot(updated_snapshot);
+
+        let result = session.push().unwrap();
+        assert!(result.is_pushed);
+        assert_eq!(fakes.workspace.pushed_prs(), vec![fork_pr]);
     }
 }

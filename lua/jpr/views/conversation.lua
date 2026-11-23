@@ -116,6 +116,9 @@ local function current_entry(session)
 end
 
 local function open_edit_comment(session)
+    if session.is_read_only then
+        return require("jpr.session").report_read_only(session)
+    end
     local entry = current_entry(session)
     if not entry then
         return
@@ -127,6 +130,9 @@ local function open_edit_comment(session)
 end
 
 local function reply_to_comment(session)
+    if session.is_read_only then
+        return require("jpr.session").report_read_only(session)
+    end
     local entry = current_entry(session)
     if not entry then
         return
@@ -138,6 +144,9 @@ local function reply_to_comment(session)
 end
 
 local function promote_comment_thread(session)
+    if session.is_read_only then
+        return require("jpr.session").report_read_only(session)
+    end
     local entry = current_entry(session)
     if not entry then
         return
@@ -149,6 +158,9 @@ local function promote_comment_thread(session)
 end
 
 local function send_comment_thread(session)
+    if session.is_read_only then
+        return require("jpr.session").report_read_only(session)
+    end
     local entry = current_entry(session)
     if not entry then
         return
@@ -160,6 +172,9 @@ local function send_comment_thread(session)
 end
 
 local function delete_comment(session)
+    if session.is_read_only then
+        return require("jpr.session").report_read_only(session)
+    end
     local entry, state = current_entry(session)
     if not entry then
         return
@@ -174,6 +189,9 @@ local function delete_comment(session)
 end
 
 local function react_to_comment(session)
+    if session.is_read_only then
+        return require("jpr.session").report_read_only(session)
+    end
     local entry, state = current_entry(session)
     if not entry then
         return
@@ -193,6 +211,9 @@ local function react_to_comment(session)
 end
 
 local function retry_comment(session)
+    if session.is_read_only then
+        return require("jpr.session").report_read_only(session)
+    end
     local entry = current_entry(session)
     if not entry or entry.message.sync ~= "failed" then
         return require("jpr").info("this message is not in a failed state")

@@ -31,6 +31,9 @@ pub struct PullRequest {
     /// older build saved.
     #[serde(default)]
     pub base_sha: String,
+    /// Whether the pull request's head branch lives in a fork repository.
+    #[serde(default)]
+    pub is_cross_repository: bool,
 }
 
 /// Whether the reviewer has viewed a file, as the forge tracks it. The file
@@ -92,6 +95,7 @@ mod tests {
             head_sha: "abc123".into(),
             base_ref: "main".into(),
             base_sha: "base000".into(),
+            is_cross_repository: false,
         }
     }
 
@@ -115,12 +119,21 @@ mod tests {
     }
 
     #[test]
-    fn pull_request_uses_camel_case_keys() {
+    fn pull_request_uses_camel_case_keys_and_defaults_cross_repository() {
         let json = serde_json::to_value(pr()).unwrap();
         assert_eq!(json["nodeId"], "PR_7");
         assert_eq!(json["headSha"], "abc123");
         assert_eq!(json["headRef"], "fix/widget");
         assert_eq!(json["baseRef"], "main");
         assert_eq!(json["baseSha"], "base000");
+        assert_eq!(json["isCrossRepository"], false);
+
+        let mut without_flag = json;
+        without_flag
+            .as_object_mut()
+            .unwrap()
+            .remove("isCrossRepository");
+        let decoded: PullRequest = serde_json::from_value(without_flag).unwrap();
+        assert!(!decoded.is_cross_repository);
     }
 }

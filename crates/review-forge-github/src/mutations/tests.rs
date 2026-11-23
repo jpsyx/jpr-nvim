@@ -83,6 +83,7 @@ fn rest_reply_endpoint_rejects_traversal_and_non_digit_database_ids() {
         head_sha: "abc".into(),
         base_ref: "main".into(),
         base_sha: "base".into(),
+        is_cross_repository: false,
     };
     assert_eq!(
         build_rest_reply_endpoint(&pr, "98765").unwrap(),

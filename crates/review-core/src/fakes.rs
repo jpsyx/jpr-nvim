@@ -37,6 +37,7 @@ pub fn sample_pr() -> PullRequest {
         head_sha: "abc123".into(),
         base_ref: "main".into(),
         base_sha: "base000".into(),
+        is_cross_repository: false,
     }
 }
 

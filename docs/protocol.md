@@ -48,7 +48,7 @@ engine from the same checkout (`./install.sh`).
 | `initialize` | `{ "protocolVersion": 5, "client": "..." }` (the server reads neither) | `{ "protocolVersion": 5, "version": "0.5.0" }` |
 | `snapshot` | none | `SessionView` |
 | `sync` | none | `SessionView`; error `-32000` when GitHub fails, after a `syncFailed` event (announces `headMoved` before `synced` when `pr.headSha` changes) |
-| `push` | none | `PushResult`; pushes `HEAD` to `refs/heads/<headRef>` (stdio-only; refused over `JPR_SOCKET` with `-32600`); error `-32000` before the first sync, when local `HEAD` is behind or already at the remote head, or when `git push` fails |
+| `push` | none | `PushResult`; pushes `HEAD` to `refs/heads/<headRef>` (stdio-only; refused over `JPR_SOCKET` with `-32600`); error `-32000` before the first sync, when local `HEAD` is behind or already at the remote head, when a cross-repository (`pr.isCrossRepository`) pull request lacks explicit fork tracking or targets the base repository, or when `git push` fails |
 | `fileDiff` | `{ "path": "src/a.rs" }` | `FileDiffView`; error `-32000` for a file the pull request does not change, a side over 4 MiB, or before the first sync |
 | `stream` | `{ "mode": "unified" \| "split" }` | `StreamView`; error `-32000` before the first sync |
 | `setViewed` | `{ "path": "src/a.rs", "viewed": true }` | `SessionView`, after a `viewedChanged` event |
@@ -136,16 +136,17 @@ follows every `setViewed` and every retry that got a queued mark through.
 `suggestFromEdit`, `submitReview`, `agentReply`, `promoteThread`, `prepassWrite`
 when creating threads, `confirmSend` when thread states change, and
 `updateLocalAnchors` when any local anchor changes), every background retry
-that got a queued comment operation through, and worktree file changes or head
-moves that re-anchor local threads. `filesChanged` follows worktree
-file-watcher ticks when tracked files change on disk; `worktreeStatusChanged`
-follows worktree watcher ticks when `worktreeStatus` changes without tracked PR
-file digest changes (for example after `git commit` or `git reset`).
-`agentRound` follows `confirmSend`. A sync whose pull fails after it got a
-queued mark through announces `viewedChanged` before `syncFailed`; a sync that
-succeeds announces the shorter queue in `synced`. An event is written before
-the response to the request that caused it, and every event is written before
-the `shutdown` response.
+that got a queued comment operation through, and worktree file-watcher ticks
+(`filesChanged`) that re-anchor local threads (local thread re-anchoring during
+a head move is carried by `headMoved` and `synced`). `filesChanged` follows
+worktree file-watcher ticks when tracked files change on disk;
+`worktreeStatusChanged` follows worktree watcher ticks when `worktreeStatus`
+changes without tracked PR file digest changes (for example after `git commit`
+or `git reset`). `agentRound` follows `confirmSend`. A sync whose pull fails
+after it got a queued mark through announces `viewedChanged` before
+`syncFailed`; a sync that succeeds announces the shorter queue in `synced`. An
+event is written before the response to the request that caused it, and every
+event is written before the `shutdown` response.
 
 ## Types
 
@@ -155,7 +156,8 @@ the `shutdown` response.
 {
   "pr": { "owner": "octo", "repo": "widgets", "number": 7, "title": "Fix the widget",
           "url": "https://github.com/octo/widgets/pull/7", "nodeId": "PR_7", "author": "alice",
-          "headRef": "fix/widget", "headSha": "abc123", "baseRef": "main", "baseSha": "base000" },
+          "headRef": "fix/widget", "headSha": "abc123", "baseRef": "main", "baseSha": "base000",
+          "isCrossRepository": false },
   "files": [ { "path": "src/a.rs", "additions": 12, "deletions": 3, "viewed": "VIEWED", "threads": 2, "isModified": false, "localThreads": 1 } ],
   "tree": [ { "depth": 0, "name": "src", "file": null }, { "depth": 1, "name": "a.rs", "file": 0 } ],
   "viewedCount": 1,
@@ -169,7 +171,8 @@ the `shutdown` response.
 }
 ```
 
-- `pr` is `null` until the first successful sync.
+- `pr` is `null` until the first successful sync; `pr.isCrossRepository` is
+  `true` when the pull request's head branch lives in a fork repository.
 - Each `FileRow` in `files` carries `viewed` (`VIEWED`, `UNVIEWED`, or
   `DISMISSED` when viewed and later changed on GitHub), `threads` (all GitHub
   and local threads anchored to `path`), `isModified` (`true` when `path` has
@@ -512,6 +515,7 @@ result or an event changes shape, and update this document in the same commit.
   `PrepassFinding`, and `LocalAnchorUpdate` types.
 - **Version 5** added `push`, `prepareConflictResolution`, `"conflict"` in
   `AgentRoundKind` (`confirmSend`, `AgentRound`, `AgentDispatch`),
-  `worktreeStatus` (`WorktreeStatus`) in `SessionView`, `isModified` and
-  `localThreads` on `FileRow`, the `worktreeStatusChanged` and `headMoved`
-  (`HeadMoveOutcome`) events, and the `PushResult` type.
+  `pr.isCrossRepository` and `worktreeStatus` (`WorktreeStatus`) in
+  `SessionView`, `isModified` and `localThreads` on `FileRow`, the
+  `worktreeStatusChanged` and `headMoved` (`HeadMoveOutcome`) events, and the
+  `PushResult` type.

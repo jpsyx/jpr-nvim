@@ -70,23 +70,40 @@ local function prompt_conflict_resolution(session, raw_paths, fallback_detail)
     end)
 end
 
+local function refresh_worktree_views_after_head_move(session, did_commits_change, prev_stream_request_id)
+    if session.is_read_only or not (session.view and session.view.pr) then
+        return
+    end
+    if not did_commits_change then
+        require("jpr.views.diff").redraw_all(session)
+    end
+    if (session.stream and session.stream.request_id) == prev_stream_request_id then
+        require("jpr.views.stream").refresh(session, true)
+    end
+end
+
 local function handle_head_moved(session, params, show_session)
+    local previous_view = session.view
+    local prev_stream_request_id = session.stream and session.stream.request_id
+    local did_commits_change = type(params.view) == "table"
+        and require("jpr.session").have_commits_changed(previous_view, params.view)
     pcall(vim.cmd, "silent! checktime")
     if type(params.view) == "table" then
         show_session(session, params.view)
     end
+    local outcome = params.outcome
+    if outcome == "fastForwarded" or outcome == "restoreConflict" then
+        refresh_worktree_views_after_head_move(session, did_commits_change, prev_stream_request_id)
+    end
     local short_head = crash.build_clean_text_from_raw(params.headSha):sub(1, 7)
     local short_previous = crash.build_clean_text_from_raw(params.previousSha):sub(1, 7)
     local detail = crash.build_clean_text_from_raw(params.message)
-    local outcome = params.outcome
     if outcome == "fastForwarded" then
         local transition = (short_previous ~= "" and short_head ~= "") and (short_previous .. " -> " .. short_head) or short_head
         local suffix = transition ~= "" and (" (" .. transition .. ")") or ""
         jpr().info(("PR #%d fast-forwarded%s"):format(session.number, suffix))
-    elseif outcome == "aheadOfTarget" then
-        if detail ~= "" then
-            jpr().info(detail)
-        end
+    elseif outcome == "aheadOfTarget" and detail ~= "" then
+        jpr().info(detail)
     elseif outcome == "diverged" or outcome == "failed" then
         local target_label = short_head ~= "" and (" to " .. short_head) or ""
         local fallback = ("PR #%d head moved%s (%s)"):format(session.number, target_label, tostring(outcome))

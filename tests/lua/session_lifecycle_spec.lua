@@ -242,6 +242,72 @@ local function test_read_only_view_guards(died_tab, died, compose_buf)
     assert(find_notification("read-only mode", vim.log.levels.ERROR) ~= nil, "push_current reports read-only mode")
 end
 
+local function build_sample_popup_threads()
+    return {
+        {
+            threadId = "T1",
+            origin = "github",
+            state = "open",
+            outdated = false,
+            messages = {
+                {
+                    id = "M1",
+                    author = "reviewer",
+                    body = "check this",
+                    created = "2026-11-20T00:00:00Z",
+                    sync = "published",
+                    viewerDidAuthor = true,
+                    reactions = {},
+                },
+            },
+        },
+    }
+end
+
+local function assert_keys_blocked_in_read_only(keys, extra_check)
+    local original_confirm, original_select = vim.fn.confirm, vim.ui.select
+    local prompt_calls = 0
+    vim.fn.confirm = function()
+        prompt_calls = prompt_calls + 1
+        return 1
+    end
+    vim.ui.select = function(_, _, on_choice)
+        prompt_calls = prompt_calls + 1
+        on_choice("THUMBS_UP")
+    end
+    for _, key in ipairs(keys) do
+        clear_notifications()
+        vim.api.nvim_feedkeys(key, "xt", false)
+        assert(prompt_calls == 0, ("key %s must not open confirm/select in read-only mode"):format(key))
+        assert(find_notification("read-only mode", vim.log.levels.ERROR) ~= nil, ("key %s must report read-only mode"):format(key))
+        if extra_check then
+            extra_check(key)
+        end
+    end
+    vim.fn.confirm, vim.ui.select = original_confirm, original_select
+end
+
+local function test_read_only_popup_and_conversation(live)
+    local popup = require("jpr.comments.popup")
+    popup.open(live, build_sample_popup_threads())
+    local popup_win = live.popup and live.popup.win
+    assert(popup_win and vim.api.nvim_win_is_valid(popup_win), "popup opens in read-only mode")
+    vim.api.nvim_set_current_win(popup_win)
+    vim.api.nvim_win_set_cursor(popup_win, { live.popup.layout.message_ranges[1].first, 0 })
+    assert_keys_blocked_in_read_only({ "r", "e", "d", "+", "R", "X", "p", "s" }, function(key)
+        assert(live.popup ~= nil and vim.api.nvim_win_is_valid(popup_win), ("popup key %s must not close popup"):format(key))
+    end)
+    vim.api.nvim_feedkeys("q", "xt", false)
+    assert(live.popup == nil, "q still closes popup in read-only mode")
+
+    local conversation = require("jpr.views.conversation")
+    conversation.show(live)
+    local first_range = live.conversation.layout.message_ranges[1]
+    first_range.message.viewerDidAuthor = true
+    vim.api.nvim_win_set_cursor(0, { first_range.first, 0 })
+    assert_keys_blocked_in_read_only({ "c", "r", "e", "d", "p", "s", "+", "X" })
+end
+
 local function test_failed_restart_handshake()
     local restart_log_path = vim.fn.stdpath("state") .. "/jpr/engine-pr-16.log"
     vim.fn.delete(restart_log_path)
@@ -249,6 +315,10 @@ local function test_failed_restart_handshake()
     assert(vim.wait(3000, function()
         return live.view.pr ~= nil and live.stream ~= nil and live.stream.layout ~= nil
     end), "PR 16 synced and drew initial stream")
+    require("jpr.views.conversation").show(live)
+    assert(vim.wait(3000, function()
+        return live.conversation ~= nil and live.conversation.layout ~= nil
+    end), "PR 16 cached conversation before crash")
     clear_notifications()
     vim.env.FAKE_ENGINE_VERSION = "0.1.0"
     vim.fn.jobstop(live.client.job)
@@ -262,6 +332,7 @@ local function test_failed_restart_handshake()
     assert(#error_notifications == 1, "failed restart handshake emits single ERROR: " .. vim.inspect(notifications))
     assert(error_notifications[1].message:find("version mismatch", 1, true) ~= nil, "combined ERROR includes handshake reason")
     assert(error_notifications[1].message:find("engine-pr-16.log", 1, true) ~= nil, "combined ERROR includes log path")
+    test_read_only_popup_and_conversation(live)
     session.close_current()
     vim.fn.delete(restart_log_path)
 end

@@ -92,6 +92,7 @@ struct StoredPullRequest {
     head_sha: String,
     base_ref: String,
     base_sha: String,
+    is_cross_repository: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -249,6 +250,7 @@ impl From<PullRequest> for StoredPullRequest {
             head_sha,
             base_ref,
             base_sha,
+            is_cross_repository,
         } = pr;
         Self {
             owner,
@@ -262,6 +264,7 @@ impl From<PullRequest> for StoredPullRequest {
             head_sha,
             base_ref,
             base_sha,
+            is_cross_repository,
         }
     }
 }
@@ -280,6 +283,7 @@ impl From<StoredPullRequest> for PullRequest {
             head_sha,
             base_ref,
             base_sha,
+            is_cross_repository,
         } = pr;
         Self {
             owner,
@@ -293,6 +297,7 @@ impl From<StoredPullRequest> for PullRequest {
             head_sha,
             base_ref,
             base_sha,
+            is_cross_repository,
         }
     }
 }

@@ -166,8 +166,8 @@ impl Workspace for GitWorkspace {
         crate::status::read_worktree_status(&self.dir, remote_head_sha)
     }
 
-    fn push_head(&self, head_ref: &str) -> Result<String> {
-        crate::push::push_head_to_pr_branch(&self.dir, head_ref, self.fetch_timeout)
+    fn push_head(&self, pr: &review_core::ports::PullRequest) -> Result<String> {
+        crate::push::push_head_to_pr_branch(&self.dir, pr, self.fetch_timeout)
     }
 
     fn fast_forward_to(&self, target_sha: &str) -> Result<FastForwardOutcome> {

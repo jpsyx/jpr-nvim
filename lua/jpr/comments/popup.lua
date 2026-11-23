@@ -50,6 +50,9 @@ function M.pick_reaction(on_select)
 end
 
 local function toggle_popup_reaction(session)
+    if session.is_read_only then
+        return require("jpr.session").report_read_only(session)
+    end
     local entry, popup = current_entry(session)
     if not entry then
         return
@@ -76,6 +79,9 @@ local function toggle_popup_reaction(session)
 end
 
 local function toggle_resolved(session)
+    if session.is_read_only then
+        return require("jpr.session").report_read_only(session)
+    end
     local entry, popup = current_entry(session)
     if not entry then
         return
@@ -95,6 +101,9 @@ local function toggle_resolved(session)
 end
 
 local function delete_current_message(session)
+    if session.is_read_only then
+        return require("jpr.session").report_read_only(session)
+    end
     local entry, popup = current_entry(session)
     if not entry then
         return
@@ -114,6 +123,9 @@ local function delete_current_message(session)
 end
 
 local function retry_current_message(session)
+    if session.is_read_only then
+        return require("jpr.session").report_read_only(session)
+    end
     local entry, popup = current_entry(session)
     if not entry or entry.message.sync ~= "failed" then
         return require("jpr").info("this message is not in a failed state")
@@ -127,6 +139,9 @@ local function retry_current_message(session)
 end
 
 local function open_reply(session)
+    if session.is_read_only then
+        return require("jpr.session").report_read_only(session)
+    end
     local entry = current_entry(session)
     if entry then
         M.close(session)
@@ -135,6 +150,9 @@ local function open_reply(session)
 end
 
 local function open_edit(session)
+    if session.is_read_only then
+        return require("jpr.session").report_read_only(session)
+    end
     local entry = current_entry(session)
     if not entry then
         return
@@ -147,6 +165,9 @@ local function open_edit(session)
 end
 
 local function promote_current_thread(session)
+    if session.is_read_only then
+        return require("jpr.session").report_read_only(session)
+    end
     local entry = current_entry(session)
     if not entry then
         return
@@ -162,6 +183,9 @@ local function promote_current_thread(session)
 end
 
 local function send_current_thread(session)
+    if session.is_read_only then
+        return require("jpr.session").report_read_only(session)
+    end
     local entry = current_entry(session)
     if not entry then
         return
