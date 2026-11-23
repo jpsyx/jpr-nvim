@@ -6,6 +6,8 @@ pub mod checkout;
 pub mod guide;
 /// `prepass-write`: write pre-pass findings as answered local threads.
 pub mod prepass_write;
+/// `prs`: list open pull requests as JSON.
+pub mod prs;
 /// `reply`: append an agent reply to a local thread.
 pub mod reply;
 /// `serve`: one pull request's review session, as JSON-RPC on stdin/stdout.
@@ -40,6 +42,7 @@ pub fn run(cli: &Cli, theme: Theme) -> Result<()> {
             theme,
         ),
         Command::Guide => guide::run(),
+        Command::Prs { repo, limit } => prs::run(repo.as_deref(), *limit, theme),
         Command::Serve { pr, repo, poll } => serve::run(*pr, repo, *poll),
         Command::StatePath { pr, repo } => {
             let number = pr_number(*pr, theme)?;
@@ -90,6 +93,7 @@ fn run_agent_command(command: &Command, theme: Theme) -> Result<()> {
         }
         Command::Checkout { .. }
         | Command::Guide
+        | Command::Prs { .. }
         | Command::Serve { .. }
         | Command::StatePath { .. } => unreachable!("handled by commands::run"),
     }

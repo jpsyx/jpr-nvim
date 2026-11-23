@@ -36,6 +36,24 @@ pub struct PullRequest {
     pub is_cross_repository: bool,
 }
 
+/// Compact metadata for one open pull request, used by interactive pickers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PullRequestSummary {
+    /// The pull request number within its repository.
+    pub number: u64,
+    /// The title, as the author wrote it.
+    pub title: String,
+    /// The author's login (or `"ghost"` when the account was deleted).
+    pub author: String,
+    /// The head branch name, e.g. `feat/oauth`.
+    pub head_ref: String,
+    /// Whether the pull request is marked as a draft.
+    pub is_draft: bool,
+    /// ISO-8601 timestamp of the latest pull request update.
+    pub updated_at: String,
+}
+
 /// Whether the reviewer has viewed a file, as the forge tracks it. The file
 /// list marks each file with it, and the session counts the viewed files.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -135,5 +153,26 @@ mod tests {
             .remove("isCrossRepository");
         let decoded: PullRequest = serde_json::from_value(without_flag).unwrap();
         assert!(!decoded.is_cross_repository);
+    }
+
+    #[test]
+    fn pull_request_summary_serializes_with_camel_case_keys() {
+        let summary = PullRequestSummary {
+            number: 42,
+            title: "Add OAuth flow".into(),
+            author: "alice".into(),
+            head_ref: "feat/oauth".into(),
+            is_draft: true,
+            updated_at: "2026-11-23T15:00:00Z".into(),
+        };
+        let json = serde_json::to_value(&summary).unwrap();
+        assert_eq!(json["number"], 42);
+        assert_eq!(json["title"], "Add OAuth flow");
+        assert_eq!(json["author"], "alice");
+        assert_eq!(json["headRef"], "feat/oauth");
+        assert_eq!(json["isDraft"], true);
+        assert_eq!(json["updatedAt"], "2026-11-23T15:00:00Z");
+        let decoded: PullRequestSummary = serde_json::from_value(json).unwrap();
+        assert_eq!(decoded, summary);
     }
 }

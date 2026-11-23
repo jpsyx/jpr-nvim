@@ -13,7 +13,8 @@ use review_core::ports::{
     CreatedReviewThread, Forge, ForgeSnapshot, ForgeWriteError, ReplyRequest,
 };
 use review_model::{
-    Anchor, AnchorKind, Message, PullRequest, Reaction, ReactionContent, ReviewEvent, Thread,
+    Anchor, AnchorKind, Message, PullRequest, PullRequestSummary, Reaction, ReactionContent,
+    ReviewEvent, Thread,
 };
 use serde_json::{Value, json};
 
@@ -54,6 +55,33 @@ impl GhForge {
             args.push(repo.clone());
         }
         args
+    }
+
+    /// The `gh pr list` arguments for listing open pull requests.
+    #[must_use]
+    pub fn list_args(&self, limit: u32) -> Vec<String> {
+        let mut args = vec![
+            "pr".to_owned(),
+            "list".to_owned(),
+            "--state".to_owned(),
+            "open".to_owned(),
+            "--limit".to_owned(),
+            limit.to_string(),
+            "--json".to_owned(),
+            pr::PR_LIST_FIELDS.to_owned(),
+        ];
+        if let Some(repo) = &self.repo {
+            args.push("--repo".to_owned());
+            args.push(repo.clone());
+        }
+        args
+    }
+
+    /// Lists up to `limit` open pull requests in the inferred or pinned repository.
+    pub fn open_pull_requests(&self, limit: u32) -> Result<Vec<PullRequestSummary>> {
+        let args = self.list_args(limit);
+        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        pr::parse_pr_list(&self.gh.run(&arg_refs, None)?)
     }
 
     fn graphql(&self, query: &str, variables: &Value) -> Result<Value> {
@@ -222,6 +250,40 @@ mod tests {
         assert_eq!(
             local.view_args(7),
             ["pr", "view", "7", "--json", pr::PR_FIELDS]
+        );
+    }
+
+    #[test]
+    fn list_args_includes_state_limit_fields_and_optional_repo() {
+        let without_repo = GhForge::new(PathBuf::from("."), None);
+        assert_eq!(
+            without_repo.list_args(50),
+            vec![
+                "pr",
+                "list",
+                "--state",
+                "open",
+                "--limit",
+                "50",
+                "--json",
+                pr::PR_LIST_FIELDS,
+            ]
+        );
+        let with_repo = GhForge::new(PathBuf::from("."), Some("octo/widgets".into()));
+        assert_eq!(
+            with_repo.list_args(20),
+            vec![
+                "pr",
+                "list",
+                "--state",
+                "open",
+                "--limit",
+                "20",
+                "--json",
+                pr::PR_LIST_FIELDS,
+                "--repo",
+                "octo/widgets",
+            ]
         );
     }
 }

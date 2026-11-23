@@ -82,6 +82,15 @@ pub enum Command {
         #[arg(long, value_name = "PATH")]
         socket: Option<PathBuf>,
     },
+    /// List open pull requests in the repository as a JSON array.
+    Prs {
+        /// The repository, as owner/name. Left out, inferred from the current directory.
+        #[arg(long, value_name = "OWNER/NAME")]
+        repo: Option<String>,
+        /// Maximum number of open pull requests to return.
+        #[arg(long, default_value_t = 50)]
+        limit: u32,
+    },
     /// Serve a pull request's review session as JSON-RPC on stdin and stdout.
     Serve {
         /// The pull request number.
@@ -243,6 +252,34 @@ mod tests {
                 pr: None,
                 repo: None,
                 socket: None,
+            }
+        );
+    }
+
+    #[test]
+    fn prs_uses_default_limit_and_optional_repo() {
+        let bare = Cli::try_parse_from(["jpr-review", "prs"]).unwrap();
+        assert_eq!(
+            bare.command,
+            Command::Prs {
+                repo: None,
+                limit: 50,
+            }
+        );
+        let filtered = Cli::try_parse_from([
+            "jpr-review",
+            "prs",
+            "--repo",
+            "octo/widgets",
+            "--limit",
+            "15",
+        ])
+        .unwrap();
+        assert_eq!(
+            filtered.command,
+            Command::Prs {
+                repo: Some("octo/widgets".into()),
+                limit: 15,
             }
         );
     }

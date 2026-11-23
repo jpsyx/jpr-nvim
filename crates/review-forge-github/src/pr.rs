@@ -1,11 +1,14 @@
-//! Reading `gh pr view`'s JSON into a pull request.
+//! Reading `gh pr view` and `gh pr list` JSON into pull request models.
 
 use anyhow::{Context, Result, anyhow, bail};
-use review_model::PullRequest;
+use review_model::{PullRequest, PullRequestSummary};
 use serde_json::Value;
 
 /// The fields `gh pr view --json` must report.
 pub const PR_FIELDS: &str = "number,title,url,id,headRefName,headRefOid,state,baseRefName,baseRefOid,author,isCrossRepository";
+
+/// The fields `gh pr list --json` must report for open PR summaries.
+pub const PR_LIST_FIELDS: &str = "number,title,author,headRefName,isDraft,updatedAt";
 
 /// The owner and repository in a pull request URL such as
 /// `https://github.com/octo/widgets/pull/7`.
@@ -58,6 +61,47 @@ pub fn parse_pr(stdout: &str) -> Result<PullRequest> {
         base_ref: text("/baseRefName")?,
         base_sha: text("/baseRefOid")?,
         is_cross_repository,
+    })
+}
+
+/// Parses `gh pr list --json PR_LIST_FIELDS` into compact pull request summaries.
+pub fn parse_pr_list(stdout: &str) -> Result<Vec<PullRequestSummary>> {
+    let items: Vec<Value> = serde_json::from_str(stdout).context("reading gh pr list output")?;
+    items.iter().map(parse_pr_summary).collect()
+}
+
+fn parse_pr_summary(value: &Value) -> Result<PullRequestSummary> {
+    let number = value["number"]
+        .as_u64()
+        .context("gh pr list item did not report /number")?;
+    let title = value["title"]
+        .as_str()
+        .map(str::to_owned)
+        .context("gh pr list item did not report /title")?;
+    let head_ref = value["headRefName"]
+        .as_str()
+        .map(str::to_owned)
+        .context("gh pr list item did not report /headRefName")?;
+    let is_draft = value["isDraft"]
+        .as_bool()
+        .context("gh pr list item did not report /isDraft")?;
+    let updated_at = value["updatedAt"]
+        .as_str()
+        .map(str::to_owned)
+        .context("gh pr list item did not report /updatedAt")?;
+    let author = value
+        .pointer("/author/login")
+        .and_then(Value::as_str)
+        .filter(|login| !login.is_empty())
+        .unwrap_or("ghost")
+        .to_owned();
+    Ok(PullRequestSummary {
+        number,
+        title,
+        author,
+        head_ref,
+        is_draft,
+        updated_at,
     })
 }
 
@@ -134,5 +178,32 @@ mod tests {
         );
         assert_eq!(owner_repo_from_url("not a url"), None);
         assert_eq!(owner_repo_from_url("https://github.com/octo"), None);
+    }
+
+    const LIST_JSON: &str = r#"[
+        {"number":42,"title":"Add OAuth","author":{"login":"alice"},"headRefName":"feat/oauth","isDraft":false,"updatedAt":"2026-11-23T15:04:05Z"},
+        {"number":43,"title":"WIP refactor","author":null,"headRefName":"chore/wip","isDraft":true,"updatedAt":"2026-11-22T10:00:00Z"}
+    ]"#;
+
+    #[test]
+    fn pr_list_fields_covers_every_key_read_by_parse_pr_list() {
+        let allowed_keys: std::collections::BTreeSet<&str> = PR_LIST_FIELDS.split(',').collect();
+        let mut parsed: Vec<Value> = serde_json::from_str(LIST_JSON).unwrap();
+        for item in &mut parsed {
+            item.as_object_mut()
+                .unwrap()
+                .retain(|key, _| allowed_keys.contains(key.as_str()));
+        }
+        let summaries = parse_pr_list(&serde_json::to_string(&parsed).unwrap()).unwrap();
+        assert_eq!(summaries.len(), 2);
+        assert_eq!(summaries[0].number, 42);
+        assert_eq!(summaries[0].author, "alice");
+        assert_eq!(summaries[1].author, "ghost");
+        assert!(summaries[1].is_draft);
+    }
+
+    #[test]
+    fn parses_empty_pr_list() {
+        assert_eq!(parse_pr_list("[]").unwrap(), Vec::new());
     }
 }
