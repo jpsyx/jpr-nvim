@@ -23,7 +23,9 @@ the Neovim plugin is a thin Lua frontend over its JSON-RPC protocol. See
 ```
 
 Load the plugin from the same checkout, so the Lua and the engine always come
-from one commit. With lazy.nvim:
+from one commit. `:Jpr open` checks both protocol and package versions during
+startup and stops with a prompt to rerun `./install.sh` if `jpr-review` and the
+plugin are out of sync. With lazy.nvim:
 
 ```lua
 {
@@ -63,6 +65,7 @@ from one commit. With lazy.nvim:
 | --- | --- |
 | `:Jpr open <n \| #n \| URL>` | Check the pull request out and open its review tab. A URL must be for the repository Neovim's directory is a checkout of |
 | `:Jpr sync` | Sync with GitHub now (it also syncs every minute) |
+| `:Jpr push` | Push committed `HEAD` to the pull request's remote branch and resync (never auto-commits dirty files) |
 | `:Jpr toggle` | Flip every diff between unified and split; the choice is remembered |
 | `:Jpr stream` | Show the stream of every change beside the panel |
 | `:[range]Jpr comment` | Open the compose float for a draft or local comment on the cursor line or visual range |
@@ -77,6 +80,12 @@ from one commit. With lazy.nvim:
 
 In the panel, `<CR>` opens the PR conversation view on the `Conversation` row
 or opens the file under the cursor from the worktree, and `v` toggles it viewed.
+The panel header prefixes review counts with `dirty · ↑N ↓M` when the worktree
+has uncommitted changes, `↑N ↓M` when ahead or behind its upstream branch, or
+`[read-only]` after engine recovery fallback. Changed file rows show `✎`
+(`JprModified`, linked to `Special`) before locally modified files and suffix
+thread counts as `[G]` (GitHub), `[LL]` (local, e.g. `[2L]`), or `[G · LL]`
+(both, e.g. `[2 · 1L]`).
 
 In the stream:
 
@@ -127,7 +136,52 @@ Inside the comment and review windows:
 
 All highlight groups link to standard Neovim groups with `default = true` so
 your colorscheme can override them. Local threads use `JprThreadLocal` (linked
-to `DiagnosticHint`).
+to `DiagnosticHint`), and locally modified panel entries use `JprModified`
+(linked to `Special`).
+
+## Statusline
+
+`require("jpr").statusline()` returns a compact summary of the current tab's
+review session (`PR #42 · dirty ↑1 ↓0 · 3/8 viewed · 2 drafts · 1 local`),
+omitting inactive segments and adding `[read-only]` or `sync!` when active. It
+reads in-memory state in O(1) without loading session modules until a review is
+opened and never spawns `git`, `gh`, or RPC calls.
+
+With Neovim's built-in `statusline`:
+
+```lua
+vim.o.statusline = "%f %m %= %{v:lua.require('jpr').statusline()} %l:%c"
+```
+
+With [lualine.nvim](https://github.com/nvim-lualine/lualine.nvim):
+
+```lua
+require("lualine").setup({
+  sections = {
+    lualine_x = {
+      function()
+        return require("jpr").statusline()
+      end,
+    },
+  },
+})
+```
+
+## Worktree sync and recovery
+
+- **Remote head updates**: When a sync sees the pull request's remote `headSha`
+  advance and the worktree is strictly behind, `jpr-review` stashes tracked and
+  untracked edits, fast-forwards with `--ff-only --no-overwrite-ignore`, and
+  re-applies the stash. Ahead, diverged, or mid-rebase/merge worktrees are left
+  untouched so local history is never rewritten. If re-applying the stash hits
+  conflicts, Neovim prompts between `Resolve myself` (opens the first conflicted
+  file) and `Ask agent to resolve` (dispatches a conflict round to `:Jpr agent`
+  while keeping the stash entry intact until clean).
+- **Crash recovery**: If `jpr-review serve` exits unexpectedly mid-review, the
+  plugin logs the exit code and stderr tail to
+  `stdpath("state")/jpr/engine-pr-<n>.log` (`0600`) and restarts the engine once
+  automatically. A second crash switches the tab into `[read-only]` mode while
+  preserving open buffers and unsaved compose drafts.
 
 ## Agent CLI
 

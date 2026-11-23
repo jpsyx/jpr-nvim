@@ -39,13 +39,13 @@ read models the engine returns.
 
 | Crate | Responsibility |
 | --- | --- |
-| `review-model` | Domain types (pull requests, changed files, threads, local/GitHub origin, anchors, messages, reactions, review events, mention candidates, submit previews, agent rounds/profiles/plans) and read models (`SessionView` with its file tree, `FileDiffView`, `StreamView`, `SuggestedEdit`, `ThreadPreview`, `Event`). Pure data. |
+| `review-model` | Domain types (pull requests, changed files, threads, local/GitHub origin, anchors, messages, reactions, review events, mention candidates, submit previews, agent rounds/profiles/plans) and read models (`SessionView` with its file tree and `WorktreeStatus`, `PushResult`, `HeadMoveOutcome`, `FileDiffView`, `StreamView`, `SuggestedEdit`, `ThreadPreview`, `Event`). Pure data. |
 | `review-diff` | Line diffs (Histogram) and word diffs (Myers) between two texts through `similar`, suggestion extraction from local edits (`suggest.rs`), and the builders of `FileDiffView` and `StreamView` (with attached `ThreadPreview`s). Pure functions. |
 | `review-core` | The ports (`Forge`, `ReviewStore`, `Workspace`, `Clock`), bundled as one `Ports` value a session opens on, the `ReviewSession` facade (one module per use case under `session/`), pure viewed, comment, re-anchoring, and agent prompt/guide rules, and the presenter that builds `SessionView`. The `fakes` feature adds in-memory fakes, `create_fake_ports`, and the port contract tests. |
 | `review-store-fs` | The `ReviewStore` adapter: one directory per PR, four versioned JSON files written atomically (`session.json`, `viewed.json`, `github.json`, `local.json`) plus `rounds.jsonl` and `local.lock` (see "State on disk"). |
 | `review-forge-github` | The `Forge` adapter: `gh pr view`, `gh api graphql` (queries and mutations for viewed marks, pending reviews, review threads, PR comments, edits, deletions, resolution, reactions, and review submission), and `gh api` REST immediate thread replies with pending-review GraphQL fallback, with a 30 second timeout per call. Adapted from dif. |
-| `review-workspace-git` | Checks a PR out into a worktree: the default (`git worktree add` plus `gh pr checkout`) or a custom command that prints the path. `GitWorkspace` is the `Workspace` adapter, opened at the worktree's root (`git rev-parse --show-toplevel`) so paths stay root-relative even when `serve` starts in a subdirectory: the merge base, a file at a commit (`git cat-file --batch`), a file on disk, renames (`git diff-index`), and changed worktree files since base/commit (`git diff-index` + `git status`). A missing base commit is fetched with a 90 second deadline. |
-| `review-rpc` | The JSON-RPC protocol (`PROTOCOL_VERSION = 4`), stdio server, allowlisted Unix domain socket listener, and background poller that syncs, retries refused viewed marks and queued comment ops, and watches worktree files for re-anchoring and live refresh. |
+| `review-workspace-git` | Checks a PR out into a worktree: the default (`git worktree add` plus `gh pr checkout`) or a custom command that prints the path. `GitWorkspace` is the `Workspace` adapter, opened at the worktree's root (`git rev-parse --show-toplevel`) so paths stay root-relative even when `serve` starts in a subdirectory: the merge base, `HEAD` and unlocked worktree dirty/ahead/behind status, a file at a commit (`git cat-file --batch`), a file on disk, renames (`git diff-index`), changed worktree files since base/commit, branch-safe `HEAD:refs/heads/<head_ref>` push, and auto-stash `--ff-only` fast-forward. Missing commits and pushes run unattended with a 90 second deadline. |
+| `review-rpc` | The JSON-RPC protocol (`PROTOCOL_VERSION = 5`), stdio server, allowlisted Unix domain socket listener, and background poller that syncs, retries refused viewed marks and queued comment ops, and watches worktree files and git status for re-anchoring and live refresh. |
 
 ### Inside the crates
 
@@ -55,8 +55,8 @@ The modules worth knowing before changing a crate. Test fixtures
 | Module | Responsibility |
 | --- | --- |
 | `review-model` `pr.rs`, `thread.rs`, `review.rs` | The pull request (with its base and head commits), changed files with viewed state, review threads (`Origin`, `Anchor`, `Message`, `MessageSync`, `ThreadPreview`, `promotedTo`), and review metadata (`Reaction`, `ReactionContent`, `ReviewEvent`, `MentionCandidate`, `SubmitPreview`) |
-| `review-model` `agent.rs` | Local agent types: `AgentThreadState` (`unsent`, `sent`, `answered`), `AgentKind` (`claude`, `codex`), `AgentProfile`, `AgentLaunchPlan`, `AgentRoundKind`, `AgentRound`, `AgentDispatch`, `PrepassFinding`, and `LocalAnchorUpdate` |
-| `review-model` `view.rs` | `SessionView` (files, file tree, viewed/thread/draft/conversation/local-unsent/queue counts, sync state) and the `Event`s (`Synced`, `SyncFailed`, `ViewedChanged`, `ThreadsChanged`, `FilesChanged`, `AgentRound`) |
+| `review-model` `agent.rs` | Local agent types: `AgentThreadState` (`unsent`, `sent`, `answered`), `AgentKind` (`claude`, `codex`), `AgentProfile`, `AgentLaunchPlan`, `AgentRoundKind` (`send`, `prepass`, `conflict`), `AgentRound`, `AgentDispatch`, `PrepassFinding`, and `LocalAnchorUpdate` |
+| `review-model` `view.rs` | `SessionView` (`FileRow` with `isModified` and `localThreads`, file tree, viewed/thread/draft/conversation/local-unsent/queue counts, sync state, `WorktreeStatus`), `PushResult`, `HeadMoveOutcome`, and the `Event`s (`Synced`, `SyncFailed`, `ViewedChanged`, `ThreadsChanged`, `FilesChanged`, `AgentRound`, `WorktreeStatusChanged`, `HeadMoved`) |
 | `review-model` `diff.rs` | The diff read models: `FileDiffView` (with `threads`), `StreamView` (with `StreamRow::Thread` and per-line `threads`), `SuggestedEdit`, and `ViewMode` |
 | `review-diff` `text.rs` | `FileText`: one side of a diff as missing, binary (a NUL in the first 8000 bytes, as git decides) or text split into lines without their endings |
 | `review-diff` `lines.rs` | The line diff as blocks of equal and changed lines, with a 2 second deadline, and the pairing of a changed block's lines for word highlights |
@@ -64,36 +64,40 @@ The modules worth knowing before changing a crate. Test fixtures
 | `review-diff` `overlay.rs` | `create_file_diff_view_from_texts` and `create_file_diff_view_with_threads`: added lines, removed blocks above them, and `ThreadPreview`s placed at `display_line` |
 | `review-diff` `stream.rs` | `create_stream_view_from_inputs`: each file's header, unplaced/file `StreamRow::Thread` banners, then hunks with 3 lines of context (and line-attached `ThreadPreview`s) or a note, as unified or split rows |
 | `review-diff` `suggest.rs` | `create_suggestion_from_edit`: diffs local edits around the cursor against `head_sha` to build a fenced GitHub `suggestion` block and `reverted_text` for only that hunk |
-| `review-core` `ports.rs` | The port traits (`Forge`, `Workspace`, `ReviewStore`, `Clock`), `QueuedCommentOp`, `ForgeWriteError`, and what the store keeps (`SessionRecord` with socket/agent fields, `SyncRegistry`, `LocalStoreState`, `StoreSnapshot`) |
-| `review-core` `session/mod.rs` | `ReviewSession`: opening on `Ports`, the state the use cases share, and the event channel |
-| `review-core` `session/sync.rs` | `sync`: resend queued viewed marks, pull, reconcile concurrent edits and unflushed threads, replay queued comment ops, save, announce |
-| `review-core` `session/diffs.rs` | `file_diff` and `stream`: the two sides of each diff, the base cache (merge base, renames and base texts, per base commit) and the 4 MiB size limit |
+| `review-core` `ports.rs` | The port traits (`Forge`, `Workspace`, `ReviewStore`, `Clock`), `FastForwardOutcome`, `QueuedCommentOp`, `ForgeWriteError`, and what the store keeps (`SessionRecord` with socket/agent fields, `SyncRegistry`, `LocalStoreState`, `StoreSnapshot`) |
+| `review-core` `session/mod.rs` | `ReviewSession`: opening on `Ports`, the state the use cases share (`pushed_head`, `last_worktree_status`, `pending_head_move_from`), and the event channel |
+| `review-core` `session/sync.rs` | `sync`: resend queued viewed marks, pull, reconcile concurrent edits and unflushed threads, replay queued comment ops, save, fast-forward and re-anchor non-conflicted local threads when `pr.head_sha` moves (`HeadMoved` before `Synced`, retaining `pending_head_move_from` to self-heal failed fast-forwards or saves on the next sync), and announce |
+| `review-core` `session/push.rs` | `push`: ahead/behind/dirty guards, pushing `HEAD` to `head_ref`, `PushedHead` tracking so GitHub `headRefOid` propagation lag or post-push sync failure does not report spurious `ahead` commits, and returning `PushResult` |
+| `review-core` `session/diffs.rs` | `file_diff` and `stream`: the two sides of each diff, `BaseCache` keyed on `(base_sha, head_sha)` (merge base, renames, and base texts invalidated whenever `base_sha` or checked-out `HEAD` moves), and the 4 MiB size limit |
 | `review-core` `session/viewed.rs` | `set_viewed` and `flush_queued`: a mark changes at once, queued marks and comment ops are flushed between syncs |
 | `review-core` `session/comments.rs` (with `session/comments/` `helpers.rs`, `queue/mod.rs`, `queue/prune.rs`, `reconcile.rs`, `replay.rs`) | GitHub comment creation, replies, edits, deletions, resolution, reactions, `retry_message`, optimistic `tmp-*` IDs, FIFO queue replay, ID remapping (`id_map`), and `threadsChanged` announcements |
 | `review-core` `session/local.rs` | Local-only threads (`loc-*`): creation (`origin = local`), local replies, edits, deletions, resolution, reactions, `agent_reply` (marks thread `answered` and enforces non-local refusal), and `promote_thread` (creates GitHub comment with snapshot stripped and links `promotedTo`) |
-| `review-core` `session/agent_loop.rs` | `prepare_agent_launch`, `prepare_send`, `confirm_send`, `prepare_prepass`, and `prepass_write` (round numbering, `rounds.jsonl` logging, rollback on store failure) |
-| `review-core` `session/worktree_watch.rs` | `update_local_anchors` (from editor extmarks) and `poll_worktree_files` (file digest change detection, `FilesChanged` emission, and automatic local thread re-anchoring) |
+| `review-core` `session/agent_loop.rs` | `prepare_agent_launch`, `prepare_send`, `confirm_send` (`send`, `prepass`, and `conflict`), `prepare_prepass`, `prepare_conflict_resolution`, and `prepass_write` (round numbering, `rounds.jsonl` logging, rollback on store failure) |
+| `review-core` `session/worktree_watch.rs` | `update_local_anchors` (from editor extmarks) and `poll_worktree_files` (file digest change detection, `FilesChanged` emission, automatic local thread re-anchoring, and `WorktreeStatusChanged` emission when git dirty/ahead/behind status changes) |
 | `review-core` `session/submit.rs` | `anchored_lines`, `suggest_from_edit`, `submit_preview`, and `submit_review` (blocking self-approval and queued/failed comments) |
 | `review-core` `comments.rs` | Pure comment transitions: `remap_queued_ops`, `record_agreed_bodies`, `reconcile_concurrent_edits`, `merge_unflushed_threads`, `toggle_reaction_in_list`, `create_submit_preview_from_threads`, `count_code_threads` |
 | `review-core` `reanchor.rs` | Pure local anchor utilities: `extract_snapshot_from_text`, `reanchor_thread_in_text`, `normalize_line_bounds`, `apply_anchor_update`, `validate_safe_relative_path`, `normalize_prepass_anchor` |
-| `review-core` `agent.rs` | Pure agent helpers: `is_thread_dispatchable`, `select_dispatchable_threads`, `build_send_prompt_from_threads`, `build_prepass_prompt_from_pr`, deterministic RFC 4122 v4 UUID generation, `AgentKind`/`AgentProfile` helpers |
+| `review-core` `agent.rs` | Pure agent helpers: `is_thread_dispatchable`, `select_dispatchable_threads`, `build_send_prompt_from_threads`, `build_prepass_prompt_from_pr`, `build_conflict_prompt_from_paths`, deterministic RFC 4122 v4 UUID generation, `AgentKind`/`AgentProfile` helpers |
 | `review-core` `guide.rs` | `build_agent_guide`: the agent contract printed by `jpr-review guide` |
 | `review-core` `viewed.rs` | Pure viewed rules: what a mark means, a queued mark winning over a pull or a stale save, and dropping marks for files no longer changed |
 | `review-core` `tree.rs` | Pure: the changed paths as `TreeRow`s, directories first, a directory holding only one directory joined to it |
-| `review-core` `presenter.rs` | `session_view`: the `SessionView` (including `local_unsent_count`) every frontend draws |
+| `review-core` `presenter.rs` | `session_view`: the `SessionView` (including `is_modified` and `local_threads` per file, `local_unsent_count`, and `worktree_status`) every frontend draws |
 | `review-core` `fakes.rs` (with `fakes/workspace.rs`, `fakes/comments.rs`), `contract.rs` | The `fakes` feature: in-memory fakes of every port, `create_fake_ports`, and the contract every `ReviewStore` adapter passes |
 | `review-store-fs` `format.rs`, `atomic.rs`, `lock.rs`, `paths.rs` | The versioned on-disk shapes (`session.json` v3 with v1/v2 compat, `viewed.json` v1, `github.json` v2 with v1 compat, `local.json` v1), append-only `rounds.jsonl`, advisory exclusive `local.lock` (`mutate_local_locked`), crash-safe replaces, and where a pull request's state lives |
 | `review-forge-github` `gh.rs`, `pr.rs`, `graphql.rs`, `mutations.rs` (with `mutations/documents.rs`) | Running `gh` with a timeout, reading `gh pr view`, GraphQL queries/mutations (threads, PR comments, pending reviews, mentions, reactions, review submission), REST immediate replies with 422 GraphQL fallback, and transient vs rejected error classification |
 | `review-workspace-git` `checkout.rs`, `default_checkout.rs`, `custom.rs`, `repo.rs` | Checking a pull request out: the default worktree, a custom command, and finding the main checkout |
-| `review-workspace-git` `workspace.rs` | `GitWorkspace`, the `Workspace` adapter (including `list_changed_files_since` via unlocked `git diff-index` and `git status --porcelain=v1 -z`) |
+| `review-workspace-git` `workspace.rs` | `GitWorkspace`, the `Workspace` adapter (`merge_base`, `head_commit`, `file_at`, `file_on_disk`, `renames`, `list_changed_files_since`, `worktree_status`, `push_head`, and `fast_forward_to`) |
+| `review-workspace-git` `status.rs` | Unlocked (`GIT_OPTIONAL_LOCKS=0`) `read_head_commit` and `read_worktree_status` (`git status --porcelain=v1 -z --untracked-files=all` plus `git rev-list --left-right --count` against the remote PR head or `@{upstream}`) |
+| `review-workspace-git` `push.rs` | Branch-safe `push_head_to_pr_branch`: validates `head_ref`, resolves `branch.<local>.pushRemote`/`remote` (or `origin`), rejects mismatched `branch.<local>.merge` targets, and pushes `HEAD:refs/heads/<head_ref>` unattended |
+| `review-workspace-git` `fast_forward/mod.rs`, `fast_forward/stash.rs` | `fast_forward_worktree`: ancestry and active git sequencer/rebase/merge/bisect checks, nonce-pinned auto-stash (`git stash push --include-untracked` matched by parent SHA and `[pid-seq]` marker), `git merge --ff-only --no-overwrite-ignore`, and SHA-pinned `git stash apply <stash_sha>` restore with conflict/untracked-collision detection |
 | `review-workspace-git` `worktree_path.rs` | Reading a file the pull request names without leaving the worktree |
-| `review-workspace-git` `git_output.rs` | Pure guards for what reaches git (commit ids, batch requests) and readers of its output (`cat-file --batch`, renames) |
-| `review-workspace-git` `process.rs` | Running git, gh and custom commands, optionally with input on stdin, with git's repository variables cleared |
-| `review-workspace-git` `unattended.rs` | Running a command nobody watches (the base fetch): no prompts, a deadline, a process group when there is a terminal, and a bounded wait for its output |
-| `review-rpc` `protocol.rs` | The wire format and the protocol version (`PROTOCOL_VERSION = 4`) |
-| `review-rpc` `params.rs` | Reading request params (`path`, `viewed`, `mode`, `anchor`, `origin`, `content`, `agent`, `round`, `findings`, `updates`, etc.); a missing or mistyped one is an invalid-params error |
+| `review-workspace-git` `git_output.rs` | Pure guards for what reaches git (commit ids, batch requests) and readers of its output (`cat-file --batch`, renames, NUL-delimited porcelain/diff paths) |
+| `review-workspace-git` `process.rs` | Running git (`run`, unlocked `run_bytes_unlocked`), gh and custom commands, optionally with input on stdin, with git's repository variables cleared |
+| `review-workspace-git` `unattended.rs` | Running a command nobody watches (base/head fetches and `git push`): no prompts, a deadline, a process group when there is a terminal, and a bounded wait for its output |
+| `review-rpc` `protocol.rs` | The wire format and the protocol version (`PROTOCOL_VERSION = 5`) |
+| `review-rpc` `params.rs` | Reading request params (`path`, `paths`, `viewed`, `mode`, `anchor`, `origin`, `content`, `agent`, `kind`, `round`, `findings`, `updates`, etc.); a missing or mistyped one is an invalid-params error |
 | `review-rpc` `socket.rs`, `socket/io.rs` | Unix domain socket listener with `0600` permissions, 64-client cap, bounded 1 MiB framing, and method allowlist (`snapshot`, `threads`, `agentReply`, `prepassWrite`) |
-| `review-rpc` `server.rs`, `server/comments.rs`, `server/agent.rs`, `server/ticker.rs` | Routing requests to the session (including comment, suggestion, review submission, agent launch/dispatch, pre-pass, and anchor update methods), writing events immediately to stdio, and the poller (`get_poll_step_from_elapsed` + 2 second worktree file watch) |
+| `review-rpc` `server.rs`, `server/comments.rs`, `server/agent.rs`, `server/ticker.rs` | Routing requests to the session (including `push`, comment, suggestion, review submission, agent launch/dispatch, pre-pass, conflict resolution, and anchor update methods), writing events immediately to stdio, and the poller (`get_poll_step_from_elapsed` + 2 second worktree file and git status watch) |
 
 ## Patterns
 
@@ -101,7 +105,7 @@ The modules worth knowing before changing a crate. Test fixtures
   traits in `review_core::ports`. The store adapter passes the shared contract
   test for its port (`review_core::contract`).
 - **Facade.** Frontends talk only to `ReviewSession`.
-- **Command/query split.** `sync`, `set_viewed`, comment/local mutations,
+- **Command/query split.** `sync`, `push`, `set_viewed`, comment/local mutations,
   agent launch/confirm/reply/prepass, anchor updates, and `submit_review`
   change state; `view`, `threads`, `mentions`, `anchored_lines`,
   `submit_preview`, `file_diff`, and `stream` read it. The RPC methods follow
@@ -124,15 +128,17 @@ directory's repository, so it refuses, before creating any worktree, a pull
 request from a different repository than the URL names. The plugin then opens a tab whose
 directory is the worktree, opens the panel, and starts
 `jpr-review serve --pr <n> --repo <owner/name>` there. After the `initialize`
-handshake it asks for a `snapshot` (what was saved last) and then a `sync`.
+handshake (which checks both `protocolVersion` and release `version`) it asks
+for a `snapshot` (what was saved last) and then a `sync`.
 
 The server reads requests on stdin, writes responses and notifications on
 stdout, binds an allowlisted Unix domain socket (recorded in `session.json`),
 and syncs with GitHub in the background every 60 seconds (`--poll`). Between
 syncs the poller wakes every 20 seconds to retry queued viewed marks or comment
 ops (`get_poll_step_from_elapsed`), and wakes every 2 seconds to check
-worktree files (`poll_worktree_files`) for disk edits and local thread
-re-anchoring. A sync failure keeps the last view and is announced as an event.
+worktree files and git status (`poll_worktree_files`) for disk edits, local
+thread re-anchoring, and dirty/ahead/behind changes. A sync failure keeps the
+last view and is announced as an event.
 The reader loop, Unix socket client handlers, and poller share one
 `Mutex<ReviewSession>`. Requests handled over the Unix socket (`agentReply`,
 `prepassWrite`) flush the events they emit straight to stdout so Neovim redraws
@@ -154,22 +160,29 @@ replaces all of this: it must print an existing directory as its last line.
 ### Session lifecycle in the plugin
 
 Each tab holds at most one session, and `:Jpr open` on a PR that already has
-a tab switches to it (for a URL, only when the repository matches too). Every way a session ends (`:Jpr close`,
-`:tabclose`, the engine exiting, a failed start or handshake) goes through one
+a tab switches to it (for a URL, only when the repository matches too).
+Intentional closes (`:Jpr close`, `:tabclose`) and startup failures (engine
+cannot spawn or fails the initial `initialize` handshake) go through one
 `forget` path: it stops any live agent terminal job, sends `shutdown`, stops
 the engine, wipes the panel and unregisters the session, so a later `:Jpr open`
-starts fresh. A session is registered only once its panel and engine are up.
-`rpc.start` returns `nil, err` rather than raising when the engine cannot be
-started.
+starts fresh. Once `session.ready` is reached, an unexpected engine exit is
+handled by `jpr.session.crash`: it appends the exit code and stderr to
+`stdpath("state")/jpr/engine-pr-<n>.log` (`0600`), restarts the engine once
+from the persisted `$XDG_STATE_HOME/jpr` files, and on a second crash (or
+failed restart handshake) transitions the session into `[read-only]` mode while
+preserving open buffers and compose drafts. A session is registered only once
+its panel and engine are up. `rpc.start` returns `nil, err` rather than raising
+when the engine cannot be started.
 
 ### Diffs
 
 A diff compares the merge base of the pull request's base commit
-(`baseRefOid`) and the checked-out head with the file on disk, so local edits
+(`baseRefOid`) and the checked-out `HEAD` with the file on disk, so local edits
 show as part of the change once saved. The session finds the merge base once
-per base commit (fetching the base commit from `origin` when the repository
-lacks it) and caches it with the renames since it and every base text it has
-read. A renamed file is compared with its old name. A side over 4 MiB is not
+per `(baseSha, HEAD)` pair (fetching the base commit from `origin` when the
+repository lacks it, and invalidating the cache whenever `baseSha` or
+checked-out `HEAD` moves) and caches it with the renames since it and every base
+text it has read. A renamed file is compared with its old name. A side over 4 MiB is not
 diffed. Paths come from GitHub's file list, so they are untrusted: the session
 serves diffs only for files in that list, and `GitWorkspace` refuses absolute
 paths, `..`, `.git` and directory symlinks out of the worktree, reads a
@@ -260,12 +273,14 @@ locking (`local.lock`) the store on disk when no daemon is running.
 | Module | Responsibility |
 | --- | --- |
 | `plugin/jpr.lua` | Defines `:Jpr` (with range support) and the `<Plug>(jpr-*)` mappings |
-| `jpr` | Config (including `agent`, `claude_cmd`, `codex_cmd`, `agent_width`, and `keys`), highlight groups (`JprThreadLocal` -> `DiagnosticHint`), argument parsing, subcommand dispatch, buffer keybinding (`bind_buffer_keys`), and `<Plug>(jpr-*)` action dispatch |
-| `jpr.rpc` | JSON-RPC client over `jobstart` |
-| `jpr.session` (`lua/jpr/session/init.lua`, `comments.lua`, `events.lua`) | One review per tab: checkout, engine process, requests, redraws of the panel, the stream, the diffs, and the PR conversation view, `:Jpr toggle`, `:Jpr stream`, `:Jpr comment`, `:Jpr suggest`, `:Jpr expand`, `:Jpr conversation`, `:Jpr submit`, `:Jpr agent`, `:Jpr send`, `:Jpr prepass`, `threadsChanged`/`filesChanged`/`agentRound` handling, and the one teardown path |
-| `jpr.agent` | Right-hand interactive coding-agent terminal split (`claude` or `codex` with `JPR_SOCKET` and `JPR_PR` in its environment), session resume detection, bracketed-paste prompt dispatch (`confirmSend` after `submitDelayMs`), and hide/show toggling without killing the live process |
+| `jpr` | Release `VERSION`, config (including `agent`, `claude_cmd`, `codex_cmd`, `agent_width`, and `keys`), highlight groups (`JprModified` -> `Special`, `JprThreadLocal` -> `DiagnosticHint`), lazy `require("jpr").statusline()` (`""` without loading `jpr.session` until a review opens), argument parsing, subcommand dispatch (`:Jpr push`), buffer keybinding (`bind_buffer_keys`), and `<Plug>(jpr-*)` action dispatch |
+| `jpr.rpc` | JSON-RPC client over `jobstart` (`M.PROTOCOL_VERSION = 5`) |
+| `jpr.session` (`lua/jpr/session/init.lua`, `comments.lua`, `events.lua`, `crash.lua`) | One review per tab: checkout, engine process, protocol + release version handshake check, requests, redraws of the panel, the stream, the diffs, and the PR conversation view, `:Jpr toggle`, `:Jpr stream`, `:Jpr comment`, `:Jpr suggest`, `:Jpr expand`, `:Jpr conversation`, `:Jpr submit`, `:Jpr push`, `:Jpr agent`, `:Jpr send`, `:Jpr prepass`, `threadsChanged`/`filesChanged`/`agentRound`/`worktreeStatusChanged`/`headMoved` handling (including the `Resolve myself` vs `Ask agent to resolve` restore-conflict prompt), and the one teardown path |
+| `jpr.session.crash` (`lua/jpr/session/crash.lua`) | Mid-review crash recovery: single automatic engine restart, `0600` timestamped crash log at `stdpath("state")/jpr/engine-pr-<n>.log` (inside a `0700` state directory), `[read-only]` fallback on a second crash or failed restart handshake, and control-character sanitization for error messages |
+| `jpr.agent` | Right-hand interactive coding-agent terminal split (`claude` or `codex` with `JPR_SOCKET` and `JPR_PR` in its environment), session resume detection, bracketed-paste prompt dispatch (`confirmSend` after `submitDelayMs` for `send`, `prepass`, and `resolve_conflicts`), and hide/show toggling without killing the live process |
 | `jpr.view_mode` | The global view mode (unified or split): the one remembered in `stdpath("state")/jpr/view-mode`, else `setup({ view = ... })`'s |
-| `jpr.render.panel` | Pure: `SessionView` to lines, highlights, `paths`, and `conversation_line`. Draws the engine's `tree` (directories muted with a trailing `/`, files indented under them; a view without a tree lists each file at the top level), the Conversation row with count, and adds `drafts N`, `local unsent N`, and `N waiting for GitHub` to the counts line |
+| `jpr.render.panel` | Pure: `SessionView` to lines, highlights, `paths`, and `conversation_line`. Draws `[read-only]` and `dirty · ↑N ↓M` worktree status prefixes, the engine's `tree` (directories muted with a trailing `/`, files indented under them with `✎` on locally modified files and `[G]`, `[LL]`, or `[G · LL]` thread badges), the Conversation row with count, and `drafts N`, `local unsent N`, and `N waiting for GitHub` on the counts line |
+| `jpr.render.statusline` (`lua/jpr/render/statusline.lua`) | Pure O(1) in-memory formatter backing `require("jpr").statusline()`: formats `PR #N`, `[read-only]`, `dirty ↑A ↓B`, `V/F viewed`, `D drafts`, `L local`, and `sync!` without spawning processes or making RPC calls |
 | `jpr.render.overlay` | Pure: `FileDiffView` to extmark specs (added lines and their changed words highlighted, removed lines as virtual lines with their tabs expanded), and a base text to buffer lines |
 | `jpr.render.stream` | Pure: `StreamView` to one column (unified) or two aligned columns (split), with each line's target, file/hunk/thread navigation lines, inline thread EOL badges or expanded thread lines, commentable row anchors, folds of viewed files, and the key that says when the stream must be fetched again |
 | `jpr.render.threads` | Pure: `ThreadPreview` lists to sign + EOL extmarks (`!` failed, `✎` draft, `◆` local via `JprThreadLocal`, `💬` open published, `✓` resolved), local status/promotion badges (`[local · unsent]`, `[local · sent #N]`, `[local · answered]`, `[promoted]`), expanded virtual lines (`:Jpr expand`), reaction pills, and floating popup message layouts |
@@ -307,16 +322,18 @@ own, so a callback that raises cannot swallow the messages after it.
   and the dependency rule (`crates/jpr-review/tests/dependency_rule.rs`).
 - `./scripts/test-lua.sh`: headless Neovim specs against
   `tests/lua/fixtures/fake_engine.sh` (and `crashing_engine.sh`, an engine
-  that dies at startup). The fake engine speaks protocol 4, answers plugin-issued
-  v4 requests (`fileDiff`, `stream`, `setViewed`, `threads`, `mentions`,
+  that dies at startup). The fake engine speaks protocol 5, answers plugin-issued
+  v5 requests (`push`, `fileDiff`, `stream`, `setViewed`, `threads`, `mentions`,
   `comment`, `reply`, `editMessage`, `deleteMessage`, `setResolved`,
   `toggleReaction`, `retryMessage`, `anchoredLines`, `suggestFromEdit`,
   `submitPreview`, `submitReview`, `promoteThread`, `prepareAgentLaunch`,
-  `prepareSend`, `confirmSend`, `preparePrepass`, `updateLocalAnchors`;
-  `agentReply` and `prepassWrite` are driven by `jpr-review` over the Unix
-  socket and covered in `review-rpc` / `jpr-review` Rust tests), and logs the
-  requests it gets (`tests/lua/agent_spec.lua` covers the agent split,
-  bracketed-paste dispatch, and confirm/cancel paths).
+  `prepareSend`, `confirmSend`, `preparePrepass`, `prepareConflictResolution`,
+  `updateLocalAnchors`; `agentReply` and `prepassWrite` are driven by
+  `jpr-review` over the Unix socket and covered in `review-rpc` / `jpr-review`
+  Rust tests), and logs the requests it gets (`tests/lua/agent_spec.lua`,
+  `tests/lua/push_and_head_moved_spec.lua`, `tests/lua/session_lifecycle_spec.lua`,
+  and `tests/lua/statusline_spec.lua` cover agent dispatch, push, head-move
+  conflict prompts, crash auto-restart/read-only fallback, and `statusline()`).
   The script points `XDG_STATE_HOME` at a temporary directory, so specs never
-  touch the real remembered view mode.
+  touch the real remembered view mode or crash logs.
 - `just check` runs both plus formatting and clippy.

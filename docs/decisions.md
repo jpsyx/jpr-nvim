@@ -567,3 +567,116 @@ received the prompt while the threads stay `unsent` so the reviewer can re-send.
 
 **Revisit when.** Agent CLIs expose a non-PTY structured prompt/session API that
 acknowledges receipt directly without terminal paste timing.
+
+## :Jpr push pushes HEAD to the PR branch refspec without auto-committing
+
+**Decision.** `:Jpr push` (`push` on stdio; refused on `JPR_SOCKET`) validates
+that the session has synced, that local `HEAD` is neither behind the pull
+request head (`ahead == 0` and `behind > 0`) nor already at the effective remote
+head (`ahead == 0` at `effective_remote_head_sha`, reporting whether uncommitted
+changes still need a commit or `HEAD` is already up to date), and then runs an
+unattended `git push --porcelain -- <remote> HEAD:refs/heads/<head_ref>`. It
+resolves `<remote>` from `branch.<local>.pushRemote`, `branch.<local>.remote`,
+or `origin`, rejects unsafe remote or branch names, and refuses to push if
+`branch.<local>.merge` is set to anything other than `refs/heads/<head_ref>`.
+Once `git push` succeeds, the session records `PushedHead` (`base_pr_head_sha`
+and `pushed_sha`) and runs a follow-up `sync`, returning `PushResult {
+isPushed: true, headSha, syncError?, view }` even when the follow-up GitHub sync
+fails or `headRefOid` lags behind the pushed commit.
+
+**Why.** Default checkouts run `gh pr checkout <n> -b pr-<n>` (or detached
+`HEAD` in custom worktree flows), so the local branch name rarely matches the
+pull request's `headRef`; plain `git push` under `push.default=simple` either
+fails or pushes to the wrong branch unless an explicit
+`HEAD:refs/heads/<head_ref>` refspec is given, while checking
+`branch.<local>.merge` prevents pushing a worktree that was switched onto
+`main` or another branch's upstream. Refusing dirty zero-ahead worktrees keeps
+commit authorship, staging, and commit messages in the reviewer's or coding
+agent's hands instead of inventing commits automatically. Recording `PushedHead`
+and returning `syncError` inside `PushResult` avoids telling the reviewer a push
+failed after `origin` already accepted the commit, and keeps `worktreeStatus`
+from reporting spurious `ahead` commits while GitHub's GraphQL `headRefOid`
+catches up.
+
+**Consequences.** Reviewers (or the coding agent when explicitly asked to commit
+locally) commit with git first and run `:Jpr push` to publish. Uncommitted edits
+alongside ahead commits remain on disk untouched while the committed `HEAD` is
+pushed. Force-pushes stay manual in a terminal because `HEAD:refs/heads/<head_ref>`
+never passes `--force` or `--force-with-lease`.
+
+**Revisit when.** Reviewers want an opt-in `--force-with-lease` confirmation
+flow after rebasing a PR branch locally.
+
+## Remote head moves auto-stash, fast-forward, and never rewrite local history
+
+**Decision.** When `sync` observes `pr.headSha` move, `GitWorkspace::fast_forward_to`
+fetches `pr.headSha` if needed, checks commit ancestry and active git sequencer
+state (`rebase-merge`, `rebase-apply`, `MERGE_HEAD`, `CHERRY_PICK_HEAD`,
+`REVERT_HEAD`, `BISECT_LOG`, `sequencer` via `git rev-parse --git-path`), and
+leaves the worktree untouched when local `HEAD` is ahead (`aheadOfTarget`),
+diverged (`diverged`), or mid-operation (`failed`). Clean behind worktrees run
+`git merge --ff-only --no-overwrite-ignore <head_sha>`. Dirty behind worktrees
+push a nonce-marked stash (`git stash push --include-untracked -m "... [pid-seq]"`),
+resolve the exact stash commit SHA by matching first parent `previous_sha` and
+the `[pid-seq]` suffix across `refs/stash` and its reflog, fast-forward with
+`--ff-only --no-overwrite-ignore` (rolling back the pinned stash on failure),
+and re-apply local edits with `git stash apply <stash_sha>`, dropping
+`refs/stash@{0}` only if it still resolves to `<stash_sha>`. Unmerged index
+entries or colliding untracked stash paths (`<stash_sha>^3`) surface as
+`HeadMoveOutcome::RestoreConflict` with `conflictedPaths`, keeping the stash
+entry intact and prompting the reviewer in Neovim to either open the first
+conflicted file (`Resolve myself`) or dispatch a `conflict` agent round
+(`prepareConflictResolution`, `JPR_SOCKET`-refused). Revisiting "The base cache
+follows the base commit only", `BaseCache` in `session/diffs.rs` now keys on
+`(base_sha, head_sha)`, and `pending_head_move_from` retries any `Failed` head
+move on the next sync even when the remote `headSha` has not moved again.
+
+**Why.** Linked git worktrees share one repository-wide `$GIT_COMMON_DIR/refs/stash`:
+a naive `git stash pop` can pop or drop a stash created concurrently in another
+worktree, or discard the reviewer's stashed untracked edits when `stash apply`
+aborts before writing conflict markers. Matching the stash commit by parent SHA
+and nonce and applying by commit SHA makes stash restoration deterministic across
+worktrees. Passing `--no-overwrite-ignore` stops a fast-forward from silently
+clobbering untracked gitignored build or local config files when a newly tracked
+remote file lands at the same path. Keying `BaseCache` on `(base_sha, head_sha)`
+ensures merge-base and rename lookups refresh immediately whenever `HEAD` moves.
+
+**Consequences.** Force-pushed (`diverged`) or locally ahead (`aheadOfTarget`)
+branches never lose commits or get reset behind the reviewer's back; Neovim
+notifies the reviewer and leaves branch surgery to git. Conflicted paths are
+excluded from immediate snapshot re-anchoring until the conflict markers are
+resolved on disk, while clean files in the same fast-forward re-anchor right
+away.
+
+**Revisit when.** Reviewers want an explicit command to reset a diverged PR
+worktree onto a force-pushed remote head after stashing local work.
+
+## Mid-review engine crashes restart once and fall back to read-only mode
+
+**Decision.** Once a tab's review session completes its initial `initialize`
+handshake (`session.ready`), an unexpected `jpr-review serve` exit appends a
+timestamped entry and stderr to `stdpath("state")/jpr/engine-pr-<n>.log` (`0600`
+file inside a `0700` directory) and automatically spawns `jpr-review serve` one
+time (`session.has_restarted = true`). If the restarted engine crashes again,
+fails to spawn, or fails its handshake, the plugin stops restarting, marks the
+session `[read-only]` in the panel and statusline, blocks further RPC mutations
+with an actionable `:Jpr close` / `:Jpr open <n>` message, and leaves every open
+diff buffer, stream buffer, and compose float intact. Crashes before
+`session.ready` still run `forget` immediately so broken startups clean up their
+tab.
+
+**Why.** `jpr-review serve` persists viewed marks, draft/queued GitHub state,
+and local threads atomically under `$XDG_STATE_HOME/jpr` on every mutation, so a
+single transient failure can recover seamlessly by re-opening the store and
+syncing. An unconditional restart loop on a deterministic panic or corrupt state
+file would spam notifications, peg a CPU core, and flood disk logs, whereas
+tearing down the tab on a second crash would destroy unsaved buffer edits or an
+in-progress comment draft in the compose float.
+
+**Consequences.** Transient mid-review crashes self-heal with one warning
+pointing to `engine-pr-<n>.log`, while persistent crashes degrade cleanly to
+`[read-only]` after at most two process exits. Startup protocol or version
+mismatches still fail fast without retrying.
+
+**Revisit when.** Reviewers want an in-place `:Jpr reconnect` command to clear
+`[read-only]` without closing and reopening the review tab.

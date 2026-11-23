@@ -1,4 +1,4 @@
-# Engine protocol (version 4)
+# Engine protocol (version 5)
 
 `jpr-review serve` speaks JSON-RPC 2.0, one JSON message per line, UTF-8.
 Requests from the primary frontend arrive on stdin. Responses and notifications
@@ -12,11 +12,11 @@ jpr-review serve --pr <number> --repo <owner/name> [--poll <seconds>]
 Run it in the pull request's worktree. `--poll` defaults to 60 seconds, and
 `--poll 0` turns background syncing off. While it polls, the server also
 resends queued viewed marks and queued comment operations every 20 seconds
-between syncs, and watches tracked worktree files every 2 seconds for on-disk
-changes. Every sync sends queued viewed marks before pulling, and reconciles and
-replays queued comment operations once the pull succeeds. The server does not
-sync on its own at startup: until the first sync, `snapshot` returns what was
-saved last.
+between syncs, and watches tracked worktree files and git status every 2
+seconds for on-disk and commit changes. Every sync sends queued viewed marks
+before pulling, and reconciles and replays queued comment operations once the
+pull succeeds. The server does not sync on its own at startup: until the first
+sync, `snapshot` returns what was saved last.
 
 ## Unix socket transport
 
@@ -26,25 +26,29 @@ spawns the interactive agent terminal, it exports that path as `JPR_SOCKET`.
 
 - Only an allowlisted set of methods is accepted over the socket: `snapshot`,
   `threads`, `agentReply`, and `prepassWrite`.
-- Any other method (including `shutdown`, `initialize`, `sync`, `submitReview`,
-  and `promoteThread`) is refused over the socket with `-32600` (`INVALID_REQUEST`).
+- Any other method (including `shutdown`, `initialize`, `sync`, `push`,
+  `submitReview`, `promoteThread`, `confirmSend`, and
+  `prepareConflictResolution`) is refused over the socket with `-32600`
+  (`INVALID_REQUEST`).
 - After a socket request runs, any events it produced (such as
   `threadsChanged`) are flushed immediately to the stdio client before the
   socket reply is written.
 
 ## Handshake
 
-The client sends `initialize` first and compares `protocolVersion` with its
-own. On a mismatch it stops the server and tells the user to install the
-plugin and the engine from the same checkout.
+The client sends `initialize` first and compares both `protocolVersion` and
+`version` with its own (`"test"` is accepted as `version` in test fixtures). On
+a mismatch it stops the server and tells the user to install the plugin and the
+engine from the same checkout (`./install.sh`).
 
 ## Requests
 
 | Method | Params | Result |
 | --- | --- | --- |
-| `initialize` | `{ "protocolVersion": 4, "client": "..." }` (the server reads neither) | `{ "protocolVersion": 4, "version": "0.4.0" }` |
+| `initialize` | `{ "protocolVersion": 5, "client": "..." }` (the server reads neither) | `{ "protocolVersion": 5, "version": "0.5.0" }` |
 | `snapshot` | none | `SessionView` |
-| `sync` | none | `SessionView`; error `-32000` when GitHub fails, after a `syncFailed` event |
+| `sync` | none | `SessionView`; error `-32000` when GitHub fails, after a `syncFailed` event (announces `headMoved` before `synced` when `pr.headSha` changes) |
+| `push` | none | `PushResult`; pushes `HEAD` to `refs/heads/<headRef>` (stdio-only; refused over `JPR_SOCKET` with `-32600`); error `-32000` before the first sync, when local `HEAD` is behind or already at the remote head, or when `git push` fails |
 | `fileDiff` | `{ "path": "src/a.rs" }` | `FileDiffView`; error `-32000` for a file the pull request does not change, a side over 4 MiB, or before the first sync |
 | `stream` | `{ "mode": "unified" \| "split" }` | `StreamView`; error `-32000` before the first sync |
 | `setViewed` | `{ "path": "src/a.rs", "viewed": true }` | `SessionView`, after a `viewedChanged` event |
@@ -65,16 +69,19 @@ plugin and the engine from the same checkout.
 | `promoteThread` | `{ "threadId": "...", "body": "..." }` | `{ "thread": Thread, "view": SessionView }`, after a `threadsChanged` event |
 | `prepareAgentLaunch` | `{ "agent"?: "claude" \| "codex" \| null }` (`agent` optional, defaults to `"claude"`) | `AgentLaunchPlan` |
 | `prepareSend` | `{ "threadId"?: "..." \| null, "agent"?: "claude" \| "codex" \| null }` (both optional) | `AgentDispatch`; error `-32000` if no unsent local thread matches or before the first sync |
-| `confirmSend` | `{ "round": 1, "kind": "send" \| "prepass", "threadIds": string[], "prompt": "..." }` | `{ "round": AgentRound, "view": SessionView }`, after `threadsChanged` (when `"send"` updates threads) and `agentRound` events |
+| `confirmSend` | `{ "round": 1, "kind": "send" \| "prepass" \| "conflict", "threadIds": string[], "prompt": "..." }` | `{ "round": AgentRound, "view": SessionView }`, after `threadsChanged` (when `"send"` updates threads) and `agentRound` events (stdio-only; `"send"` requires non-empty `threadIds`, while `"prepass"` and `"conflict"` require `threadIds: []`) |
 | `preparePrepass` | `{ "agent"?: "claude" \| "codex" \| null }` (`agent` optional, defaults to `"claude"`) | `AgentDispatch`; error `-32000` before the first sync |
+| `prepareConflictResolution` | `{ "paths": string[], "agent"?: "claude" \| "codex" \| null }` (`agent` optional, defaults to `"claude"`) | `AgentDispatch` (`kind: "conflict"`, `threadIds: []`; stdio-only, refused over `JPR_SOCKET` with `-32600`); error `-32000` for empty or unsafe `paths` or before the first sync |
 | `prepassWrite` | `{ "findings": PrepassFinding[] }` | `{ "threads": Thread[], "view": SessionView }`, after a `threadsChanged` event when threads are created |
 | `updateLocalAnchors` | `{ "path": "src/a.rs", "updates": LocalAnchorUpdate[] }` | `SessionView`, after a `threadsChanged` event when any local anchor moves |
 | `shutdown` | none | `null`; the server stops reading and exits (refused over Unix socket) |
 
 The server also exits when stdin closes. Methods without params ignore them,
-so `null`, `{}` or a missing `params` all work. `setViewed` succeeds even when
-GitHub refuses the mark: the mark stands, is counted in `queuedCount`, and is
-sent again by later retries and syncs.
+so `null`, `{}` or a missing `params` all work. `push`,
+`prepareConflictResolution`, and `confirmSend` are stdio-only and rejected over
+the Unix domain socket (`JPR_SOCKET`) with `-32600`. `setViewed` succeeds even
+when GitHub refuses the mark: the mark stands, is counted in `queuedCount`, and
+is sent again by later retries and syncs.
 
 Comment mutations behave consistently offline and on errors:
 
@@ -115,34 +122,41 @@ Comment mutations behave consistently offline and on errors:
 { "type": "threadsChanged", "view": SessionView }
 { "type": "filesChanged", "paths": ["src/a.rs"], "view": SessionView }
 { "type": "agentRound", "round": AgentRound, "view": SessionView }
+{ "type": "worktreeStatusChanged", "view": SessionView }
+{ "type": "headMoved", "previousSha": "abc123", "headSha": "def456", "outcome": HeadMoveOutcome, "conflictedPaths": [], "message": "...", "view": SessionView }
 ```
 
 Every sync announces `synced` or `syncFailed`, whether a `sync` request or the
-background poller started it. `viewedChanged` follows every `setViewed` and
-every retry that got a queued mark through. `threadsChanged` follows every
-comment mutation (`comment`, `reply`, `editMessage`, `deleteMessage`,
-`setResolved`, `toggleReaction`, `retryMessage`, `suggestFromEdit`,
-`submitReview`, `agentReply`, `promoteThread`, `prepassWrite` when creating
-threads, `confirmSend` when thread states change, and `updateLocalAnchors`
-when any local anchor changes), every background retry that got a queued comment
-operation through, and worktree file changes that re-anchor local threads.
-`filesChanged` follows worktree file-watcher ticks when tracked files change on
-disk. `agentRound` follows `confirmSend`. A sync whose pull fails after it got
-a queued mark through announces `viewedChanged` before `syncFailed`; a sync
-that succeeds announces the shorter queue in `synced`. An event is written
-before the response to the request that caused it, and every event is written
-before the `shutdown` response.
+background poller started it. When a sync sees `pr.headSha` change (or retries
+a prior `"failed"` head move), it reconciles the local checkout and announces
+`headMoved` (`message` is omitted when absent) before `synced`. `viewedChanged`
+follows every `setViewed` and every retry that got a queued mark through.
+`threadsChanged` follows every comment mutation (`comment`, `reply`,
+`editMessage`, `deleteMessage`, `setResolved`, `toggleReaction`, `retryMessage`,
+`suggestFromEdit`, `submitReview`, `agentReply`, `promoteThread`, `prepassWrite`
+when creating threads, `confirmSend` when thread states change, and
+`updateLocalAnchors` when any local anchor changes), every background retry
+that got a queued comment operation through, and worktree file changes or head
+moves that re-anchor local threads. `filesChanged` follows worktree
+file-watcher ticks when tracked files change on disk; `worktreeStatusChanged`
+follows worktree watcher ticks when `worktreeStatus` changes without tracked PR
+file digest changes (for example after `git commit` or `git reset`).
+`agentRound` follows `confirmSend`. A sync whose pull fails after it got a
+queued mark through announces `viewedChanged` before `syncFailed`; a sync that
+succeeds announces the shorter queue in `synced`. An event is written before
+the response to the request that caused it, and every event is written before
+the `shutdown` response.
 
 ## Types
 
-`SessionView`:
+`SessionView`, `FileRow`, and `WorktreeStatus`:
 
 ```json
 {
   "pr": { "owner": "octo", "repo": "widgets", "number": 7, "title": "Fix the widget",
           "url": "https://github.com/octo/widgets/pull/7", "nodeId": "PR_7", "author": "alice",
           "headRef": "fix/widget", "headSha": "abc123", "baseRef": "main", "baseSha": "base000" },
-  "files": [ { "path": "src/a.rs", "additions": 12, "deletions": 3, "viewed": "VIEWED", "threads": 2 } ],
+  "files": [ { "path": "src/a.rs", "additions": 12, "deletions": 3, "viewed": "VIEWED", "threads": 2, "isModified": false, "localThreads": 1 } ],
   "tree": [ { "depth": 0, "name": "src", "file": null }, { "depth": 1, "name": "a.rs", "file": 0 } ],
   "viewedCount": 1,
   "threadCount": 2,
@@ -150,12 +164,18 @@ before the `shutdown` response.
   "conversationCount": 1,
   "localUnsentCount": 0,
   "queuedCount": 0,
-  "sync": { "state": "synced", "at": 1763510400 }
+  "sync": { "state": "synced", "at": 1763510400 },
+  "worktreeStatus": { "isDirty": false, "ahead": 0, "behind": 0, "modifiedPaths": [] }
 }
 ```
 
 - `pr` is `null` until the first successful sync.
-- `viewed` is `VIEWED`, `UNVIEWED` or `DISMISSED` (viewed, then changed on GitHub).
+- Each `FileRow` in `files` carries `viewed` (`VIEWED`, `UNVIEWED`, or
+  `DISMISSED` when viewed and later changed on GitHub), `threads` (all GitHub
+  and local threads anchored to `path`), `isModified` (`true` when `path` has
+  uncommitted local changes in `worktreeStatus.modifiedPaths`), and
+  `localThreads` (open or resolved `origin: "local"` threads anchored to
+  `path`).
 - `tree` is `files` drawn as a tree, in drawing order: directories first, then
   files, each sorted by name. A directory holding only one directory is joined
   to it (`"name": "docs/x"`). A file row's `file` is its index in `files`; a
@@ -170,6 +190,38 @@ before the `shutdown` response.
 - `queuedCount` counts viewed marks and comment operations waiting for GitHub.
 - `sync` is `{ "state": "never" }`, `{ "state": "synced", "at": <unix seconds> }`
   or `{ "state": "failed", "at": <unix seconds>, "message": "..." }`.
+- `worktreeStatus` (`WorktreeStatus`) reports `isDirty` (whether any tracked or
+  untracked file is modified in the worktree), `ahead` (commits on `HEAD` not
+  reachable from the pull request's remote head commit), `behind` (commits on
+  the pull request's remote head commit not reachable from `HEAD`), and
+  `modifiedPaths` (sorted safe repository-relative dirty or untracked paths).
+
+`PushResult` and `HeadMoveOutcome`:
+
+```json
+{
+  "isPushed": true,
+  "headSha": "def456",
+  "syncError": "gh timed out after 30s",
+  "view": SessionView
+}
+```
+
+- `PushResult` is returned by `push`: `isPushed` is `true` once `git push`
+  succeeded, `headSha` is the full `HEAD` commit SHA pushed, and `syncError` is
+  present only when the post-push GitHub sync failed (omitted otherwise).
+- `HeadMoveOutcome` is one of:
+  - `"alreadyAtTarget"`: local `HEAD` was already at `headSha` (for example
+    right after `push`).
+  - `"fastForwarded"`: local `HEAD` fast-forwarded cleanly (auto-stashing and
+    restoring dirty edits when needed).
+  - `"restoreConflict"`: fast-forward succeeded, but restoring the auto-stash
+    conflicted in `conflictedPaths`; conflict markers (or colliding untracked
+    paths) and the stash entry remain.
+  - `"aheadOfTarget"`: local `HEAD` has unpushed commits ahead of `headSha`;
+    left untouched.
+  - `"diverged"`: local `HEAD` and `headSha` diverged; left untouched.
+  - `"failed"`: fetching or fast-forwarding failed before changing `HEAD`.
 
 `Anchor`:
 
@@ -301,8 +353,8 @@ before the `shutdown` response.
 ```
 
   (`socket` is omitted when the server is running without a Unix socket.)
-- `AgentRoundKind` is `"send"` or `"prepass"`.
-- `AgentRound`:
+- `AgentRoundKind` is `"send"`, `"prepass"`, or `"conflict"`.
+- `AgentRound` (`threadIds` is `[]` for `"prepass"` and `"conflict"`):
 
 ```json
 {
@@ -314,7 +366,7 @@ before the `shutdown` response.
 }
 ```
 
-- `AgentDispatch`:
+- `AgentDispatch` (`threadIds` is `[]` for `"prepass"` and `"conflict"`):
 
 ```json
 {
@@ -431,7 +483,7 @@ checked-out head; the current side is the file on disk:
 | -32700 | The line is not JSON (the response `id` is `null`) |
 | -32600 | Not a request: no string `method`, no `id` (the response `id` is `null` when there was none), or a method disallowed on the Unix socket |
 | -32601 | Unknown method |
-| -32602 | Invalid params: a missing or mistyped param (`path`, `viewed`, `mode`, `anchor`, `origin`, `agent`, `kind`, `round`, `threadIds`, `findings`, `updates`, `content`, `event`, `cursorLine`, etc.) |
+| -32602 | Invalid params: a missing or mistyped param (`path`, `paths`, `viewed`, `mode`, `anchor`, `origin`, `agent`, `kind`, `round`, `threadIds`, `findings`, `updates`, `content`, `event`, `cursorLine`, etc.) |
 | -32000 | The engine could not do it; `message` says why |
 
 ## Versioning
@@ -458,3 +510,8 @@ result or an event changes shape, and update this document in the same commit.
   `ThreadPreview`, and the `AgentThreadState`, `AgentKind`, `AgentProfile`,
   `AgentLaunchPlan`, `AgentRoundKind`, `AgentRound`, `AgentDispatch`,
   `PrepassFinding`, and `LocalAnchorUpdate` types.
+- **Version 5** added `push`, `prepareConflictResolution`, `"conflict"` in
+  `AgentRoundKind` (`confirmSend`, `AgentRound`, `AgentDispatch`),
+  `worktreeStatus` (`WorktreeStatus`) in `SessionView`, `isModified` and
+  `localThreads` on `FileRow`, the `worktreeStatusChanged` and `headMoved`
+  (`HeadMoveOutcome`) events, and the `PushResult` type.
