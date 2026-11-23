@@ -28,8 +28,8 @@ local function wait_for_message(text)
 end
 local function find_notification(text, expected_level)
     for _, entry in ipairs(notifications) do
-        local matches_level = expected_level == nil or entry.level == expected_level
-        if matches_level and entry.message:find(text, 1, true) then
+        local does_match_level = expected_level == nil or entry.level == expected_level
+        if does_match_level and entry.message:find(text, 1, true) then
             return entry
         end
     end
@@ -116,9 +116,9 @@ assert(wait_for_exit(mismatched) and #messages == 1, "the mismatch is the only e
 assert(tab_count() == tabs_before, "a protocol mismatch leaves no stray tab")
 vim.env.FAKE_ENGINE_PROTOCOL = nil
 
--- A binary/plugin version mismatch stops the engine and forgets its session.
+-- A binary/plugin version mismatch or empty version stops the engine and forgets its session.
 local function test_version_mismatch()
-    vim.env.FAKE_ENGINE_VERSION = "0.1.0"
+    vim.env.FAKE_ENGINE_VERSION = "0.1.0\27[31m\7"
     jpr.setup({ binary = fake_engine })
     clear_notifications()
     local count_before = tab_count()
@@ -127,12 +127,21 @@ local function test_version_mismatch()
     assert(wait_for_message("version mismatch"), "version mismatch is reported: " .. vim.inspect(messages))
     assert(session.by_tab[version_tab] == nil, "a version mismatch unregisters its session")
     assert(wait_for_exit(version_mismatched) and #notifications == 1, "version mismatch is the only notification")
-    local err_entry = notifications[1]
-    assert(err_entry.level == vim.log.levels.ERROR, "version mismatch notifies ERROR")
-    assert(err_entry.message:find("0.5.0", 1, true) ~= nil, "names plugin version 0.5.0: " .. err_entry.message)
-    assert(err_entry.message:find("0.1.0", 1, true) ~= nil, "names binary version 0.1.0: " .. err_entry.message)
-    assert(err_entry.message:find("./install.sh", 1, true) ~= nil, "names ./install.sh: " .. err_entry.message)
+    local error_entry = notifications[1]
+    assert(error_entry.level == vim.log.levels.ERROR, "version mismatch notifies ERROR")
+    assert(error_entry.message:find("%c") == nil, "version mismatch sanitizes control bytes: " .. error_entry.message)
+    assert(error_entry.message:find("0.5.0", 1, true) ~= nil, "names plugin version 0.5.0: " .. error_entry.message)
+    assert(error_entry.message:find("0.1.0", 1, true) ~= nil, "names binary version 0.1.0: " .. error_entry.message)
+    assert(error_entry.message:find("./install.sh", 1, true) ~= nil, "names ./install.sh: " .. error_entry.message)
     assert(tab_count() == count_before, "a version mismatch leaves no stray tab")
+
+    vim.env.FAKE_ENGINE_VERSION = ""
+    clear_notifications()
+    local empty_tab = start_pr(15)
+    local empty_version = session.by_tab[empty_tab]
+    assert(wait_for_exit(empty_version) and session.by_tab[empty_tab] == nil, "empty version unregisters session")
+    assert(#notifications == 1 and notifications[1].level == vim.log.levels.ERROR, "empty version notifies ERROR")
+    assert(tab_count() == count_before, "empty version leaves no stray tab")
     vim.env.FAKE_ENGINE_VERSION = nil
 end
 test_version_mismatch()
@@ -171,12 +180,18 @@ local function test_first_crash_auto_restart(log_path)
     assert(vim.fn.bufnr("jpr://panel/12") ~= -1, "panel buffer remains valid across restart")
     assert(find_notification("restarting", vim.log.levels.WARN) ~= nil, "warns about restarting: " .. vim.inspect(notifications))
     assert(vim.fn.filereadable(log_path) == 1, "crash log created at " .. log_path)
+    local log_stat = vim.uv.fs_stat(log_path)
+    assert(log_stat and bit.band(log_stat.mode, tonumber("777", 8)) == tonumber("600", 8), "crash log is mode 0600")
     local log_text = table.concat(vim.fn.readfile(log_path), "\n")
     assert(log_text:find("code", 1, true) ~= nil and log_text:find("engine panic: boom", 1, true) ~= nil, "crash log records code and stderr: " .. log_text)
     return died_tab, died
 end
 
-local function test_second_crash_read_only(died_tab, died, log_path)
+local function test_second_crash_read_only(died_tab, died)
+    local compose = require("jpr.comments.compose")
+    compose.open_new(died, { kind = "pr", side = "RIGHT" })
+    local compose_buf = died.compose.buf
+    vim.api.nvim_buf_set_lines(compose_buf, 0, -1, false, { "precious draft" })
     clear_notifications()
     vim.fn.jobstop(died.client.job)
     assert(vim.wait(3000, function()
@@ -191,21 +206,74 @@ local function test_second_crash_read_only(died_tab, died, log_path)
     panel_lines = vim.api.nvim_buf_get_lines(panel_buf, 0, -1, false)
     assert(panel_lines[2] and panel_lines[2]:find("[read-only]", 1, true) ~= nil, "panel re-render keeps [read-only] badge")
     assert(find_notification("engine-pr-12.log", vim.log.levels.ERROR) ~= nil, "error names engine-pr-12.log: " .. vim.inspect(notifications))
-    vim.api.nvim_set_current_tabpage(died_tab)
+    return compose_buf
+end
+
+local function test_read_only_view_guards(died_tab, died, compose_buf)
+    local compose = require("jpr.comments.compose")
+    vim.api.nvim_set_current_win(died.compose.win)
     clear_notifications()
+    local submit_keys = vim.api.nvim_replace_termcodes("<C-s>", true, false, true)
+    vim.api.nvim_feedkeys(submit_keys, "xt", false)
+    assert(find_notification("read-only mode", vim.log.levels.ERROR) ~= nil, "submitting compose in read-only reports error")
+    assert(vim.api.nvim_buf_is_valid(compose_buf) and vim.api.nvim_buf_get_lines(compose_buf, 0, 1, false)[1] == "precious draft", "compose draft preserved")
+    compose.close(died)
+
+    clear_notifications()
+    compose.open_new(died, { kind = "pr", side = "RIGHT" })
+    assert(died.compose == nil and find_notification("read-only mode", vim.log.levels.ERROR) ~= nil, "open_new blocked in read-only")
+
+    vim.api.nvim_set_current_tabpage(died_tab)
+    local main_win = require("jpr.views.main_window").find(died)
+    local buf_before = vim.api.nvim_win_get_buf(main_win)
+    clear_notifications()
+    require("jpr.views.conversation").show(died)
+    assert(vim.api.nvim_win_get_buf(main_win) == buf_before and died.conversation == nil, "uncached conversation leaves main window untouched")
+    assert(find_notification("read-only mode", vim.log.levels.ERROR) ~= nil, "uncached conversation reports read-only mode")
+
+    clear_notifications()
+    require("jpr.views.stream").refresh(died, true)
+    assert(#notifications == 0, "stream.refresh is quiet in read-only mode")
+
     session.sync_current()
-    assert(find_notification("read-only mode", vim.log.levels.ERROR) ~= nil, "sync_current reports read-only mode")
+    assert(find_notification(":Jpr close", vim.log.levels.ERROR) ~= nil, "sync_current names :Jpr close in read-only mode")
     clear_notifications()
     session.push_current()
     assert(find_notification("read-only mode", vim.log.levels.ERROR) ~= nil, "push_current reports read-only mode")
 end
 
+local function test_failed_restart_handshake()
+    local restart_log_path = vim.fn.stdpath("state") .. "/jpr/engine-pr-16.log"
+    vim.fn.delete(restart_log_path)
+    local live = session.by_tab[start_pr(16)]
+    assert(vim.wait(3000, function()
+        return live.view.pr ~= nil and live.stream ~= nil and live.stream.layout ~= nil
+    end), "PR 16 synced and drew initial stream")
+    clear_notifications()
+    vim.env.FAKE_ENGINE_VERSION = "0.1.0"
+    vim.fn.jobstop(live.client.job)
+    assert(vim.wait(3000, function()
+        return live.is_read_only == true and live.client == nil
+    end), "failed restart handshake transitions to read-only")
+    vim.env.FAKE_ENGINE_VERSION = nil
+    local error_notifications = vim.tbl_filter(function(entry)
+        return entry.level == vim.log.levels.ERROR
+    end, notifications)
+    assert(#error_notifications == 1, "failed restart handshake emits single ERROR: " .. vim.inspect(notifications))
+    assert(error_notifications[1].message:find("version mismatch", 1, true) ~= nil, "combined ERROR includes handshake reason")
+    assert(error_notifications[1].message:find("engine-pr-16.log", 1, true) ~= nil, "combined ERROR includes log path")
+    session.close_current()
+    vim.fn.delete(restart_log_path)
+end
+
 local crash_log_path = vim.fn.stdpath("state") .. "/jpr/engine-pr-12.log"
 vim.fn.delete(crash_log_path)
 local died_tab, died = test_first_crash_auto_restart(crash_log_path)
-test_second_crash_read_only(died_tab, died, crash_log_path)
+local preserved_compose_buf = test_second_crash_read_only(died_tab, died)
+test_read_only_view_guards(died_tab, died, preserved_compose_buf)
 vim.env.FAKE_ENGINE_STDERR = nil
 vim.fn.delete(crash_log_path)
+test_failed_restart_handshake()
 
 -- :Jpr close on the only tab still frees the pull request for :Jpr open.
 local only = session.by_tab[start_pr(13)]

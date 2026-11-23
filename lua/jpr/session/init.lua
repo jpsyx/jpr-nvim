@@ -1,7 +1,8 @@
 -- One open pull-request review per tab: the checkout, the engine process, and
 -- the panel. Every review rule lives in the engine; this only wires it up.
-local rpc = require("jpr.rpc")
+local crash = require("jpr.session.crash")
 local panel = require("jpr.views.panel")
+local rpc = require("jpr.rpc")
 
 local M = {}
 
@@ -19,21 +20,14 @@ function M.current()
     return M.by_tab[vim.api.nvim_get_current_tabpage()]
 end
 
-local function report_read_only(session)
+--- Reports that `session` is in read-only mode after an engine crash.
+function M.report_read_only(session)
     return jpr().error(
-        ("PR #%d is in read-only mode after an engine crash; close the tab and run :Jpr open %d"):format(
+        ("PR #%d is in read-only mode after an engine crash; run :Jpr close and :Jpr open %d"):format(
             session.number,
             session.number
         )
     )
-end
-
-local function build_clean_text_from_raw(raw_text)
-    if type(raw_text) ~= "string" then
-        return ""
-    end
-    local collapsed = raw_text:gsub("[\r\n\t]+", " ")
-    return vim.trim((collapsed:gsub("%c", "")))
 end
 
 --- Sends `method` with `params` to `session`'s engine. `on_result(result)`
@@ -45,7 +39,7 @@ function M.request(session, method, params, on_result, on_error)
         if on_error then
             on_error()
         end
-        return report_read_only(session)
+        return M.report_read_only(session)
     end
     if not session.client then
         if on_error then
@@ -192,45 +186,64 @@ local function fail_handshake(session, client, error_message)
     if session.has_restarted and session.ready then
         session.client = nil
         client:stop()
-        local crash = require("jpr.session.crash")
         local log_path = crash.append_crash_log(session.number, "handshake", error_message)
-        crash.transition_to_read_only(session, "handshake", log_path)
-        return jpr().error(error_message)
+        return crash.transition_to_read_only(session, "handshake", log_path, error_message)
     end
     forget(session)
     return jpr().error(error_message)
+end
+
+local function build_handshake_error_from_result(result)
+    if type(result) ~= "table" or type(result.protocolVersion) ~= "number" then
+        return "invalid handshake response: missing protocolVersion"
+    end
+    local binary_label = crash.build_clean_text_from_raw(jpr().config.binary)
+    if result.protocolVersion ~= rpc.PROTOCOL_VERSION then
+        return ("protocol mismatch: the plugin speaks %d and %s speaks %d; install both from the same checkout"):format(
+            rpc.PROTOCOL_VERSION,
+            binary_label,
+            result.protocolVersion
+        )
+    end
+    if type(result.version) ~= "string" or result.version == "" then
+        return ("invalid handshake response from %s: missing engine version"):format(binary_label)
+    end
+    if result.version ~= "test" and result.version ~= jpr().VERSION then
+        return ("version mismatch: plugin is %s and %s is %s; run ./install.sh from the plugin checkout"):format(
+            jpr().VERSION,
+            binary_label,
+            crash.build_clean_text_from_raw(result.version)
+        )
+    end
+    return nil
 end
 
 --- Checks the engine speaks our protocol and release version, then loads and
 --- syncs the view. A failed startup handshake stops the engine and forgets the
 --- session; a failed restart handshake falls back to read-only mode.
 local function handshake(session, client)
-    client:request("initialize", { protocolVersion = rpc.PROTOCOL_VERSION, client = "jpr.nvim" }, function(init_err, result)
-        if init_err then
+    local params = { protocolVersion = rpc.PROTOCOL_VERSION, client = "jpr.nvim" }
+    client:request("initialize", params, function(init_error, result)
+        if session.closing or session.client ~= client then
+            return
+        end
+        if init_error then
             -- An engine that died is handled by on_exit, with its stderr.
             if client.exited then
                 return
             end
-            return fail_handshake(session, client, "could not start the review engine: " .. init_err.message)
+            local clean_message = crash.build_clean_text_from_raw(init_error.message)
+            return fail_handshake(session, client, "could not start the review engine: " .. clean_message)
         end
-        if result.protocolVersion ~= rpc.PROTOCOL_VERSION then
-            local mismatch_message = ("protocol mismatch: the plugin speaks %d and %s speaks %d; install both from the same checkout"):format(
-                rpc.PROTOCOL_VERSION,
-                jpr().config.binary,
-                result.protocolVersion
-            )
-            return fail_handshake(session, client, mismatch_message)
-        end
-        if type(result.version) == "string" and result.version ~= "test" and result.version ~= jpr().VERSION then
-            local version_message = ("version mismatch: plugin is %s and %s is %s; run ./install.sh from the plugin checkout"):format(
-                jpr().VERSION,
-                jpr().config.binary,
-                result.version
-            )
-            return fail_handshake(session, client, version_message)
+        local handshake_error = build_handshake_error_from_result(result)
+        if handshake_error then
+            return fail_handshake(session, client, handshake_error)
         end
         session.ready = true
         client:request("snapshot", nil, function(_, view)
+            if session.closing or session.client ~= client then
+                return
+            end
             if view then
                 M.show(session, view)
             end
@@ -241,7 +254,7 @@ end
 
 local function spawn_engine(session)
     local spawned_client
-    local client, spawn_err = rpc.start({
+    local client, spawn_error = rpc.start({
         jpr().config.binary,
         "serve",
         "--pr",
@@ -251,6 +264,9 @@ local function spawn_engine(session)
     }, {
         cwd = session.worktree,
         on_notification = function(method, params)
+            if session.closing or session.client ~= spawned_client then
+                return
+            end
             M.on_notification(session, method, params)
         end,
         on_exit = function(code, stderr)
@@ -260,7 +276,8 @@ local function spawn_engine(session)
     if not client then
         if not session.has_restarted then
             forget(session)
-            jpr().error(spawn_err)
+            local clean_spawn_error = crash.build_clean_text_from_raw(spawn_error)
+            jpr().error(clean_spawn_error ~= "" and clean_spawn_error or "could not start the review engine")
         end
         return false
     end
@@ -300,10 +317,10 @@ function M.start(info)
     require("jpr.views.diff").attach(session)
     -- Registered only once the panel and the engine are up, so a failure here
     -- never leaves a half-built session for `:Jpr open` to refocus.
-    local opened, open_err = pcall(panel.open, session)
-    if not opened then
+    local is_opened, open_error = pcall(panel.open, session)
+    if not is_opened then
         forget(session)
-        return jpr().error("could not open the panel: " .. open_err)
+        return jpr().error("could not open the panel: " .. tostring(open_error))
     end
     spawn_engine(session)
 end
@@ -352,16 +369,16 @@ end
 --- user.
 function M.sync(session)
     if session.is_read_only then
-        return report_read_only(session)
+        return M.report_read_only(session)
     end
     if not session.client then
         return jpr().error(
             ("the review engine for PR #%d is not running; run :Jpr open %d"):format(session.number, session.number)
         )
     end
-    session.client:request("sync", nil, function(err, view)
-        if err then
-            return jpr().error("sync failed: " .. err.message)
+    session.client:request("sync", nil, function(sync_error, view)
+        if sync_error then
+            return jpr().error("sync failed: " .. crash.build_clean_text_from_raw(sync_error.message))
         end
         M.show(session, view)
     end)
@@ -374,9 +391,9 @@ function M.push(session)
         if type(result) == "table" and type(result.view) == "table" then
             M.show(session, result.view)
         end
-        local short_sha = build_clean_text_from_raw(type(result) == "table" and result.headSha or ""):sub(1, 7)
+        local short_sha = crash.build_clean_text_from_raw(type(result) == "table" and result.headSha or ""):sub(1, 7)
         jpr().info(("pushed %s"):format(short_sha))
-        local sync_error = type(result) == "table" and build_clean_text_from_raw(result.syncError) or ""
+        local sync_error = type(result) == "table" and crash.build_clean_text_from_raw(result.syncError) or ""
         if sync_error ~= "" then
             jpr().warn("pushed, but GitHub resync failed: " .. sync_error)
         end
@@ -395,11 +412,11 @@ function M.on_exit(session, code, stderr, exited_client)
         return
     end
     session.client = nil
-    require("jpr.session.crash").handle_unexpected_exit(session, code, stderr, {
+    crash.handle_unexpected_exit(session, code, stderr, {
         forget = forget,
         spawn = spawn_engine,
         is_registered = function(candidate)
-            return M.by_tab[candidate.tab] == candidate
+            return M.by_tab[candidate.tab] == candidate and vim.api.nvim_tabpage_is_valid(candidate.tab)
         end,
     })
 end

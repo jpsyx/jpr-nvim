@@ -325,11 +325,12 @@ end
 --- Requests a conflict-resolution prompt for `paths` in `session` and delivers
 --- it to the interactive agent terminal.
 function M.resolve_conflicts(session, paths)
-    if type(paths) ~= "table" or #paths == 0 then
+    local safe_paths = require("jpr.session.events").collect_safe_worktree_paths(session, paths)
+    if #safe_paths == 0 then
         return jpr().error("no conflicted files to resolve")
     end
     require("jpr.session").request(session, "prepareConflictResolution", {
-        paths = paths,
+        paths = safe_paths,
         agent = jpr().config.agent,
     }, function(dispatch)
         M.deliver_dispatch(session, dispatch)

@@ -71,8 +71,8 @@ end
 
 local function find_notification(notifications, text, expected_level)
     for _, entry in ipairs(notifications) do
-        local matches_level = expected_level == nil or entry.level == expected_level
-        if matches_level and entry.message:find(text, 1, true) then
+        local does_match_level = expected_level == nil or entry.level == expected_level
+        if does_match_level and entry.message:find(text, 1, true) then
             return entry
         end
     end
@@ -142,19 +142,31 @@ local function test_head_moved_fast_forward(context)
     assert(context.review.view.pr.headSha == "head222", "alreadyAtTarget updates session.view")
     assert(#context.notifications == 0, "alreadyAtTarget stays quiet: " .. vim.inspect(context.notifications))
 
-    local ff_view = vim.deepcopy(context.review.view)
-    ff_view.pr.headSha = "ff98765"
+    local fast_forward_view = vim.deepcopy(context.review.view)
+    fast_forward_view.pr.headSha = "ff98765"
     session.on_notification(context.review, "event", {
         type = "headMoved",
         previousSha = "aa11223\27[31m",
         headSha = "ff98765\n\7",
         outcome = "fastForwarded",
         conflictedPaths = {},
-        view = ff_view,
+        view = fast_forward_view,
     })
     assert(context.review.view.pr.headSha == "ff98765", "fastForwarded updates session.view")
     local info_entry = find_notification(context.notifications, "ff98765", vim.log.levels.INFO)
     assert(info_entry ~= nil and info_entry.message:find("%c") == nil, "fastForwarded emits sanitized INFO")
+
+    clear_list(context.notifications)
+    session.on_notification(context.review, "event", {
+        type = "headMoved",
+        previousSha = "\27",
+        headSha = "\n",
+        outcome = "fastForwarded",
+        conflictedPaths = {},
+        view = fast_forward_view,
+    })
+    local empty_sha_entry = find_notification(context.notifications, "fast-forwarded", vim.log.levels.INFO)
+    assert(empty_sha_entry ~= nil and empty_sha_entry.message:find("()", 1, true) == nil, "no empty () on blank SHAs")
 end
 
 local function test_head_moved_warnings(context)
@@ -177,6 +189,8 @@ local function test_head_moved_warnings(context)
 end
 
 local function test_restore_conflict_resolve_myself(context)
+    vim.fn.mkdir(context.worktree .. "/.git", "p")
+    vim.fn.writefile({ "[core]" }, context.worktree .. "/.git/config")
     local original_select = vim.ui.select
     local captured_items, captured_prompt
     vim.ui.select = function(items, opts, on_choice)
@@ -191,13 +205,13 @@ local function test_restore_conflict_resolve_myself(context)
         previousSha = "head1",
         headSha = "head2",
         outcome = "restoreConflict",
-        conflictedPaths = { "../outside.txt", "/etc/passwd", "bad\nname.md", "README.md" },
+        conflictedPaths = { ".git", ".git/config", "sub/.git/hooks", "../outside.txt", "/etc/passwd", "bad\nname.md", "README.md" },
         view = conflict_view,
     })
     vim.ui.select = original_select
 
     assert(vim.deep_equal(captured_items, { "Resolve myself", "Ask agent to resolve" }), "conflict prompt choices")
-    assert(captured_prompt:find("1 file", 1, true) ~= nil, "only safe relative paths counted: " .. tostring(captured_prompt))
+    assert(captured_prompt:find("1 file", 1, true) ~= nil, "only safe non-.git relative paths counted: " .. tostring(captured_prompt))
     local main_win = require("jpr.views.main_window").find(context.review)
     local opened_name = vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(main_win))
     assert(
@@ -207,6 +221,11 @@ local function test_restore_conflict_resolve_myself(context)
 end
 
 local function test_restore_conflict_ask_agent(context)
+    clear_list(context.notifications)
+    require("jpr.agent").resolve_conflicts(context.review, { ".git", ".git/config", "../outside.txt" })
+    assert(#helpers.read_requests(context.engine_log, "prepareConflictResolution") == 0, "unsafe .git paths rejected in agent.resolve_conflicts")
+    assert(find_notification(context.notifications, "no conflicted files", vim.log.levels.ERROR) ~= nil, "notifies error when all paths unsafe")
+
     local original_select = vim.ui.select
     vim.ui.select = function(_, _, on_choice)
         on_choice("Ask agent to resolve")
@@ -218,7 +237,7 @@ local function test_restore_conflict_ask_agent(context)
         previousSha = "head2",
         headSha = "head3",
         outcome = "restoreConflict",
-        conflictedPaths = { "../outside.txt", "README.md" },
+        conflictedPaths = { ".git/config", "../outside.txt", "README.md" },
         view = conflict_view,
     })
     vim.ui.select = original_select

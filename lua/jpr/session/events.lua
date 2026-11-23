@@ -1,19 +1,12 @@
 -- Handles engine JSON-RPC notifications (`event`, `protocolError`) for an
 -- active pull-request review session, including worktree status and head moves.
+local crash = require("jpr.session.crash")
 local panel = require("jpr.views.panel")
 
 local M = {}
 
 local function jpr()
     return require("jpr")
-end
-
-local function build_clean_text_from_raw(raw_text)
-    if type(raw_text) ~= "string" then
-        return ""
-    end
-    local collapsed = raw_text:gsub("[\r\n\t]+", " ")
-    return vim.trim((collapsed:gsub("%c", "")))
 end
 
 local function apply_session_view(session, incoming_view)
@@ -25,21 +18,31 @@ local function apply_session_view(session, incoming_view)
     end
 end
 
-local function is_safe_worktree_path(session, candidate)
-    if type(candidate) ~= "string" or candidate == "" or candidate:find("%c") ~= nil then
+local function has_git_segment(path)
+    return path == ".git"
+        or path:find("^%.git/") ~= nil
+        or path:find("/%.git/") ~= nil
+        or path:find("/%.git$") ~= nil
+end
+
+--- Whether `candidate` is a safe plain relative path inside `session.worktree`
+--- with no control bytes and no `.git` path segment.
+function M.is_safe_worktree_path(session, candidate)
+    if type(candidate) ~= "string" or candidate == "" or candidate:find("%c") ~= nil or has_git_segment(candidate) then
         return false
     end
     local full_path = session.worktree .. "/" .. candidate
     return require("jpr.views.diff").name_to_relative_path(session.worktree, full_path) == candidate
 end
 
-local function collect_safe_conflicted_paths(session, raw_paths)
+--- Filters `raw_paths` down to safe worktree-relative paths for `session`.
+function M.collect_safe_worktree_paths(session, raw_paths)
     if type(raw_paths) ~= "table" then
         return {}
     end
     local safe_paths = {}
     for _, candidate in ipairs(raw_paths) do
-        if is_safe_worktree_path(session, candidate) then
+        if M.is_safe_worktree_path(session, candidate) then
             safe_paths[#safe_paths + 1] = candidate
         end
     end
@@ -47,7 +50,7 @@ local function collect_safe_conflicted_paths(session, raw_paths)
 end
 
 local function prompt_conflict_resolution(session, raw_paths, fallback_detail)
-    local safe_paths = collect_safe_conflicted_paths(session, raw_paths)
+    local safe_paths = M.collect_safe_worktree_paths(session, raw_paths)
     if #safe_paths == 0 then
         local fallback = ("PR #%d fast-forwarded with restore conflicts"):format(session.number)
         return jpr().warn(fallback_detail ~= "" and fallback_detail or fallback)
@@ -72,19 +75,21 @@ local function handle_head_moved(session, params, show_session)
     if type(params.view) == "table" then
         show_session(session, params.view)
     end
-    local short_head = build_clean_text_from_raw(params.headSha):sub(1, 7)
-    local short_previous = build_clean_text_from_raw(params.previousSha):sub(1, 7)
-    local detail = build_clean_text_from_raw(params.message)
+    local short_head = crash.build_clean_text_from_raw(params.headSha):sub(1, 7)
+    local short_previous = crash.build_clean_text_from_raw(params.previousSha):sub(1, 7)
+    local detail = crash.build_clean_text_from_raw(params.message)
     local outcome = params.outcome
     if outcome == "fastForwarded" then
         local transition = (short_previous ~= "" and short_head ~= "") and (short_previous .. " -> " .. short_head) or short_head
-        jpr().info(("PR #%d fast-forwarded (%s)"):format(session.number, transition))
+        local suffix = transition ~= "" and (" (" .. transition .. ")") or ""
+        jpr().info(("PR #%d fast-forwarded%s"):format(session.number, suffix))
     elseif outcome == "aheadOfTarget" then
         if detail ~= "" then
             jpr().info(detail)
         end
     elseif outcome == "diverged" or outcome == "failed" then
-        local fallback = ("PR #%d head moved to %s (%s)"):format(session.number, short_head, tostring(outcome))
+        local target_label = short_head ~= "" and (" to " .. short_head) or ""
+        local fallback = ("PR #%d head moved%s (%s)"):format(session.number, target_label, tostring(outcome))
         jpr().warn(detail ~= "" and detail or fallback)
     elseif outcome == "restoreConflict" then
         prompt_conflict_resolution(session, params.conflictedPaths, detail)
@@ -131,7 +136,7 @@ function M.on_notification(session, method, params, show_session)
     if method == "event" and params then
         handle_event_notification(session, params, show_session)
     elseif method == "protocolError" then
-        jpr().error(build_clean_text_from_raw(params and params.message))
+        jpr().error(crash.build_clean_text_from_raw(params and params.message))
     end
 end
 

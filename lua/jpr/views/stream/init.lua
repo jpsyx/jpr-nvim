@@ -145,7 +145,7 @@ end
 --- the buffers.
 function M.refresh(session, force)
     local state = session.stream
-    if not state or not M.is_visible(session) then
+    if not state or session.is_read_only or not M.is_visible(session) then
         return
     end
     release_left_window(session)

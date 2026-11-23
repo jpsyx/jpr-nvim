@@ -99,6 +99,9 @@ local function submit_compose(session, buf, on_submit, origin)
     if not vim.api.nvim_buf_is_valid(buf) then
         return
     end
+    if session and session.is_read_only then
+        return require("jpr.session").report_read_only(session)
+    end
     local text = buffer_body(buf)
     if vim.trim(text) == "" then
         return require("jpr").error("comment body cannot be empty")
@@ -154,6 +157,9 @@ local function bind_compose_keys(session, compose, opts)
 end
 
 local function open_editor(session, opts)
+    if session and session.is_read_only then
+        return require("jpr.session").report_read_only(session)
+    end
     M.close(session)
     local buf = vim.api.nvim_create_buf(false, true)
     vim.bo[buf].buftype = "nofile"
@@ -196,8 +202,11 @@ end
 --- Opens the floating compose buffer for a new comment at `anchor`, optionally
 --- pre-filling a GitHub suggestion block on line or range anchors (`opts.suggest`).
 function M.open_new(session, anchor, opts)
-    if session.closing then
+    if not session or session.closing then
         return
+    end
+    if session.is_read_only then
+        return require("jpr.session").report_read_only(session)
     end
     local open_opts = opts or {}
     local open_with_body = function(initial_text)
@@ -234,6 +243,12 @@ end
 
 --- Opens the floating compose buffer to reply to `thread`.
 function M.open_reply(session, thread)
+    if not session or session.closing then
+        return
+    end
+    if session.is_read_only then
+        return require("jpr.session").report_read_only(session)
+    end
     local is_local = thread.origin == "local" or thread.kind == "local"
     local badge = is_local and "[Local reply]" or "[GitHub reply]"
     if not is_local and session.view and (session.view.draftCount or 0) > 0 then
@@ -254,6 +269,12 @@ end
 --- Opens the floating compose buffer to edit `message` (pre-populating
 --- `recoverableBody` when present).
 function M.open_edit(session, message, thread)
+    if not session or session.closing then
+        return
+    end
+    if session.is_read_only then
+        return require("jpr.session").report_read_only(session)
+    end
     local is_local = (thread ~= nil and (thread.origin == "local" or thread.kind == "local"))
         or message.sync == nil
         or message.sync == vim.NIL
@@ -278,6 +299,9 @@ end
 function M.open_promote(session, thread)
     if not session or session.closing or not thread then
         return
+    end
+    if session.is_read_only then
+        return require("jpr.session").report_read_only(session)
     end
     if type(thread.promotedTo) == "string" and thread.promotedTo ~= "" then
         return require("jpr").info("local thread was already promoted to " .. thread.promotedTo)

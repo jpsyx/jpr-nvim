@@ -261,11 +261,19 @@ local function fetch_and_draw(session, state)
     end)
 end
 
+local function has_cached_buffer(session)
+    local existing = session and session.conversation
+    return existing ~= nil and existing.buf ~= nil and vim.api.nvim_buf_is_valid(existing.buf)
+end
+
 --- Opens or focuses the PR conversation buffer (`jpr://conversation/<number>`)
 --- in `session`'s main window beside the panel.
 function M.show(session)
     if not session or session.closing then
         return
+    end
+    if session.is_read_only and not has_cached_buffer(session) then
+        return require("jpr.session").report_read_only(session)
     end
     local state = get_or_create_state(session)
     local main_win = main_window.find(session)
@@ -276,12 +284,14 @@ function M.show(session)
     vim.api.nvim_set_option_value("scrollbind", false, { win = main_win, scope = "local" })
     vim.api.nvim_set_option_value("cursorbind", false, { win = main_win, scope = "local" })
     vim.api.nvim_set_current_win(main_win)
-    fetch_and_draw(session, state)
+    if not session.is_read_only then
+        fetch_and_draw(session, state)
+    end
 end
 
 --- Updates the PR conversation buffer when it is currently visible.
 function M.refresh(session)
-    if not session or session.closing or not is_visible(session) then
+    if not session or session.closing or session.is_read_only or not is_visible(session) then
         return
     end
     fetch_and_draw(session, session.conversation)
