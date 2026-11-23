@@ -20,6 +20,9 @@ tempfile = "3"
 # Line and word diffs: Histogram for lines (as git), Myers for words. Only the
 # slice API is used, so the text helpers stay off.
 similar = { version = "3", default-features = false, features = ["std"] }
+# Raw-mode terminal input and ANSI control for the interactive CLI palette (`cli-tui`).
+crossterm = "0.28"
+cli-tui = { path = "crates/cli-tui" }
 review-model = { path = "crates/review-model" }
 review-core = { path = "crates/review-core" }
 review-diff = { path = "crates/review-diff" }
