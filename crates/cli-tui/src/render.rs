@@ -11,7 +11,6 @@ const SGR_WARNING: &str = "93";
 const SGR_ERROR: &str = "91";
 const SGR_REVERSE: &str = "7";
 const HELP_INDENT: &str = "    ";
-const MIN_WRAP_WIDTH: usize = 12;
 
 /// Renders the command palette frame as a `\n`-delimited string.
 ///
@@ -24,15 +23,18 @@ pub fn render_palette(
     width: usize,
     use_color: bool,
 ) -> String {
-    let mut lines = Vec::new();
-    lines.push(paint(title, SGR_HEADING, use_color));
-    lines.push(String::new());
+    let mut lines = vec![paint(title, SGR_HEADING, use_color), String::new()];
 
-    for (index, command) in commands.iter().enumerate() {
-        let is_selected = index == state.selected_index();
-        lines.push(format_palette_row(command, is_selected, use_color));
-        if is_selected {
-            append_wrapped_help(&mut lines, &command.help, width, use_color);
+    if commands.is_empty() {
+        lines.push(paint("  (no commands available)", SGR_MUTED, use_color));
+    } else {
+        let clamped_selected = state.selected_index().min(commands.len() - 1);
+        for (index, command) in commands.iter().enumerate() {
+            let is_selected = index == clamped_selected;
+            lines.push(format_palette_row(command, is_selected, use_color));
+            if is_selected {
+                append_wrapped_help(&mut lines, &command.help, width, use_color);
+            }
         }
     }
 
@@ -61,32 +63,14 @@ pub fn render_wizard(
     };
 
     let mut lines = Vec::new();
-    lines.push(format_wizard_header(
-        state.step_index(),
-        active_steps.len(),
-        &current_step.label,
-        use_color,
-    ));
-    append_wrapped_plain_lines(
+    append_wizard_header(
         &mut lines,
-        &current_step.help,
-        "",
+        current_step,
+        state,
+        active_steps.len(),
         width,
-        SGR_MUTED,
         use_color,
     );
-
-    if let Some(error_message) = state.validation_error() {
-        append_wrapped_plain_lines(
-            &mut lines,
-            &format!("Error: {error_message}"),
-            "",
-            width,
-            SGR_ERROR,
-            use_color,
-        );
-    }
-
     lines.push(String::new());
     append_wizard_body(&mut lines, current_step, state, width, use_color);
     lines.push(String::new());
@@ -100,6 +84,28 @@ pub fn render_wizard(
     lines.join("\n")
 }
 
+fn append_wizard_header(
+    lines: &mut Vec<String>,
+    step: &StepSpec,
+    state: &WizardState,
+    total_steps: usize,
+    width: usize,
+    use_color: bool,
+) {
+    lines.push(format_wizard_title(
+        state.step_index(),
+        total_steps,
+        &step.label,
+        use_color,
+    ));
+    append_wrapped_plain_lines(lines, &step.help, "", width, SGR_MUTED, use_color);
+
+    if let Some(error_message) = state.validation_error() {
+        let error_text = format!("Error: {error_message}");
+        append_wrapped_plain_lines(lines, &error_text, "", width, SGR_ERROR, use_color);
+    }
+}
+
 fn format_palette_row(command: &CommandSpec, is_selected: bool, use_color: bool) -> String {
     let id_tag = paint(&format!("[{}]", command.id), SGR_MUTED, use_color);
     if is_selected {
@@ -110,7 +116,7 @@ fn format_palette_row(command: &CommandSpec, is_selected: bool, use_color: bool)
     }
 }
 
-fn format_wizard_header(
+fn format_wizard_title(
     step_index: usize,
     total_steps: usize,
     step_label: &str,
@@ -127,15 +133,16 @@ fn format_wizard_header(
 }
 
 fn build_progress_dots(step_index: usize, total_steps: usize, use_color: bool) -> String {
-    let mut parts = Vec::with_capacity(total_steps);
-    for index in 0..total_steps {
-        if index <= step_index {
-            parts.push(paint("●", SGR_ACCENT, use_color));
-        } else {
-            parts.push(paint("○", SGR_MUTED, use_color));
-        }
-    }
-    parts.join(" ")
+    (0..total_steps)
+        .map(|index| {
+            if index <= step_index {
+                paint("●", SGR_ACCENT, use_color)
+            } else {
+                paint("○", SGR_MUTED, use_color)
+            }
+        })
+        .collect::<Vec<String>>()
+        .join(" ")
 }
 
 fn append_wizard_body(
@@ -166,8 +173,9 @@ fn append_option_list(lines: &mut Vec<String>, state: &WizardState, width: usize
         lines.push(paint("  (no options available)", SGR_MUTED, use_color));
         return;
     }
+    let clamped_selected = state.selected_option_index().min(options.len() - 1);
     for (index, option) in options.iter().enumerate() {
-        let is_selected = index == state.selected_option_index();
+        let is_selected = index == clamped_selected;
         lines.push(format_option_row(option, is_selected, use_color));
         if is_selected
             && let Some(help_text) = option.help.as_deref()
@@ -265,59 +273,39 @@ fn format_wizard_footer(
     let is_first_step = step_index == 0;
     let footer_text = match step.kind {
         StepKind::Text { .. } => {
-            build_text_footer(is_first_step, is_last_step, can_return_to_palette)
+            let confirm = if is_last_step {
+                "[Enter/Tab] run"
+            } else {
+                "[Enter/Tab] next"
+            };
+            back_hint(is_first_step, can_return_to_palette, "[S-Tab]").map_or_else(
+                || format!("{confirm}  [Esc] cancel"),
+                |back| format!("{confirm}  {back}  [Esc] cancel"),
+            )
         }
         StepKind::Select(_) | StepKind::DynamicSelect(_) | StepKind::Toggle { .. } => {
-            build_menu_footer(is_first_step, is_last_step, can_return_to_palette)
+            let confirm = if is_last_step {
+                "[Enter/l] run"
+            } else {
+                "[Enter/l] next"
+            };
+            back_hint(is_first_step, can_return_to_palette, "[h]").map_or_else(
+                || format!("[j/k] move  {confirm}  [q/Esc] close"),
+                |back| format!("[j/k] move  {back}  {confirm}  [q/Esc] close"),
+            )
         }
     };
     paint(&footer_text, SGR_MUTED, use_color)
 }
 
-fn build_text_footer(
-    is_first_step: bool,
-    is_last_step: bool,
-    can_return_to_palette: bool,
-) -> String {
-    let confirm_hint = if is_last_step {
-        "[Enter/Tab] run"
-    } else {
-        "[Enter/Tab] next"
-    };
-    let back_hint = if is_first_step && can_return_to_palette {
-        Some("[S-Tab] palette")
+fn back_hint(is_first_step: bool, can_return_to_palette: bool, key: &str) -> Option<String> {
+    if is_first_step && can_return_to_palette {
+        Some(format!("{key} palette"))
     } else if !is_first_step {
-        Some("[S-Tab] back")
+        Some(format!("{key} back"))
     } else {
         None
-    };
-    back_hint.map_or_else(
-        || format!("{confirm_hint}  [Esc] cancel"),
-        |hint| format!("{confirm_hint}  {hint}  [Esc] cancel"),
-    )
-}
-
-fn build_menu_footer(
-    is_first_step: bool,
-    is_last_step: bool,
-    can_return_to_palette: bool,
-) -> String {
-    let confirm_hint = if is_last_step {
-        "[Enter/l] run"
-    } else {
-        "[Enter/l] next"
-    };
-    let back_hint = if is_first_step && can_return_to_palette {
-        Some("[h] palette")
-    } else if !is_first_step {
-        Some("[h] back")
-    } else {
-        None
-    };
-    back_hint.map_or_else(
-        || format!("[j/k] move  {confirm_hint}  [q/Esc] close"),
-        |hint| format!("[j/k] move  {hint}  {confirm_hint}  [q/Esc] close"),
-    )
+    }
 }
 
 fn append_wrapped_help(lines: &mut Vec<String>, help_text: &str, width: usize, use_color: bool) {
@@ -332,12 +320,14 @@ fn append_wrapped_plain_lines(
     sgr_code: &str,
     use_color: bool,
 ) {
+    let indent_width = indent.chars().count();
+    let effective_indent = if indent_width < width { indent } else { "" };
     let available_width = width
-        .saturating_sub(indent.chars().count())
-        .max(MIN_WRAP_WIDTH);
+        .saturating_sub(effective_indent.chars().count())
+        .max(1);
     for wrapped_line in wrap_text(text, available_width) {
         lines.push(format!(
-            "{indent}{}",
+            "{effective_indent}{}",
             paint(&wrapped_line, sgr_code, use_color)
         ));
     }
@@ -375,11 +365,8 @@ fn wrap_text(text: &str, max_columns: usize) -> Vec<String> {
             );
         }
     }
-    if !current_line.is_empty() {
+    if !current_line.is_empty() || wrapped_lines.is_empty() {
         wrapped_lines.push(current_line);
-    }
-    if wrapped_lines.is_empty() {
-        wrapped_lines.push(String::new());
     }
     wrapped_lines
 }
@@ -391,9 +378,10 @@ fn push_word_or_chunks(
     word: &str,
     limit: usize,
 ) {
-    if word.chars().count() <= limit {
+    let word_len = word.chars().count();
+    if word_len <= limit {
         current_line.push_str(word);
-        *current_len = word.chars().count();
+        *current_len = word_len;
         return;
     }
     let mut chunk = String::new();
@@ -463,6 +451,23 @@ mod tests {
     }
 
     #[test]
+    fn render_palette_handles_empty_commands_and_clamps_out_of_bounds_index() {
+        let empty = render_palette("Commands", &[], &PaletteState::with_selected(5), 80, false);
+        assert!(empty.contains("(no commands available)"));
+
+        let commands = sample_commands();
+        let clamped = render_palette(
+            "Commands",
+            &commands,
+            &PaletteState::with_selected(99),
+            80,
+            false,
+        );
+        assert!(clamped.contains("▸ Check Out Pull Request  [checkout]"));
+        assert!(clamped.contains("Checks out a pull request branch"));
+    }
+
+    #[test]
     fn render_palette_emits_ansi_dim_when_color_enabled() {
         let commands = sample_commands();
         let state = PaletteState::new();
@@ -527,7 +532,6 @@ mod tests {
         assert!(step_one.contains("[h] palette"));
         assert!(!step_one.contains("\x1b["));
 
-        // Advance to step 2 (Text step with default "99").
         let _ = wizard.handle_key(&command, KeyAction::Confirm);
         let step_two = render_wizard(&command, &wizard, 80, false);
         assert!(step_two.contains("Step 2 of 3 · Pull Request Number"));
@@ -536,14 +540,12 @@ mod tests {
         assert!(step_two.contains("[S-Tab] back"));
         assert!(!step_two.contains("\x1b["));
 
-        // Enter invalid text and trigger validation error.
         let _ = wizard.handle_key(&command, KeyAction::Char('a'));
         let _ = wizard.handle_key(&command, KeyAction::Confirm);
         let step_two_error = render_wizard(&command, &wizard, 80, true);
         assert!(step_two_error.contains("\x1b[91m"));
         assert!(step_two_error.contains("Must be a number."));
 
-        // Fix input and advance to final step (empty text with placeholder).
         let _ = wizard.handle_key(&command, KeyAction::Backspace);
         let _ = wizard.handle_key(&command, KeyAction::Confirm);
         let step_three = render_wizard(&command, &wizard, 80, false);
@@ -554,7 +556,7 @@ mod tests {
     }
 
     #[test]
-    fn render_palette_wraps_long_help_to_width_with_indent() {
+    fn render_palette_wraps_help_strictly_within_narrow_widths() {
         let commands = vec![CommandSpec::new(
             "checkout",
             "Check Out Pull Request",
@@ -562,17 +564,18 @@ mod tests {
             vec![],
         )];
         let state = PaletteState::new();
-        let frame = render_palette("Commands", &commands, &state, 36, false);
-        let help_lines: Vec<&str> = frame
-            .lines()
-            .filter(|line| line.starts_with("    "))
-            .collect();
-        assert!(help_lines.len() >= 2);
-        for line in help_lines {
-            assert!(
-                line.chars().count() <= 36,
-                "wrapped help line exceeded width: {line:?}"
-            );
+
+        for width in [36, 14, 10, 4] {
+            let frame = render_palette("Commands", &commands, &state, width, false);
+            let lines: Vec<&str> = frame.lines().collect();
+            let help_lines = &lines[3..lines.len() - 2];
+            assert!(help_lines.len() >= 2);
+            for line in help_lines {
+                assert!(
+                    line.chars().count() <= width,
+                    "wrapped help line exceeded width {width}: {line:?}"
+                );
+            }
         }
     }
 }

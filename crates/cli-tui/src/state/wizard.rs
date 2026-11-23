@@ -1,115 +1,11 @@
-//! Pure state machines for the command palette and step-by-step wizard.
+//! Pure state machine driving a single command wizard step by step.
 
 use crate::schema::{
     Answers, CommandSpec, SelectOption, StepKind, StepSpec, prune_inactive_answers,
     resolve_active_steps,
 };
 
-/// Semantic input actions handled by [`PaletteState`] and [`WizardState`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum KeyAction {
-    /// Move selection up one item.
-    Up,
-    /// Move selection down one item.
-    Down,
-    /// Jump to the first item.
-    First,
-    /// Jump to the last item.
-    Last,
-    /// Step back to the previous step or palette.
-    Back,
-    /// Move forward / confirm selection.
-    Forward,
-    /// Confirm the current selection or text input.
-    Confirm,
-    /// Cancel and exit the interactive flow.
-    Cancel,
-    /// Move the text cursor one character left.
-    Left,
-    /// Move the text cursor one character right.
-    Right,
-    /// Move the text cursor to the start of the line.
-    Home,
-    /// Move the text cursor to the end of the line.
-    End,
-    /// Delete the character immediately before the text cursor.
-    Backspace,
-    /// Delete the character at the text cursor.
-    Delete,
-    /// Insert one Unicode scalar value at the text cursor.
-    Char(char),
-}
-
-/// Outcome of handling one key action in [`PaletteState`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PaletteAction {
-    /// Stay in the palette and redraw.
-    Continue,
-    /// The user selected the command at the given index.
-    Selected(usize),
-    /// The user cancelled the palette.
-    Cancelled,
-}
-
-/// Pure navigation state for the top-level command palette.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct PaletteState {
-    selected_index: usize,
-}
-
-impl PaletteState {
-    /// Creates a palette state focused on the first command.
-    #[must_use]
-    pub const fn new() -> Self {
-        Self { selected_index: 0 }
-    }
-
-    /// Creates a palette state focused on `selected_index`.
-    #[must_use]
-    pub const fn with_selected(selected_index: usize) -> Self {
-        Self { selected_index }
-    }
-
-    /// Returns the index of the currently highlighted command.
-    #[must_use]
-    pub const fn selected_index(&self) -> usize {
-        self.selected_index
-    }
-
-    /// Applies `action` against a palette containing `command_count` entries.
-    pub const fn handle_key(&mut self, action: KeyAction, command_count: usize) -> PaletteAction {
-        if command_count == 0 {
-            return match action {
-                KeyAction::Cancel => PaletteAction::Cancelled,
-                _ => PaletteAction::Continue,
-            };
-        }
-        if self.selected_index >= command_count {
-            self.selected_index = command_count - 1;
-        }
-        match action {
-            KeyAction::Up => {
-                self.selected_index = (self.selected_index + command_count - 1) % command_count;
-                PaletteAction::Continue
-            }
-            KeyAction::Down => {
-                self.selected_index = (self.selected_index + 1) % command_count;
-                PaletteAction::Continue
-            }
-            KeyAction::First => {
-                self.selected_index = 0;
-                PaletteAction::Continue
-            }
-            KeyAction::Last => {
-                self.selected_index = command_count - 1;
-                PaletteAction::Continue
-            }
-            KeyAction::Confirm | KeyAction::Forward => PaletteAction::Selected(self.selected_index),
-            KeyAction::Cancel => PaletteAction::Cancelled,
-            _ => PaletteAction::Continue,
-        }
-    }
-}
+use super::KeyAction;
 
 /// Outcome of handling one key action in [`WizardState`].
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -175,13 +71,13 @@ impl WizardState {
 
     /// Applies one key action to the current wizard step.
     pub fn handle_key(&mut self, command: &CommandSpec, action: KeyAction) -> WizardOutcome {
+        if matches!(action, KeyAction::Cancel) {
+            return WizardOutcome::Cancelled;
+        }
         let active_steps = resolve_active_steps(command, &self.answers);
         let Some(current_step) = active_steps.get(self.step_index).copied() else {
             return WizardOutcome::Completed(prune_inactive_answers(command, &self.answers));
         };
-        if matches!(action, KeyAction::Cancel) {
-            return WizardOutcome::Cancelled;
-        }
         match &current_step.kind {
             StepKind::Text { .. } => self.handle_text_key(command, current_step, action),
             StepKind::Select(_) | StepKind::DynamicSelect(_) | StepKind::Toggle { .. } => {
@@ -258,13 +154,17 @@ impl WizardState {
     fn load_current_step(&mut self, command: &CommandSpec) {
         self.validation_error = None;
         let active_steps = resolve_active_steps(command, &self.answers);
-        let Some(step) = active_steps.get(self.step_index).copied() else {
+        if active_steps.is_empty() {
+            self.step_index = 0;
             self.loaded_options.clear();
-            self.input_text.clear();
             self.selected_option_index = 0;
-            self.cursor_char_index = 0;
+            self.clear_text_buffer();
             return;
-        };
+        }
+        if self.step_index >= active_steps.len() {
+            self.step_index = active_steps.len() - 1;
+        }
+        let step = active_steps[self.step_index];
         let preferred_value = preferred_step_value(step, &self.answers);
         self.populate_step_controls(step, preferred_value.as_deref());
     }
@@ -357,7 +257,7 @@ impl WizardState {
                 WizardOutcome::Continue
             }
             KeyAction::Back => self.step_back(command, step),
-            KeyAction::Confirm | KeyAction::Forward => self.confirm_menu_option(command, step),
+            KeyAction::Confirm => self.confirm_menu_option(command, step),
             _ => WizardOutcome::Continue,
         }
     }
@@ -381,7 +281,7 @@ impl WizardState {
     ) -> WizardOutcome {
         match action {
             KeyAction::Back => self.step_back(command, step),
-            KeyAction::Confirm | KeyAction::Forward => {
+            KeyAction::Confirm => {
                 let candidate_value = self.input_text.clone();
                 self.commit_step_answer(command, step, candidate_value)
             }
@@ -442,7 +342,6 @@ impl WizardState {
     }
 
     fn step_back(&mut self, command: &CommandSpec, step: &StepSpec) -> WizardOutcome {
-        self.save_current_draft(step);
         if self.step_index == 0 {
             return if self.can_return_to_palette {
                 WizardOutcome::BackToPalette
@@ -450,7 +349,8 @@ impl WizardState {
                 WizardOutcome::Continue
             };
         }
-        self.step_index -= 1;
+        self.save_current_draft(step);
+        self.step_index = self.step_index.saturating_sub(1);
         self.load_current_step(command);
         WizardOutcome::Continue
     }
@@ -597,58 +497,13 @@ mod tests {
     }
 
     #[test]
-    fn palette_state_wraps_navigation_and_selects_or_cancels() {
-        let mut palette = PaletteState::new();
-        assert_eq!(palette.selected_index(), 0);
-
-        assert_eq!(
-            palette.handle_key(KeyAction::Up, 3),
-            PaletteAction::Continue
-        );
-        assert_eq!(palette.selected_index(), 2);
-
-        assert_eq!(
-            palette.handle_key(KeyAction::Down, 3),
-            PaletteAction::Continue
-        );
-        assert_eq!(palette.selected_index(), 0);
-
-        assert_eq!(
-            palette.handle_key(KeyAction::Last, 3),
-            PaletteAction::Continue
-        );
-        assert_eq!(palette.selected_index(), 2);
-
-        assert_eq!(
-            palette.handle_key(KeyAction::First, 3),
-            PaletteAction::Continue
-        );
-        assert_eq!(palette.selected_index(), 0);
-
-        assert_eq!(
-            palette.handle_key(KeyAction::Down, 3),
-            PaletteAction::Continue
-        );
-        assert_eq!(
-            palette.handle_key(KeyAction::Confirm, 3),
-            PaletteAction::Selected(1)
-        );
-        assert_eq!(
-            palette.handle_key(KeyAction::Cancel, 3),
-            PaletteAction::Cancelled
-        );
-    }
-
-    #[test]
     fn wizard_discriminant_branching_back_and_stale_answer_pruning() {
         let command = branching_command();
         let mut wizard = WizardState::new(&command, Answers::new(), true);
 
-        // Step 0 defaults to "socket" (option 0).
         assert_eq!(wizard.step_index(), 0);
         assert_eq!(wizard.selected_option_index(), 0);
 
-        // Confirm "socket" -> enters "socket" text step with smart default prefilled.
         assert_eq!(
             wizard.handle_key(&command, KeyAction::Confirm),
             WizardOutcome::Continue
@@ -656,7 +511,6 @@ mod tests {
         assert_eq!(wizard.step_index(), 1);
         assert_eq!(wizard.input_text(), "/tmp/default.sock");
 
-        // Step Back saves draft and returns to step 0 ("target_mode").
         assert_eq!(
             wizard.handle_key(&command, KeyAction::Back),
             WizardOutcome::Continue
@@ -667,7 +521,6 @@ mod tests {
             Some("/tmp/default.sock")
         );
 
-        // Switch discriminant to "pr" (option 1) and confirm.
         assert_eq!(
             wizard.handle_key(&command, KeyAction::Down),
             WizardOutcome::Continue
@@ -682,10 +535,9 @@ mod tests {
             Some("pr")
         );
 
-        // Enter "77", confirm -> advances to "repo" with prefilled default "octo/widgets".
-        for ch in "77".chars() {
+        for character in "77".chars() {
             assert_eq!(
-                wizard.handle_key(&command, KeyAction::Char(ch)),
+                wizard.handle_key(&command, KeyAction::Char(character)),
                 WizardOutcome::Continue
             );
         }
@@ -696,7 +548,6 @@ mod tests {
         assert_eq!(wizard.step_index(), 2);
         assert_eq!(wizard.input_text(), "octo/widgets");
 
-        // Confirm final step -> completes and prunes stale "socket" answer!
         let outcome = wizard.handle_key(&command, KeyAction::Confirm);
         assert_eq!(
             outcome,
@@ -704,6 +555,40 @@ mod tests {
                 ("target_mode".to_owned(), "pr".to_owned()),
                 ("pr".to_owned(), "77".to_owned()),
                 ("repo".to_owned(), "octo/widgets".to_owned()),
+            ]))
+        );
+    }
+
+    #[test]
+    fn wizard_multi_round_discriminant_toggle_restores_draft_and_prunes() {
+        let command = branching_command();
+        let mut wizard = WizardState::new(&command, Answers::new(), false);
+
+        // Choose socket, customize draft, step back.
+        let _ = wizard.handle_key(&command, KeyAction::Confirm);
+        let _ = wizard.handle_key(&command, KeyAction::Char('2'));
+        let _ = wizard.handle_key(&command, KeyAction::Back);
+
+        // Switch to pr, type "15", advance to repo, then step back twice to target_mode.
+        let _ = wizard.handle_key(&command, KeyAction::Down);
+        let _ = wizard.handle_key(&command, KeyAction::Confirm);
+        let _ = wizard.handle_key(&command, KeyAction::Char('1'));
+        let _ = wizard.handle_key(&command, KeyAction::Char('5'));
+        let _ = wizard.handle_key(&command, KeyAction::Confirm);
+        assert_eq!(wizard.step_index(), 2);
+        let _ = wizard.handle_key(&command, KeyAction::Back);
+        let _ = wizard.handle_key(&command, KeyAction::Back);
+        assert_eq!(wizard.step_index(), 0);
+
+        // Toggle back to socket: previous socket draft is restored and pr/repo are pruned.
+        let _ = wizard.handle_key(&command, KeyAction::Up);
+        let _ = wizard.handle_key(&command, KeyAction::Confirm);
+        assert_eq!(wizard.input_text(), "/tmp/default.sock2");
+        assert_eq!(
+            wizard.handle_key(&command, KeyAction::Confirm),
+            WizardOutcome::Completed(Answers::from([
+                ("target_mode".to_owned(), "socket".to_owned()),
+                ("socket".to_owned(), "/tmp/default.sock2".to_owned()),
             ]))
         );
     }
@@ -731,7 +616,7 @@ mod tests {
     }
 
     #[test]
-    fn wizard_utf8_text_editing_never_panics_on_multibyte_chars() {
+    fn wizard_utf8_text_editing_and_boundary_keys_stay_safe() {
         let command = CommandSpec::new(
             "reply",
             "Reply",
@@ -745,33 +630,57 @@ mod tests {
         );
         let mut wizard = WizardState::new(&command, Answers::new(), false);
 
-        for ch in "héllo🦀".chars() {
-            let _ = wizard.handle_key(&command, KeyAction::Char(ch));
+        // Boundary no-ops on empty text.
+        for boundary_action in [
+            KeyAction::Left,
+            KeyAction::Right,
+            KeyAction::Home,
+            KeyAction::End,
+            KeyAction::Backspace,
+            KeyAction::Delete,
+        ] {
+            assert_eq!(
+                wizard.handle_key(&command, boundary_action),
+                WizardOutcome::Continue
+            );
+        }
+        assert_eq!(wizard.input_text(), "");
+        assert_eq!(wizard.cursor_char_index(), 0);
+
+        for character in "héllo🦀".chars() {
+            let _ = wizard.handle_key(&command, KeyAction::Char(character));
         }
         assert_eq!(wizard.input_text(), "héllo🦀");
         assert_eq!(wizard.cursor_char_index(), 6);
 
-        // Move left past 🦀 and insert '!'
+        // Right/Delete past end are no-ops.
+        let _ = wizard.handle_key(&command, KeyAction::Right);
+        let _ = wizard.handle_key(&command, KeyAction::Delete);
+        assert_eq!(wizard.cursor_char_index(), 6);
+
+        // Move left past 🦀 and insert '!'.
         let _ = wizard.handle_key(&command, KeyAction::Left);
         let _ = wizard.handle_key(&command, KeyAction::Char('!'));
         assert_eq!(wizard.input_text(), "héllo!🦀");
 
-        // Jump Home, move right past 'h', delete 'é' with Delete, then Backspace 'h'.
+        // Jump Home: Left/Backspace at 0 are no-ops; Right + Delete removes 'é'.
         let _ = wizard.handle_key(&command, KeyAction::Home);
+        let _ = wizard.handle_key(&command, KeyAction::Left);
+        let _ = wizard.handle_key(&command, KeyAction::Backspace);
+        assert_eq!(wizard.cursor_char_index(), 0);
         let _ = wizard.handle_key(&command, KeyAction::Right);
         let _ = wizard.handle_key(&command, KeyAction::Delete);
         assert_eq!(wizard.input_text(), "hllo!🦀");
         let _ = wizard.handle_key(&command, KeyAction::Backspace);
         assert_eq!(wizard.input_text(), "llo!🦀");
 
-        // Jump End and Backspace the emoji.
         let _ = wizard.handle_key(&command, KeyAction::End);
         let _ = wizard.handle_key(&command, KeyAction::Backspace);
         assert_eq!(wizard.input_text(), "llo!");
     }
 
     #[test]
-    fn wizard_back_on_first_step_returns_to_palette_only_when_allowed() {
+    fn wizard_back_on_first_step_never_mutates_answers_and_respects_palette_flag() {
         let command = branching_command();
 
         let mut from_palette = WizardState::new(&command, Answers::new(), true);
@@ -779,6 +688,7 @@ mod tests {
             from_palette.handle_key(&command, KeyAction::Back),
             WizardOutcome::BackToPalette
         );
+        assert!(from_palette.answers().is_empty());
 
         let mut direct = WizardState::new(&command, Answers::new(), false);
         assert_eq!(
@@ -786,19 +696,24 @@ mod tests {
             WizardOutcome::Continue
         );
         assert_eq!(direct.step_index(), 0);
+        assert!(direct.answers().is_empty());
     }
 
     #[test]
-    fn wizard_zero_step_command_completes_immediately() {
+    fn wizard_zero_step_command_completes_immediately_but_cancel_always_cancels() {
         let command = CommandSpec::new(
             "guide",
             "Print Agent Review Guide",
             "Prints the review workflow guide.",
             vec![],
         );
-        let wizard = WizardState::new(&command, Answers::new(), true);
+        let mut wizard = WizardState::new(&command, Answers::new(), true);
         assert_eq!(wizard.immediate_completion(&command), Some(Answers::new()));
         assert!(!has_unanswered_active_step(&command, &Answers::new()));
+        assert_eq!(
+            wizard.handle_key(&command, KeyAction::Cancel),
+            WizardOutcome::Cancelled
+        );
     }
 
     #[test]
@@ -835,14 +750,12 @@ mod tests {
         );
 
         let mut wizard = WizardState::new(&command, Answers::new(), false);
-        // DynamicSelect preselects default "12" at index 1.
         assert_eq!(wizard.selected_option_index(), 1);
         assert_eq!(
             wizard.handle_key(&command, KeyAction::Confirm),
             WizardOutcome::Continue
         );
 
-        // Toggle defaults to "false" (index 0); move down to "true" (index 1) and confirm.
         assert_eq!(wizard.selected_option_index(), 0);
         let _ = wizard.handle_key(&command, KeyAction::Down);
         assert_eq!(
@@ -855,41 +768,65 @@ mod tests {
     }
 
     #[test]
-    fn wizard_dynamic_select_error_or_empty_blocks_confirm_with_message() {
-        let failing_command = CommandSpec::new(
+    fn wizard_dynamic_select_failure_and_empty_handle_navigation_and_back() {
+        let command = CommandSpec::new(
             "checkout",
             "Check Out",
             "Check out a PR.",
-            vec![StepSpec::new(
-                "pr",
-                "Pull Request",
-                "Pick an open PR.",
-                StepKind::DynamicSelect(Arc::new(|_| Err(anyhow::anyhow!("gh auth missing")))),
-            )],
-        );
-        let mut failing_wizard = WizardState::new(&failing_command, Answers::new(), false);
-        assert_eq!(failing_wizard.validation_error(), Some("gh auth missing"));
-        assert_eq!(
-            failing_wizard.handle_key(&failing_command, KeyAction::Confirm),
-            WizardOutcome::Continue
+            vec![
+                StepSpec::new(
+                    "source",
+                    "Source",
+                    "Pick source.",
+                    StepKind::Select(vec![
+                        SelectOption::new("err", "Failing list"),
+                        SelectOption::new("empty", "Empty list"),
+                    ]),
+                ),
+                StepSpec::new(
+                    "pr",
+                    "Pull Request",
+                    "Pick an open PR.",
+                    StepKind::DynamicSelect(Arc::new(|answers| {
+                        if answers.get("source").map(String::as_str) == Some("err") {
+                            Err(anyhow::anyhow!("gh auth missing"))
+                        } else {
+                            Ok(vec![])
+                        }
+                    })),
+                ),
+            ],
         );
 
-        let empty_command = CommandSpec::new(
-            "checkout",
-            "Check Out",
-            "Check out a PR.",
-            vec![StepSpec::new(
-                "pr",
-                "Pull Request",
-                "Pick an open PR.",
-                StepKind::DynamicSelect(Arc::new(|_| Ok(vec![]))),
-            )],
-        );
-        let mut empty_wizard = WizardState::new(&empty_command, Answers::new(), false);
-        assert!(empty_wizard.validation_error().is_some());
+        let mut wizard = WizardState::new(&command, Answers::new(), false);
+        let _ = wizard.handle_key(&command, KeyAction::Confirm);
+        assert_eq!(wizard.validation_error(), Some("gh auth missing"));
+        for action in [
+            KeyAction::Up,
+            KeyAction::Down,
+            KeyAction::First,
+            KeyAction::Last,
+            KeyAction::Confirm,
+        ] {
+            assert_eq!(wizard.handle_key(&command, action), WizardOutcome::Continue);
+        }
         assert_eq!(
-            empty_wizard.handle_key(&empty_command, KeyAction::Confirm),
+            wizard.handle_key(&command, KeyAction::Back),
             WizardOutcome::Continue
         );
+        assert_eq!(wizard.step_index(), 0);
+
+        let _ = wizard.handle_key(&command, KeyAction::Down);
+        let _ = wizard.handle_key(&command, KeyAction::Confirm);
+        assert!(wizard.validation_error().is_some());
+        assert_eq!(
+            wizard.handle_key(&command, KeyAction::Down),
+            WizardOutcome::Continue
+        );
+        assert_eq!(
+            wizard.handle_key(&command, KeyAction::Back),
+            WizardOutcome::Continue
+        );
+        assert_eq!(wizard.step_index(), 0);
     }
 }

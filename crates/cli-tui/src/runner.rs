@@ -15,7 +15,7 @@ use crate::state::{
 };
 
 const DEFAULT_TERMINAL_WIDTH: usize = 80;
-const MIN_TERMINAL_WIDTH: usize = 20;
+const MIN_TERMINAL_WIDTH: usize = 1;
 
 /// Outcome of running the interactive top-level command palette.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -150,17 +150,18 @@ impl RawModeGuard {
         Ok(Self { rendered_lines: 0 })
     }
 
-    fn render_frame(&mut self, frame: &str) -> Result<()> {
+    fn render_frame(&mut self, frame: &str, columns: usize) -> Result<()> {
         let mut stderr = std::io::stderr();
         clear_previous_frame(&mut stderr, self.rendered_lines)
             .context("clearing previous TUI frame on stderr")?;
+        self.rendered_lines = 0;
 
-        let frame_lines: Vec<&str> = frame.split('\n').collect();
-        for line in &frame_lines {
+        for line in frame.split('\n') {
             write!(stderr, "{line}\r\n").context("writing TUI frame line to stderr")?;
+            let visual_rows = count_visual_rows(line, columns);
+            self.rendered_lines = self.rendered_lines.saturating_add(visual_rows);
         }
         stderr.flush().context("flushing TUI frame to stderr")?;
-        self.rendered_lines = u16::try_from(frame_lines.len()).unwrap_or(u16::MAX);
         Ok(())
     }
 }
@@ -194,8 +195,9 @@ fn run_palette_loop(
     use_color: bool,
 ) -> Result<PaletteAction> {
     loop {
-        let frame = render_palette(title, commands, palette_state, terminal_width(), use_color);
-        terminal_guard.render_frame(&frame)?;
+        let width = terminal_width();
+        let frame = render_palette(title, commands, palette_state, width, use_color);
+        terminal_guard.render_frame(&frame, width)?;
 
         if let Event::Key(key_event) = event::read().context("reading terminal input event")? {
             let Some(action) = key_event_to_action(key_event, false) else {
@@ -218,8 +220,9 @@ fn run_wizard_loop(
     use_color: bool,
 ) -> Result<WizardOutcome> {
     loop {
-        let frame = render_wizard(command, wizard_state, terminal_width(), use_color);
-        terminal_guard.render_frame(&frame)?;
+        let width = terminal_width();
+        let frame = render_wizard(command, wizard_state, width, use_color);
+        terminal_guard.render_frame(&frame, width)?;
 
         if let Event::Key(key_event) = event::read().context("reading terminal input event")? {
             let is_text_input = wizard_state.is_text_step(command);
@@ -251,6 +254,12 @@ pub(crate) const fn key_event_to_action(event: KeyEvent, is_text_input: bool) ->
 }
 
 const fn map_menu_key(event: KeyEvent) -> Option<KeyAction> {
+    let has_disallowed_modifier = event
+        .modifiers
+        .intersects(KeyModifiers::CONTROL.union(KeyModifiers::ALT));
+    if has_disallowed_modifier {
+        return None;
+    }
     match event.code {
         KeyCode::Up | KeyCode::Char('k') => Some(KeyAction::Up),
         KeyCode::Down | KeyCode::Char('j') => Some(KeyAction::Down),
@@ -285,6 +294,32 @@ const fn map_text_key(event: KeyEvent) -> Option<KeyAction> {
         }
         _ => None,
     }
+}
+
+/// Computes the number of visual terminal rows occupied by `line` at `columns`
+/// width, ignoring ANSI CSI escape sequences.
+pub(crate) fn count_visual_rows(line: &str, columns: usize) -> u16 {
+    let visible_chars = visible_char_count(line);
+    let rows = visible_chars.div_ceil(columns.max(1)).max(1);
+    u16::try_from(rows).unwrap_or(u16::MAX)
+}
+
+fn visible_char_count(line: &str) -> usize {
+    let mut visible_count = 0;
+    let mut chars = line.chars().peekable();
+    while let Some(character) = chars.next() {
+        if character == '\x1b' && chars.peek() == Some(&'[') {
+            let _ = chars.next();
+            for escape_char in chars.by_ref() {
+                if ('@'..='~').contains(&escape_char) {
+                    break;
+                }
+            }
+        } else {
+            visible_count += 1;
+        }
+    }
+    visible_count
 }
 
 fn terminal_width() -> usize {
@@ -325,7 +360,35 @@ mod tests {
             Some(KeyAction::Confirm)
         );
         assert_eq!(
+            key_event_to_action(press(KeyCode::Char('G'), KeyModifiers::SHIFT), false),
+            Some(KeyAction::Last)
+        );
+        assert_eq!(
             key_event_to_action(press(KeyCode::Char('q'), KeyModifiers::NONE), false),
+            Some(KeyAction::Cancel)
+        );
+    }
+
+    #[test]
+    fn menu_key_mapping_ignores_ctrl_and_alt_except_ctrl_c() {
+        assert_eq!(
+            key_event_to_action(press(KeyCode::Char('l'), KeyModifiers::CONTROL), false),
+            None
+        );
+        assert_eq!(
+            key_event_to_action(press(KeyCode::Char('j'), KeyModifiers::CONTROL), false),
+            None
+        );
+        assert_eq!(
+            key_event_to_action(press(KeyCode::Char('k'), KeyModifiers::ALT), false),
+            None
+        );
+        assert_eq!(
+            key_event_to_action(press(KeyCode::Char('q'), KeyModifiers::CONTROL), false),
+            None
+        );
+        assert_eq!(
+            key_event_to_action(press(KeyCode::Char('c'), KeyModifiers::CONTROL), false),
             Some(KeyAction::Cancel)
         );
     }
@@ -351,6 +414,20 @@ mod tests {
         let release =
             KeyEvent::new_with_kind(KeyCode::Enter, KeyModifiers::NONE, KeyEventKind::Release);
         assert_eq!(key_event_to_action(release, false), None);
+    }
+
+    #[test]
+    fn count_visual_rows_strips_ansi_and_accounts_for_soft_wrapping() {
+        assert_eq!(count_visual_rows("", 80), 1);
+        assert_eq!(count_visual_rows("short", 10), 1);
+        assert_eq!(count_visual_rows("0123456789", 10), 1);
+        assert_eq!(count_visual_rows("0123456789a", 10), 2);
+        assert_eq!(count_visual_rows("\x1b[1;96m▸ hello\x1b[0m", 10), 1);
+        assert_eq!(
+            count_visual_rows("\x1b[90m012345678901234567890\x1b[0m", 10),
+            3
+        );
+        assert_eq!(count_visual_rows("🦀🦀🦀🦀🦀", 4), 2);
     }
 
     #[test]

@@ -348,19 +348,23 @@ pub fn resolve_active_steps<'a>(command: &'a CommandSpec, answers: &Answers) -> 
 }
 
 /// Returns a copy of `answers` retaining only keys that belong to active steps
-/// in `command`.
+/// in `command`, iterating to a fixed point so transitive `when` chains prune
+/// cleanly.
 #[must_use]
 pub fn prune_inactive_answers(command: &CommandSpec, answers: &Answers) -> Answers {
-    let active_step_ids: std::collections::BTreeSet<&str> = resolve_active_steps(command, answers)
-        .into_iter()
-        .map(|step| step.id.as_str())
-        .collect();
-
-    answers
-        .iter()
-        .filter(|(step_id, _)| active_step_ids.contains(step_id.as_str()))
-        .map(|(step_id, answer_value)| (step_id.clone(), answer_value.clone()))
-        .collect()
+    let mut pruned = answers.clone();
+    loop {
+        let active_step_ids: std::collections::BTreeSet<&str> =
+            resolve_active_steps(command, &pruned)
+                .into_iter()
+                .map(|step| step.id.as_str())
+                .collect();
+        let previous_len = pruned.len();
+        pruned.retain(|step_id, _| active_step_ids.contains(step_id.as_str()));
+        if pruned.len() == previous_len {
+            return pruned;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -527,6 +531,55 @@ mod tests {
                 ("pr".to_owned(), "42".to_owned()),
                 ("repo".to_owned(), "octo/widgets".to_owned()),
             ])
+        );
+    }
+
+    #[test]
+    fn prune_inactive_answers_prunes_transitive_when_chains() {
+        let command = CommandSpec::new(
+            "deploy",
+            "Deploy",
+            "Run a deployment.",
+            vec![
+                StepSpec::new(
+                    "mode",
+                    "Mode",
+                    "Pick mode.",
+                    StepKind::Select(vec![
+                        SelectOption::new("local", "Local"),
+                        SelectOption::new("remote", "Remote"),
+                    ]),
+                ),
+                StepSpec::new(
+                    "region",
+                    "Region",
+                    "Pick region.",
+                    StepKind::Select(vec![
+                        SelectOption::new("us", "US"),
+                        SelectOption::new("eu", "EU"),
+                    ]),
+                )
+                .with_when(|answers| answers.get("mode").map(String::as_str) == Some("remote")),
+                StepSpec::new(
+                    "eu_cluster",
+                    "EU Cluster",
+                    "Enter EU cluster name.",
+                    StepKind::Text { placeholder: None },
+                )
+                .with_when(|answers| answers.get("region").map(String::as_str) == Some("eu")),
+            ],
+        );
+
+        let dirty = Answers::from([
+            ("mode".to_owned(), "local".to_owned()),
+            ("region".to_owned(), "eu".to_owned()),
+            ("eu_cluster".to_owned(), "fra-1".to_owned()),
+        ]);
+
+        let pruned = prune_inactive_answers(&command, &dirty);
+        assert_eq!(
+            pruned,
+            Answers::from([("mode".to_owned(), "local".to_owned())])
         );
     }
 }
