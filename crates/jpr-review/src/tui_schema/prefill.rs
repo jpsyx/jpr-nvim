@@ -44,6 +44,15 @@ pub(super) fn initial_answers_for_missing_inputs_with_env(
             worktree_cmd,
         } => initial_checkout_answers(*pr, repo.as_deref(), worktree_cmd.as_deref()),
         Command::StatePath { pr, repo } => initial_state_path_answers(*pr, repo.as_deref()),
+        Command::Threads { .. } | Command::Reply { .. } | Command::PrepassWrite { .. } => {
+            initial_agent_answers(command, env)
+        }
+        Command::Prs { .. } | Command::Serve { .. } | Command::Guide => None,
+    }
+}
+
+fn initial_agent_answers(command: &Command, env: TargetEnv<'_>) -> Option<(&'static str, Answers)> {
+    match command {
         Command::Threads {
             pr,
             repo,
@@ -76,7 +85,11 @@ pub(super) fn initial_answers_for_missing_inputs_with_env(
             target_flags(socket.as_deref(), *pr, repo.as_deref()),
             env,
         ),
-        Command::Prs { .. } | Command::Serve { .. } | Command::Guide => None,
+        Command::Checkout { .. }
+        | Command::Guide
+        | Command::Prs { .. }
+        | Command::Serve { .. }
+        | Command::StatePath { .. } => None,
     }
 }
 
@@ -182,8 +195,6 @@ fn initial_prepass_write_answers(
             "input".to_owned(),
             input_path.to_string_lossy().into_owned(),
         );
-    } else {
-        answers.insert("input_mode".to_owned(), "stdin".to_owned());
     }
     Some(("prepass-write", answers))
 }

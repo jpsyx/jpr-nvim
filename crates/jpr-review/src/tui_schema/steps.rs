@@ -74,7 +74,7 @@ pub(super) fn create_target_steps() -> Vec<StepSpec> {
         .with_default_fn(|_| non_empty_env("JPR_SOCKET").unwrap_or_default())
         .with_when(|answers| answer_equals(answers, "target_mode", "socket"))
         .with_validate(validate_non_empty("socket path")),
-        create_required_pr_step().with_when(|answers| answer_equals(answers, "target_mode", "pr")),
+        create_agent_pr_step().with_when(|answers| answer_equals(answers, "target_mode", "pr")),
         StepSpec::new(
             "repo",
             "Repository (Optional)",
@@ -118,8 +118,24 @@ pub(super) fn create_required_pr_step() -> StepSpec {
             placeholder: Some("42".to_owned()),
         },
     )
-    .with_default_fn(|_| non_empty_env("JPR_PR").unwrap_or_default())
     .with_validate(validate_pr_number)
+}
+
+fn create_agent_pr_step() -> StepSpec {
+    create_required_pr_step().with_default_fn(|answers| {
+        resolve_agent_pr_default(answers, non_empty_env("JPR_PR").as_deref())
+    })
+}
+
+pub(super) fn resolve_agent_pr_default(answers: &Answers, env_pr: Option<&str>) -> String {
+    let has_explicit_repo = answers
+        .get("repo")
+        .is_some_and(|value| !value.trim().is_empty());
+    if has_explicit_repo {
+        String::new()
+    } else {
+        env_pr.unwrap_or_default().to_owned()
+    }
 }
 
 pub(super) fn create_required_repo_step() -> StepSpec {
@@ -144,9 +160,21 @@ pub(super) fn create_open_pr_picker_step() -> StepSpec {
     .with_when(|answers| answer_equals(answers, "source", "list"))
 }
 
-fn load_open_pull_request_options(_answers: &Answers) -> Result<Vec<SelectOption>> {
+pub(super) fn resolve_checkout_loader_repo(answers: &Answers) -> Option<String> {
+    if !answer_equals(answers, "custom_repo", "true") {
+        return None;
+    }
+    answers
+        .get("repo")
+        .map(|raw| raw.trim())
+        .filter(|trimmed| !trimmed.is_empty())
+        .map(str::to_owned)
+}
+
+fn load_open_pull_request_options(answers: &Answers) -> Result<Vec<SelectOption>> {
     let cwd = env::current_dir().context("reading the current directory")?;
-    let summaries = GhForge::new(cwd, None)
+    let target_repo = resolve_checkout_loader_repo(answers);
+    let summaries = GhForge::new(cwd, target_repo)
         .open_pull_requests(DEFAULT_PR_LIST_LIMIT)
         .context("loading open pull requests")?;
     Ok(summaries

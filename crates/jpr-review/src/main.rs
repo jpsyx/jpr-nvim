@@ -59,7 +59,7 @@ fn run_with_subcommand(command: &Command, theme: Theme) -> Result<()> {
             .with_context(|| format!("missing interactive schema for `{command_id}`"))?;
         return match cli_tui::run_command(spec, initial_answers)? {
             CommandOutcome::Completed(answers) => {
-                let resolved = tui_schema::answers_to_command(command_id, &answers)?;
+                let resolved = tui_schema::apply_answers_to_command(command, &answers)?;
                 app::commands::run_command(&resolved, theme)
             }
             CommandOutcome::Cancelled => Ok(()),

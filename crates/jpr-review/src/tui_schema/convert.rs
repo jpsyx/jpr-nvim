@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result, bail};
 use cli_tui::Answers;
 
+use super::steps::non_empty_env;
 use crate::cli::Command;
 use crate::commands;
 
@@ -20,6 +21,78 @@ pub fn answers_to_command(command_id: &str, answers: &Answers) -> Result<Command
         "serve" => answers_to_serve(answers),
         "guide" => Ok(Command::Guide),
         other => bail!("unknown command id {other:?}"),
+    }
+}
+
+/// Applies interactive `answers` onto a partially specified `original` [`Command`],
+/// preserving ambient `$JPR_SOCKET` fallback when the user did not supply or edit `--socket`.
+pub fn apply_answers_to_command(original: &Command, answers: &Answers) -> Result<Command> {
+    apply_answers_to_command_with_env(original, answers, non_empty_env("JPR_SOCKET").as_deref())
+}
+
+pub(super) fn apply_answers_to_command_with_env(
+    original: &Command,
+    answers: &Answers,
+    env_socket: Option<&str>,
+) -> Result<Command> {
+    let mut resolved = answers_to_command(command_id_for_command(original), answers)?;
+    if !has_ambient_socket_origin(original) {
+        return Ok(resolved);
+    }
+    if let Some(ambient_socket) = env_socket {
+        clear_matching_ambient_socket(&mut resolved, ambient_socket);
+    }
+    Ok(resolved)
+}
+
+const fn command_id_for_command(command: &Command) -> &'static str {
+    match command {
+        Command::Checkout { .. } => "checkout",
+        Command::Guide => "guide",
+        Command::Threads { .. } => "threads",
+        Command::Reply { .. } => "reply",
+        Command::PrepassWrite { .. } => "prepass-write",
+        Command::Prs { .. } => "prs",
+        Command::Serve { .. } => "serve",
+        Command::StatePath { .. } => "state-path",
+    }
+}
+
+const fn has_ambient_socket_origin(command: &Command) -> bool {
+    match command {
+        Command::Threads {
+            pr, repo, socket, ..
+        }
+        | Command::Reply {
+            pr, repo, socket, ..
+        }
+        | Command::PrepassWrite {
+            pr, repo, socket, ..
+        } => socket.is_none() && pr.is_none() && repo.is_none(),
+        Command::Checkout { .. }
+        | Command::Guide
+        | Command::Prs { .. }
+        | Command::Serve { .. }
+        | Command::StatePath { .. } => false,
+    }
+}
+
+fn clear_matching_ambient_socket(command: &mut Command, ambient_socket: &str) {
+    let target_socket = match command {
+        Command::Threads { socket, .. }
+        | Command::Reply { socket, .. }
+        | Command::PrepassWrite { socket, .. } => socket,
+        Command::Checkout { .. }
+        | Command::Guide
+        | Command::Prs { .. }
+        | Command::Serve { .. }
+        | Command::StatePath { .. } => return,
+    };
+    if target_socket
+        .as_deref()
+        .is_some_and(|path| path.to_str() == Some(ambient_socket))
+    {
+        *target_socket = None;
     }
 }
 

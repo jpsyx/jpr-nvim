@@ -296,24 +296,30 @@ fn assert_partial_checkout_prefill(specs: &[CommandSpec]) {
 }
 
 fn assert_partial_reply_prefill(specs: &[CommandSpec]) {
+    let empty_env = TargetEnv {
+        socket: None,
+        pr: None,
+    };
+    let complete = Command::Reply {
+        thread_id: Some("loc-1".into()),
+        body: Some("Done.".into()),
+        pr: Some(7),
+        repo: None,
+        socket: None,
+    };
     assert_eq!(
-        initial_answers_for_missing_inputs(&Command::Reply {
-            thread_id: Some("loc-1".into()),
-            body: Some("Done.".into()),
-            pr: Some(7),
-            repo: None,
-            socket: None,
-        }),
+        initial_answers_for_missing_inputs_with_env(&complete, empty_env),
         None
     );
-    let (id, answers) = initial_answers_for_missing_inputs(&Command::Reply {
+    let partial = Command::Reply {
         thread_id: Some("loc-1".into()),
         body: None,
         pr: Some(7),
         repo: Some("octo/widgets".into()),
         socket: None,
-    })
-    .expect("reply without --body needs interactive input");
+    };
+    let (id, answers) = initial_answers_for_missing_inputs_with_env(&partial, empty_env)
+        .expect("reply without --body needs interactive input");
     assert_eq!(id, "reply");
     assert_eq!(
         answers,

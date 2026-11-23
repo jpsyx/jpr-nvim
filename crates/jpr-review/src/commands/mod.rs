@@ -92,7 +92,7 @@ fn run_agent_command(command: &Command, theme: Theme) -> Result<()> {
         | Command::Guide
         | Command::Prs { .. }
         | Command::Serve { .. }
-        | Command::StatePath { .. } => unreachable!("handled by commands::run"),
+        | Command::StatePath { .. } => unreachable!("handled by commands::run_command"),
     }
 }
 
@@ -254,5 +254,13 @@ mod tests {
         assert!(parse_repo("widgets").is_err());
         assert!(parse_repo("/widgets").is_err());
         assert!(parse_repo("a/b/c").is_err());
+    }
+
+    #[test]
+    fn run_fails_when_no_subcommand_is_present() {
+        let cli = Cli { command: None };
+        let error =
+            run(&cli, Theme::dark(false)).expect_err("bare Cli should fail in commands::run");
+        assert!(error.to_string().contains("no subcommand specified"));
     }
 }

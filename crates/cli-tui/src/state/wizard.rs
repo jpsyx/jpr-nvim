@@ -1,5 +1,7 @@
 //! Pure state machine driving a single command wizard step by step.
 
+use std::collections::BTreeSet;
+
 use crate::schema::{
     Answers, CommandSpec, SelectOption, StepKind, StepSpec, prune_inactive_answers,
     resolve_active_steps,
@@ -24,6 +26,7 @@ pub enum WizardOutcome {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WizardState {
     answers: Answers,
+    prefilled_keys: BTreeSet<String>,
     step_index: usize,
     can_return_to_palette: bool,
     selected_option_index: usize,
@@ -45,8 +48,10 @@ impl WizardState {
         let active_steps = resolve_active_steps(command, &initial_answers);
         let starting_step_index =
             first_unanswered_step_index(&active_steps, &initial_answers).unwrap_or(0);
+        let prefilled_keys = initial_answers.keys().cloned().collect();
         let mut state = Self {
             answers: initial_answers,
+            prefilled_keys,
             step_index: starting_step_index,
             can_return_to_palette,
             selected_option_index: 0,
@@ -351,6 +356,12 @@ impl WizardState {
         }
         self.save_current_draft(step);
         self.step_index = self.step_index.saturating_sub(1);
+        if let Some(target_step) = resolve_active_steps(command, &self.answers)
+            .get(self.step_index)
+            .copied()
+        {
+            self.prefilled_keys.remove(&target_step.id);
+        }
         self.load_current_step(command);
         WizardOutcome::Continue
     }
@@ -368,13 +379,20 @@ impl WizardState {
             return WizardOutcome::Continue;
         }
         self.answers.insert(step.id.clone(), candidate_value);
+        self.prefilled_keys.remove(&step.id);
         let updated_steps = resolve_active_steps(command, &self.answers);
         let current_position = updated_steps
             .iter()
             .position(|active_step| active_step.id == step.id)
             .unwrap_or(self.step_index);
-        let next_step_index = current_position + 1;
-        if next_step_index < updated_steps.len() {
+        if let Some(next_step_index) = updated_steps
+            .iter()
+            .enumerate()
+            .skip(current_position + 1)
+            .find_map(|(index, active_step)| {
+                (!self.prefilled_keys.contains(&active_step.id)).then_some(index)
+            })
+        {
             self.step_index = next_step_index;
             self.load_current_step(command);
             WizardOutcome::Continue
@@ -828,5 +846,42 @@ mod tests {
             WizardOutcome::Continue
         );
         assert_eq!(wizard.step_index(), 0);
+    }
+
+    #[test]
+    fn wizard_skips_trailing_prefilled_steps_and_unmarks_on_back() {
+        let command = branching_command();
+        let initial = Answers::from([
+            ("target_mode".to_owned(), "pr".to_owned()),
+            ("repo".to_owned(), "octo/widgets".to_owned()),
+        ]);
+        let mut wizard = WizardState::new(&command, initial.clone(), false);
+        assert_eq!(wizard.step_index(), 1);
+        assert_eq!(
+            wizard.current_step(&command).map(|step| step.id.as_str()),
+            Some("pr")
+        );
+
+        let _ = wizard.handle_key(&command, KeyAction::Char('9'));
+        assert_eq!(
+            wizard.handle_key(&command, KeyAction::Confirm),
+            WizardOutcome::Completed(Answers::from([
+                ("target_mode".to_owned(), "pr".to_owned()),
+                ("pr".to_owned(), "9".to_owned()),
+                ("repo".to_owned(), "octo/widgets".to_owned()),
+            ]))
+        );
+
+        let mut revisited = WizardState::new(&command, initial, false);
+        assert_eq!(
+            revisited.handle_key(&command, KeyAction::Back),
+            WizardOutcome::Continue
+        );
+        assert_eq!(revisited.step_index(), 0);
+        assert_eq!(
+            revisited.handle_key(&command, KeyAction::Confirm),
+            WizardOutcome::Continue
+        );
+        assert_eq!(revisited.step_index(), 1);
     }
 }
