@@ -318,7 +318,10 @@ local function create_menu_step_state(step, answers, context, can_return_to_pale
     local preferred = get_preferred_step_value(step, answers, context)
     if step.kind == "toggle" then
         local options = schema.create_toggle_options_from_step(step)
-        local target = preferred ~= nil and preferred or false
+        local target = false
+        if preferred ~= nil then
+            target = preferred
+        end
         return {
             is_loading = false,
             options = options,
@@ -380,8 +383,15 @@ end
 
 local function step_back_from_menu(state, step)
     local options = state.step_state.options or {}
-    local selected_option = (not state.step_state.is_loading) and options[state.step_state.selected_option_index] or nil
-    step_back_from_step(state, step, selected_option and selected_option.value or nil, selected_option ~= nil)
+    local selected_option = nil
+    if not state.step_state.is_loading then
+        selected_option = options[state.step_state.selected_option_index]
+    end
+    if selected_option ~= nil then
+        step_back_from_step(state, step, selected_option.value, true)
+    else
+        step_back_from_step(state, step, nil, false)
+    end
 end
 
 local function bind_menu_step_keys(state, step)

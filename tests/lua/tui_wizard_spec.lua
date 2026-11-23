@@ -464,6 +464,69 @@ local function test_singleton_menu_validation_and_back_stale_async()
     assert(executed_answers == nil, "closed without executing")
 end
 
+local function has_buffer_highlight_group(buf, target_group, expected_text)
+    local lines = vim.api.nvim_buf_get_lines(buf, 0, -1, false)
+    local marks = vim.api.nvim_buf_get_extmarks(buf, -1, 0, -1, { details = true })
+    for _, mark in ipairs(marks) do
+        local details = mark[4]
+        if details and details.hl_group == target_group then
+            local line_text = lines[mark[2] + 1] or ""
+            local highlighted = line_text:sub(mark[3] + 1, details.end_col or #line_text)
+            if not expected_text or highlighted:find(expected_text, 1, true) ~= nil then
+                return true
+            end
+        end
+    end
+    return false
+end
+
+local function test_toggle_false_draft_preserved_on_step_back()
+    local executed_answers = nil
+    local command = create_toggle_command(function(answers) executed_answers = answers end)
+    command.steps[2].default = true
+
+    wizard.open_command(command, {}, {})
+    helpers.press_key("<CR>")
+    assert(current_text():find("▸ Yes", 1, true) ~= nil, "toggle with default=true starts on Yes")
+
+    -- Highlight No (false), step Back to Step 1, then advance forward again.
+    helpers.press_key("k")
+    assert(current_text():find("▸ No", 1, true) ~= nil, "k selects No (false) on toggle step")
+    helpers.press_key("h")
+    assert(current_text():find("First Step", 1, true) ~= nil, "h returns to Step 1")
+
+    helpers.press_key("<CR>")
+    assert(current_text():find("▸ No", 1, true) ~= nil, "returning to toggle step preserves No (false) draft")
+    helpers.press_key("<CR>")
+    assert(wizard.is_open() == false, "confirming preserved No closes modal")
+    assert(
+        vim.deep_equal(executed_answers, { first = "a", include_drafts = false }),
+        "confirmed preserved false draft: " .. vim.inspect(executed_answers)
+    )
+end
+
+local function test_async_select_error_renders_jpr_error_and_supports_back()
+    local pending_callback, executed_answers = nil, nil
+    local command = create_async_pr_command(
+        function(_answers, _context, on_loaded) pending_callback = on_loaded end,
+        function(answers) executed_answers = answers end
+    )
+
+    wizard.open_command(command, { source = "list" }, {}, { start_step_id = "pr" })
+    pending_callback(nil, "gh auth failed")
+
+    local buf = vim.api.nvim_win_get_buf(current_float_win())
+    assert(current_text():find("gh auth failed", 1, true) ~= nil, "async error message rendered in buffer")
+    assert(has_buffer_highlight_group(buf, "JprError", "gh auth failed"), "async error highlighted with JprError")
+
+    helpers.press_key("<CR>")
+    assert(wizard.is_open() == true and executed_answers == nil, "<CR> on async error state is a no-op")
+
+    helpers.press_key("h")
+    assert(wizard.is_open() == true and current_text():find("Pull Request Source", 1, true) ~= nil, "h steps Back from async error")
+    wizard.close()
+end
+
 test_palette_window_and_hover_navigation()
 test_palette_cursor_sync_and_cancel()
 test_zero_step_command_execution()
@@ -473,5 +536,7 @@ test_async_select_loading_and_selection()
 test_async_empty_back_and_stale_close()
 test_toggle_and_prefilled_step_skipping()
 test_singleton_menu_validation_and_back_stale_async()
+test_toggle_false_draft_preserved_on_step_back()
+test_async_select_error_renders_jpr_error_and_supports_back()
 
 print("tui_wizard_spec: ok")
