@@ -88,7 +88,7 @@ pub enum Command {
         #[arg(long, value_name = "OWNER/NAME")]
         repo: Option<String>,
         /// Maximum number of open pull requests to return.
-        #[arg(long, default_value_t = 50)]
+        #[arg(long, default_value_t = 50, value_parser = clap::value_parser!(u32).range(1..))]
         limit: u32,
     },
     /// Serve a pull request's review session as JSON-RPC on stdin and stdout.
@@ -282,5 +282,6 @@ mod tests {
                 limit: 15,
             }
         );
+        assert!(Cli::try_parse_from(["jpr-review", "prs", "--limit", "0"]).is_err());
     }
 }

@@ -2,7 +2,7 @@
 local M = {}
 
 --- Release version of the Neovim plugin, paired with the jpr-review binary.
-M.VERSION = "0.5.0"
+M.VERSION = "0.5.1"
 
 --- The options `setup` starts from; a user's options override any of them.
 M.defaults = {

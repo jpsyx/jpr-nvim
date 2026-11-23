@@ -8,7 +8,7 @@ pub mod pr;
 
 use std::path::PathBuf;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use review_core::ports::{
     CreatedReviewThread, Forge, ForgeSnapshot, ForgeWriteError, ReplyRequest,
 };
@@ -79,6 +79,9 @@ impl GhForge {
 
     /// Lists up to `limit` open pull requests in the inferred or pinned repository.
     pub fn open_pull_requests(&self, limit: u32) -> Result<Vec<PullRequestSummary>> {
+        if limit == 0 {
+            bail!("limit must be at least 1");
+        }
         let args = self.list_args(limit);
         let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
         pr::parse_pr_list(&self.gh.run(&arg_refs, None)?)
@@ -284,6 +287,16 @@ mod tests {
                 "--repo",
                 "octo/widgets",
             ]
+        );
+    }
+
+    #[test]
+    fn open_pull_requests_rejects_zero_limit() {
+        let forge = GhForge::new(PathBuf::from("."), None);
+        let error = forge.open_pull_requests(0).unwrap_err();
+        assert!(
+            error.to_string().contains("limit must be at least 1"),
+            "{error:#}"
         );
     }
 }

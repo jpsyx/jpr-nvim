@@ -59,44 +59,44 @@ fn run_agent_command(command: &Command, theme: Theme) -> Result<()> {
             repo,
             socket,
             is_local_only,
-        } => {
-            let socket_override =
-                get_socket_override_from_cli(socket.as_deref(), pr.is_some() || repo.is_some())?;
-            let target =
-                create_target_context(socket_override.as_ref(), *pr, repo.as_deref(), theme)?;
+        } => run_with_target_context(socket.as_deref(), *pr, repo.as_deref(), theme, |target| {
             threads::run(target, *is_local_only)
-        }
+        }),
         Command::Reply {
             thread_id,
             body,
             pr,
             repo,
             socket,
-        } => {
-            let socket_override =
-                get_socket_override_from_cli(socket.as_deref(), pr.is_some() || repo.is_some())?;
-            let target =
-                create_target_context(socket_override.as_ref(), *pr, repo.as_deref(), theme)?;
+        } => run_with_target_context(socket.as_deref(), *pr, repo.as_deref(), theme, |target| {
             reply::run(thread_id.as_deref(), body.as_deref(), target)
-        }
+        }),
         Command::PrepassWrite {
             input,
             pr,
             repo,
             socket,
-        } => {
-            let socket_override =
-                get_socket_override_from_cli(socket.as_deref(), pr.is_some() || repo.is_some())?;
-            let target =
-                create_target_context(socket_override.as_ref(), *pr, repo.as_deref(), theme)?;
+        } => run_with_target_context(socket.as_deref(), *pr, repo.as_deref(), theme, |target| {
             prepass_write::run(input.as_deref(), target)
-        }
+        }),
         Command::Checkout { .. }
         | Command::Guide
         | Command::Prs { .. }
         | Command::Serve { .. }
         | Command::StatePath { .. } => unreachable!("handled by commands::run"),
     }
+}
+
+fn run_with_target_context(
+    socket: Option<&Path>,
+    pr: Option<u64>,
+    repo: Option<&str>,
+    theme: Theme,
+    action: impl FnOnce(socket_client::TargetContext<'_>) -> Result<()>,
+) -> Result<()> {
+    let socket_override = get_socket_override_from_cli(socket, pr.is_some() || repo.is_some())?;
+    let target = create_target_context(socket_override.as_ref(), pr, repo, theme)?;
+    action(target)
 }
 
 enum CliSocketOverride {

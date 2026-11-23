@@ -195,15 +195,67 @@ mod tests {
                 .retain(|key, _| allowed_keys.contains(key.as_str()));
         }
         let summaries = parse_pr_list(&serde_json::to_string(&parsed).unwrap()).unwrap();
-        assert_eq!(summaries.len(), 2);
-        assert_eq!(summaries[0].number, 42);
-        assert_eq!(summaries[0].author, "alice");
-        assert_eq!(summaries[1].author, "ghost");
-        assert!(summaries[1].is_draft);
+        assert_eq!(
+            summaries,
+            vec![
+                PullRequestSummary {
+                    number: 42,
+                    title: "Add OAuth".into(),
+                    author: "alice".into(),
+                    head_ref: "feat/oauth".into(),
+                    is_draft: false,
+                    updated_at: "2026-11-23T15:04:05Z".into(),
+                },
+                PullRequestSummary {
+                    number: 43,
+                    title: "WIP refactor".into(),
+                    author: "ghost".into(),
+                    head_ref: "chore/wip".into(),
+                    is_draft: true,
+                    updated_at: "2026-11-22T10:00:00Z".into(),
+                },
+            ]
+        );
     }
 
     #[test]
     fn parses_empty_pr_list() {
         assert_eq!(parse_pr_list("[]").unwrap(), Vec::new());
+    }
+
+    #[test]
+    fn empty_or_omitted_author_falls_back_to_ghost() {
+        let json = r#"[
+            {"number":1,"title":"Empty login","author":{"login":""},"headRefName":"a","isDraft":false,"updatedAt":"2026-11-23T00:00:00Z"},
+            {"number":2,"title":"No author key","headRefName":"b","isDraft":false,"updatedAt":"2026-11-23T00:00:00Z"}
+        ]"#;
+        let summaries = parse_pr_list(json).unwrap();
+        assert_eq!(summaries.len(), 2);
+        assert_eq!(summaries[0].author, "ghost");
+        assert_eq!(summaries[1].author, "ghost");
+    }
+
+    #[test]
+    fn rejects_malformed_or_non_array_pr_list_json() {
+        assert!(parse_pr_list("not json").is_err());
+        assert!(parse_pr_list("{}").is_err());
+    }
+
+    #[test]
+    fn rejects_pr_list_item_missing_any_required_field() {
+        let valid_item: Value = serde_json::from_str(
+            r#"{"number":42,"title":"Add OAuth","author":{"login":"alice"},"headRefName":"feat/oauth","isDraft":false,"updatedAt":"2026-11-23T15:04:05Z"}"#,
+        )
+        .unwrap();
+        for required_key in ["number", "title", "headRefName", "isDraft", "updatedAt"] {
+            let mut incomplete = valid_item.clone();
+            incomplete.as_object_mut().unwrap().remove(required_key);
+            let payload = serde_json::to_string(&vec![incomplete]).unwrap();
+            let error = parse_pr_list(&payload).unwrap_err();
+            assert!(
+                error.to_string().contains(required_key),
+                "expected error for missing {required_key}, got: {error:#}"
+            );
+        }
     }
 }
