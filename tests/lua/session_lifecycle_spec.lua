@@ -103,6 +103,14 @@ start_pr(8)
 assert(sessions_for(8) == 0, "a failed spawn registers nothing")
 assert(tab_count() == tabs_before, "a failed spawn leaves no stray tab")
 
+-- Opening a PR when the configured or bundled binary is missing directs the user to :Lazy build jpr-nvim.
+jpr.setup({ binary = worktree .. "/missing-jpr-review\27[31m" })
+clear_notifications()
+session.open(99)
+assert(#notifications == 1 and notifications[1].level == vim.log.levels.ERROR, "missing binary in open notifies ERROR")
+assert(notifications[1].message:find(":Lazy build jpr-nvim", 1, true) ~= nil, "missing binary names :Lazy build jpr-nvim: " .. notifications[1].message)
+assert(notifications[1].message:find("%c") == nil, "missing binary sanitizes control bytes: " .. notifications[1].message)
+
 -- A protocol mismatch stops the engine and forgets its session.
 vim.env.FAKE_ENGINE_PROTOCOL = "99"
 jpr.setup({ binary = fake_engine })
@@ -132,7 +140,8 @@ local function assert_version_mismatch_stops_engine_and_forgets_session()
     assert(error_entry.message:find("%c") == nil, "version mismatch sanitizes control bytes: " .. error_entry.message)
     assert(error_entry.message:find("0.5.0", 1, true) ~= nil, "names plugin version 0.5.0: " .. error_entry.message)
     assert(error_entry.message:find("0.1.0", 1, true) ~= nil, "names binary version 0.1.0: " .. error_entry.message)
-    assert(error_entry.message:find("./install.sh", 1, true) ~= nil, "names ./install.sh: " .. error_entry.message)
+    assert(error_entry.message:find(":Lazy build jpr-nvim", 1, true) ~= nil, "names :Lazy build jpr-nvim: " .. error_entry.message)
+    assert(error_entry.message:find("./install.sh", 1, true) == nil, "does not mention ./install.sh: " .. error_entry.message)
     assert(tab_count() == count_before, "a version mismatch leaves no stray tab")
 
     vim.env.FAKE_ENGINE_VERSION = ""

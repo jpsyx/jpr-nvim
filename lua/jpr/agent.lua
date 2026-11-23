@@ -156,13 +156,15 @@ local function spawn_terminal(session, launch_plan)
         jpr().error("could not open agent terminal window")
         return nil
     end
+    local binary = require("jpr.binary")
     local argv = M.create_launch_argv_from_plan(jpr().config, session.worktree, launch_plan)
     local socket = (type(launch_plan) == "table" and type(launch_plan.socket) == "string") and launch_plan.socket or ""
+    local agent_env = binary.build_agent_env_from_session(jpr().binary_path(), socket, session.number, vim.env.PATH)
     local agent_state = { buf = buffer, win = window, job = 0, exited = false }
     local ok, job = pcall(vim.fn.jobstart, argv, {
         term = true,
         cwd = session.worktree,
-        env = { JPR_SOCKET = socket, JPR_PR = tostring(session.number) },
+        env = agent_env,
         on_exit = function()
             if session.agent and session.agent.job == agent_state.job then
                 session.agent.exited = true

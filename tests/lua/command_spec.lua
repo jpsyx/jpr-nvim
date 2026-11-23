@@ -36,8 +36,12 @@ assert(vim.deep_equal(jpr.complete("", "Jpr open "), {}), "nothing after the sub
 
 jpr.setup({ worktree_cmd = "wt pr {n}" })
 assert(jpr.config.worktree_cmd == "wt pr {n}", "setup takes options")
-assert(jpr.config.binary == "jpr-review", "setup keeps the defaults")
+assert(jpr.config.binary == nil, "setup keeps nil default binary so bundled target/release/jpr-review is used")
+assert(jpr.binary_path() == root .. "/target/release/jpr-review", "binary_path resolves bundled release binary")
 assert(jpr.config.keys.comment == "gc", "setup keeps default keys")
+jpr.setup({ binary = "/tmp/custom" })
+assert(jpr.binary_path() == "/tmp/custom", "binary_path honors explicit setup override")
+jpr.setup({})
 
 for _, group in ipairs({
     "JprModified",

@@ -67,7 +67,7 @@ end
 --- (owner/name), checkout refuses a PR from any other repository.
 function M.checkout_args(number, repo)
     local config = jpr().config
-    local args = { config.binary, "checkout", "--pr", tostring(number) }
+    local args = { jpr().binary_path(), "checkout", "--pr", tostring(number) }
     if repo then
         vim.list_extend(args, { "--repo", repo })
     end
@@ -104,8 +104,10 @@ function M.open(number, repo)
             return vim.api.nvim_set_current_tabpage(tab)
         end
     end
-    if vim.fn.executable(jpr().config.binary) ~= 1 then
-        return jpr().error(("%s is not installed or not on PATH"):format(jpr().config.binary))
+    local binary_path = jpr().binary_path()
+    if vim.fn.executable(binary_path) ~= 1 then
+        local clean_binary_path = crash.build_clean_text_from_raw(binary_path)
+        return jpr().error(("jpr-review binary not found at %s; run :Lazy build jpr-nvim"):format(clean_binary_path))
     end
     jpr().info(("checking out PR #%d…"):format(number))
     vim.system(M.checkout_args(number, repo), { cwd = vim.fn.getcwd(), text = true }, vim.schedule_wrap(function(result)
@@ -197,9 +199,9 @@ local function build_handshake_error_from_result(result)
     if type(result) ~= "table" or type(result.protocolVersion) ~= "number" then
         return "invalid handshake response: missing protocolVersion"
     end
-    local binary_label = crash.build_clean_text_from_raw(jpr().config.binary)
+    local binary_label = crash.build_clean_text_from_raw(jpr().binary_path())
     if result.protocolVersion ~= rpc.PROTOCOL_VERSION then
-        return ("protocol mismatch: the plugin speaks %d and %s speaks %d; install both from the same checkout"):format(
+        return ("protocol mismatch: the plugin speaks %d and %s speaks %d; run :Lazy build jpr-nvim"):format(
             rpc.PROTOCOL_VERSION,
             binary_label,
             result.protocolVersion
@@ -209,7 +211,7 @@ local function build_handshake_error_from_result(result)
         return ("invalid handshake response from %s: missing engine version"):format(binary_label)
     end
     if result.version ~= "test" and result.version ~= jpr().VERSION then
-        return ("version mismatch: plugin is %s and %s is %s; run ./install.sh from the plugin checkout"):format(
+        return ("version mismatch: plugin is %s and %s is %s; run :Lazy build jpr-nvim"):format(
             jpr().VERSION,
             binary_label,
             crash.build_clean_text_from_raw(result.version)
@@ -255,7 +257,7 @@ end
 local function spawn_engine(session)
     local spawned_client
     local client, spawn_error = rpc.start({
-        jpr().config.binary,
+        jpr().binary_path(),
         "serve",
         "--pr",
         tostring(session.number),

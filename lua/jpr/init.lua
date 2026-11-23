@@ -6,8 +6,9 @@ M.VERSION = "0.5.0"
 
 --- The options `setup` starts from; a user's options override any of them.
 M.defaults = {
-    -- The engine binary.
-    binary = "jpr-review",
+    -- Optional override path or command for the engine binary; nil uses the
+    -- bundled `<plugin_root>/target/release/jpr-review` built by `build.lua`.
+    binary = nil,
     -- A shell command that creates the PR worktree and prints its path; `{n}` is
     -- the PR number. nil uses the engine's default (git worktree + gh pr checkout).
     worktree_cmd = nil,
@@ -97,6 +98,11 @@ end
 function M.setup(opts)
     M.config = vim.tbl_deep_extend("force", vim.deepcopy(M.defaults), opts or {})
     M.define_highlights()
+end
+
+--- Active engine binary path or command, defaulting to the bundled release binary.
+function M.binary_path()
+    return require("jpr.binary").get_binary_path_from_config(M.config)
 end
 
 --- Binds configured comment and thread keys in buffer `buf` to their
