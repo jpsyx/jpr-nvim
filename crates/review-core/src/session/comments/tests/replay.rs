@@ -91,7 +91,7 @@ fn deleting_queued_local_message_drops_its_queued_operation() {
         .delete_message(&local_thread.messages[0].id)
         .unwrap();
     assert_eq!(after_delete.queued_count, 0);
-    assert!(fakes.store.saved().registry.queued_ops.is_empty());
+    assert_eq!(fakes.store.saved().registry.queued_ops, Vec::new());
 }
 
 #[test]
@@ -200,9 +200,9 @@ fn delete_failed_edited_real_message_calls_forge_and_prunes_stale_resolve() {
     fakes.forge.fail_writes_with(None);
     assert!(session.flush_queued().unwrap());
     assert_eq!(session.view().queued_count, 0);
-    assert!(session.threads().is_empty());
+    assert_eq!(session.threads(), &[]);
     assert_eq!(session.sync().unwrap().files.len(), 2);
-    assert!(session.threads().is_empty());
+    assert_eq!(session.threads(), &[]);
 }
 
 #[test]

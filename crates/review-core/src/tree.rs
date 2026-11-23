@@ -117,6 +117,6 @@ mod tests {
 
     #[test]
     fn no_files_is_no_rows() {
-        assert!(create_file_tree_from_paths([]).is_empty());
+        assert_eq!(create_file_tree_from_paths([]), Vec::new());
     }
 }

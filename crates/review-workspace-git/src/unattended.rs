@@ -284,7 +284,7 @@ mod tests {
         let elapsed = started.elapsed();
         let helper_pid = stdout.unwrap();
         stop_helper(helper_pid.trim());
-        assert!(!helper_pid.trim().is_empty());
+        assert_ne!(helper_pid.trim(), "");
         assert!(elapsed < Duration::from_secs(5), "{elapsed:?}");
     }
 }

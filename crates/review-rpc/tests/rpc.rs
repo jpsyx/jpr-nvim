@@ -78,11 +78,9 @@ fn assert_socket_allowed_calls(stream: &mut UnixStream, server: &LiveServer) {
     assert_eq!(snapshot_reply["result"]["pr"]["number"], 7);
 
     let threads_reply = socket_call(stream, &request(14, "threads"));
-    assert!(
-        !threads_reply["result"]["threads"]
-            .as_array()
-            .unwrap()
-            .is_empty()
+    assert_ne!(
+        threads_reply["result"]["threads"].as_array().unwrap().len(),
+        0
     );
 
     let reply_response = socket_call(
@@ -196,7 +194,7 @@ fn watch_ticks_do_not_retry_queued_ops_when_retry_every_is_none_or_long() {
 
     workspace.write_disk("src/a.rs", b"fn a() { 3 }\n");
     assert_eq!(server.recv_json()["params"]["type"], "filesChanged");
-    assert!(fake_forge.viewed_calls().is_empty());
+    assert_eq!(fake_forge.viewed_calls(), Vec::new());
 
     server.send_line(&request(2, "shutdown"));
     server.recv_until_id(2);

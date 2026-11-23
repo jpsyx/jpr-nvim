@@ -198,5 +198,5 @@ fn dev_dependencies_are_exempt() {
             { "id": "ui", "deps": [] }
         ] }
     });
-    assert!(violations(&metadata).is_empty());
+    assert_eq!(violations(&metadata), Vec::<String>::new());
 }

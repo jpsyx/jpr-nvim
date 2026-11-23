@@ -86,8 +86,8 @@ mod tests {
 
     #[test]
     fn a_missing_or_binary_side_has_no_lines() {
-        assert!(FileText::Missing.lines().is_empty());
-        assert!(FileText::Binary.lines().is_empty());
+        assert_eq!(FileText::Missing.lines(), Vec::<&str>::new());
+        assert_eq!(FileText::Binary.lines(), Vec::<&str>::new());
         assert_eq!(FileText::Binary.as_text(), None);
     }
 }

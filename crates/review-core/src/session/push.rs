@@ -79,7 +79,7 @@ mod tests {
             unsynced_error.to_string().contains("not synced"),
             "{unsynced_error}"
         );
-        assert!(fakes.workspace.pushed_refs().is_empty());
+        assert_eq!(fakes.workspace.pushed_refs(), Vec::new());
 
         let mut session = fakes.open_synced();
         fakes.workspace.set_worktree_status(Some(WorktreeStatus {
@@ -95,7 +95,7 @@ mod tests {
                 .contains("commit your changes before running :Jpr push"),
             "{error}"
         );
-        assert!(fakes.workspace.pushed_refs().is_empty());
+        assert_eq!(fakes.workspace.pushed_refs(), Vec::new());
     }
 
     #[test]
@@ -146,7 +146,7 @@ mod tests {
             up_to_date_error.to_string().contains("already up to date"),
             "{up_to_date_error}"
         );
-        assert!(fakes.workspace.pushed_refs().is_empty());
+        assert_eq!(fakes.workspace.pushed_refs(), Vec::new());
 
         fakes.workspace.set_worktree_status(Some(WorktreeStatus {
             is_dirty: false,
@@ -161,7 +161,7 @@ mod tests {
                 .contains("behind the pull request head: run :Jpr sync"),
             "{behind_error}"
         );
-        assert!(fakes.workspace.pushed_refs().is_empty());
+        assert_eq!(fakes.workspace.pushed_refs(), Vec::new());
     }
 
     #[test]
@@ -301,7 +301,7 @@ mod tests {
             refusal.to_string().contains("cross-repository"),
             "{refusal}"
         );
-        assert!(fakes.workspace.pushed_prs().is_empty());
+        assert_eq!(fakes.workspace.pushed_prs(), Vec::new());
 
         fakes.workspace.fail_push_with(None);
         let mut advanced_pr = fork_pr.clone();

@@ -162,8 +162,8 @@ fn delete_message_persists_announces_and_preserves_thread_on_reject() {
     fakes.forge.reject_writes_with(None);
     let deleted_view = session.delete_message("T1-c1").unwrap();
     assert_eq!(deleted_view.thread_count, 0);
-    assert!(session.threads().is_empty());
-    assert!(fakes.store.saved().registry.threads.is_empty());
+    assert_eq!(session.threads(), &[]);
+    assert_eq!(fakes.store.saved().registry.threads, Vec::new());
     assert!(matches!(
         events.try_recv().unwrap(),
         Event::ThreadsChanged { .. }

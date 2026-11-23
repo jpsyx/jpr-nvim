@@ -117,7 +117,7 @@ assert(tab_count() == tabs_before, "a protocol mismatch leaves no stray tab")
 vim.env.FAKE_ENGINE_PROTOCOL = nil
 
 -- A binary/plugin version mismatch or empty version stops the engine and forgets its session.
-local function test_version_mismatch()
+local function assert_version_mismatch_stops_engine_and_forgets_session()
     vim.env.FAKE_ENGINE_VERSION = "0.1.0\27[31m\7"
     jpr.setup({ binary = fake_engine })
     clear_notifications()
@@ -144,7 +144,7 @@ local function test_version_mismatch()
     assert(tab_count() == count_before, "empty version leaves no stray tab")
     vim.env.FAKE_ENGINE_VERSION = nil
 end
-test_version_mismatch()
+assert_version_mismatch_stops_engine_and_forgets_session()
 
 -- :tabclose stops the engine and forgets the session.
 local closed_tab = start_pr(10)
@@ -160,7 +160,7 @@ start_pr(10)
 assert(sessions_for(10) == 1, "reopening runs one engine for the pull request, not two")
 
 -- Mid-review crash restarts once; a second crash switches the session to read-only.
-local function test_first_crash_auto_restart(log_path)
+local function assert_first_crash_auto_restarts_and_logs(log_path)
     vim.env.FAKE_ENGINE_STDERR = "engine panic: boom"
     local died_tab = start_pr(12)
     local died = session.by_tab[died_tab]
@@ -187,7 +187,7 @@ local function test_first_crash_auto_restart(log_path)
     return died_tab, died
 end
 
-local function test_second_crash_read_only(died_tab, died)
+local function assert_second_crash_enters_read_only_mode(died_tab, died)
     local compose = require("jpr.comments.compose")
     compose.open_new(died, { kind = "pr", side = "RIGHT" })
     local compose_buf = died.compose.buf
@@ -209,7 +209,7 @@ local function test_second_crash_read_only(died_tab, died)
     return compose_buf
 end
 
-local function test_read_only_view_guards(died_tab, died, compose_buf)
+local function assert_read_only_guards_preserve_draft_and_block_mutations(died_tab, died, compose_buf)
     local compose = require("jpr.comments.compose")
     vim.api.nvim_set_current_win(died.compose.win)
     clear_notifications()
@@ -287,7 +287,7 @@ local function assert_keys_blocked_in_read_only(keys, extra_check)
     vim.fn.confirm, vim.ui.select = original_confirm, original_select
 end
 
-local function test_read_only_popup_and_conversation(live)
+local function assert_read_only_popup_and_conversation_block_mutation_keys(live)
     local popup = require("jpr.comments.popup")
     popup.open(live, build_sample_popup_threads())
     local popup_win = live.popup and live.popup.win
@@ -308,7 +308,7 @@ local function test_read_only_popup_and_conversation(live)
     assert_keys_blocked_in_read_only({ "c", "r", "e", "d", "p", "s", "+", "X" })
 end
 
-local function test_failed_restart_handshake()
+local function assert_failed_restart_handshake_transitions_to_read_only()
     local restart_log_path = vim.fn.stdpath("state") .. "/jpr/engine-pr-16.log"
     vim.fn.delete(restart_log_path)
     local live = session.by_tab[start_pr(16)]
@@ -332,19 +332,19 @@ local function test_failed_restart_handshake()
     assert(#error_notifications == 1, "failed restart handshake emits single ERROR: " .. vim.inspect(notifications))
     assert(error_notifications[1].message:find("version mismatch", 1, true) ~= nil, "combined ERROR includes handshake reason")
     assert(error_notifications[1].message:find("engine-pr-16.log", 1, true) ~= nil, "combined ERROR includes log path")
-    test_read_only_popup_and_conversation(live)
+    assert_read_only_popup_and_conversation_block_mutation_keys(live)
     session.close_current()
     vim.fn.delete(restart_log_path)
 end
 
 local crash_log_path = vim.fn.stdpath("state") .. "/jpr/engine-pr-12.log"
 vim.fn.delete(crash_log_path)
-local died_tab, died = test_first_crash_auto_restart(crash_log_path)
-local preserved_compose_buf = test_second_crash_read_only(died_tab, died)
-test_read_only_view_guards(died_tab, died, preserved_compose_buf)
+local died_tab, died = assert_first_crash_auto_restarts_and_logs(crash_log_path)
+local preserved_compose_buf = assert_second_crash_enters_read_only_mode(died_tab, died)
+assert_read_only_guards_preserve_draft_and_block_mutations(died_tab, died, preserved_compose_buf)
 vim.env.FAKE_ENGINE_STDERR = nil
 vim.fn.delete(crash_log_path)
-test_failed_restart_handshake()
+assert_failed_restart_handshake_transitions_to_read_only()
 
 -- :Jpr close on the only tab still frees the pull request for :Jpr open.
 local only = session.by_tab[start_pr(13)]

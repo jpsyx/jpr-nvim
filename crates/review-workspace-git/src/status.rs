@@ -214,7 +214,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_left_right_counts_and_rejects_malformed_output() {
+    fn parse_left_right_counts_returns_behind_ahead_pair_and_none_when_malformed() {
         assert_eq!(parse_left_right_counts(b"2\t5\n"), Some((2, 5)));
         assert_eq!(parse_left_right_counts(b"0 0\r\n"), Some((0, 0)));
         assert_eq!(parse_left_right_counts(b"1\n"), None);

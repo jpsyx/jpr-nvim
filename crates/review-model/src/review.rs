@@ -193,7 +193,7 @@ mod tests {
             let text = content.as_str();
             assert_eq!(ReactionContent::parse(text), Some(content));
             assert_eq!(serde_json::to_value(content).unwrap(), json!(text));
-            assert!(!content.emoji().is_empty());
+            assert_ne!(content.emoji(), "");
         }
         assert_eq!(ReactionContent::parse("PARTY"), None);
     }

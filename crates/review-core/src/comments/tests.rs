@@ -225,7 +225,7 @@ fn toggle_reaction_adds_increments_decrements_and_removes_at_zero() {
         &mut reactions,
         ReactionContent::ThumbsUp
     ));
-    assert!(reactions.is_empty());
+    assert_eq!(reactions, Vec::new());
 
     let mut peer_reactions = vec![Reaction {
         content: ReactionContent::Rocket,

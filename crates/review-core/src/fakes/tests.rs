@@ -88,7 +88,7 @@ fn the_fake_forge_adds_and_removes_comment_reactions() {
     let removed = forge
         .set_reaction("T_rx-c1", ReactionContent::ThumbsUp, false)
         .unwrap();
-    assert!(removed.is_empty());
+    assert_eq!(removed, Vec::new());
 }
 
 #[test]

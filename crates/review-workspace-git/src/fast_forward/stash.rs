@@ -24,6 +24,9 @@ const STASH_IDENTITY_ARGS: [&str; 4] = [
 
 static NEXT_STASH_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
+/// Auto-stashes tracked and untracked changes in `dir`, fast-forwards `HEAD`
+/// from `previous_sha` to `target_sha`, and restores the pinned stash entry to
+/// produce a [`FastForwardOutcome`].
 pub(super) fn stash_fast_forward_and_restore(
     dir: &Path,
     previous_sha: &str,

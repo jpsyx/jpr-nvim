@@ -179,7 +179,7 @@ mod tests {
             &create_file_text("a\nb\n"),
             &create_file_text("a\n"),
         );
-        assert!(view.added.is_empty());
+        assert_eq!(view.added, Vec::new());
         assert_eq!(view.removed.len(), 1);
         assert_eq!(view.removed[0].above, 2);
     }
@@ -193,7 +193,7 @@ mod tests {
         );
         let lines: Vec<u64> = view.added.iter().map(|line| line.line).collect();
         assert_eq!(lines, [1, 2]);
-        assert!(view.removed.is_empty());
+        assert_eq!(view.removed, Vec::new());
         assert_eq!(view.base_text, None);
     }
 
@@ -204,7 +204,7 @@ mod tests {
             &create_file_text("a\nb\n"),
             &FileText::Missing,
         );
-        assert!(view.added.is_empty());
+        assert_eq!(view.added, Vec::new());
         assert_eq!(view.removed[0].above, 1);
         assert_eq!(view.removed[0].lines.len(), 2);
     }

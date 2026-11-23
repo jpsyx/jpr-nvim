@@ -121,7 +121,7 @@ mod tests {
     #[test]
     fn an_insertion_highlights_only_the_new_side() {
         let (old, new) = create_word_ranges_from_lines("a + b", "a + b + c").unwrap();
-        assert!(old.is_empty());
+        assert_eq!(old, Vec::new());
         assert_eq!(new, create_word_ranges_from_pairs(&[(5, 9)]));
     }
 

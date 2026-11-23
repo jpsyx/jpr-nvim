@@ -91,7 +91,7 @@ local function clear_list(items)
     end
 end
 
-local function test_push_command(context)
+local function assert_push_command_updates_view_and_warns_on_sync_error(context)
     clear_list(context.notifications)
     context.review.view.viewedCount = 99
     jpr.command({ "push" })
@@ -118,7 +118,7 @@ local function test_push_command(context)
     vim.api.nvim_set_current_tabpage(context.review.tab)
 end
 
-local function test_worktree_status_changed(context)
+local function assert_worktree_status_changed_redraws_panel_badge(context)
     local updated_view = vim.deepcopy(context.review.view)
     updated_view.worktreeStatus = { isDirty = true, ahead = 1, behind = 0 }
     session.on_notification(context.review, "event", {
@@ -133,7 +133,7 @@ local function test_worktree_status_changed(context)
     )
 end
 
-local function test_head_moved_fast_forward(context)
+local function assert_head_moved_fast_forward_updates_view_and_sanitizes_shas(context)
     clear_list(context.notifications)
     local target_view = vim.deepcopy(context.review.view)
     target_view.pr.headSha = "head222"
@@ -175,7 +175,7 @@ local function test_head_moved_fast_forward(context)
     assert(empty_sha_entry ~= nil and empty_sha_entry.message:find("()", 1, true) == nil, "no empty () on blank SHAs")
 end
 
-local function test_head_moved_warnings(context)
+local function assert_head_moved_diverged_and_failed_emit_sanitized_warnings(context)
     local current_view = vim.deepcopy(context.review.view)
     for _, outcome in ipairs({ "diverged", "failed" }) do
         clear_list(context.notifications)
@@ -194,7 +194,7 @@ local function test_head_moved_warnings(context)
     end
 end
 
-local function test_restore_conflict_resolve_myself(context)
+local function assert_restore_conflict_resolve_myself_opens_safe_worktree_path(context)
     vim.fn.mkdir(context.worktree .. "/.git", "p")
     vim.fn.writefile({ "[core]" }, context.worktree .. "/.git/config")
     local original_select = vim.ui.select
@@ -226,7 +226,7 @@ local function test_restore_conflict_resolve_myself(context)
     )
 end
 
-local function test_restore_conflict_ask_agent(context)
+local function assert_restore_conflict_ask_agent_dispatches_safe_paths(context)
     clear_list(context.notifications)
     require("jpr.agent").resolve_conflicts(context.review, { ".git", ".git/config", "../outside.txt" })
     assert(#helpers.read_requests(context.engine_log, "prepareConflictResolution") == 0, "unsafe .git paths rejected in agent.resolve_conflicts")
@@ -314,7 +314,7 @@ local function emit_head_moved(review, head_sha, outcome, view, conflicted_paths
     })
 end
 
-local function test_self_healed_head_moved_unified(context)
+local function assert_self_healed_head_moved_redraws_unified_diff_and_stream(context)
     require("jpr.agent").close(context.review)
     session.stream_current()
     assert(vim.wait(3000, function()
@@ -347,7 +347,7 @@ local function test_self_healed_head_moved_unified(context)
     vim.api.nvim_win_close(file_win, true)
 end
 
-local function test_self_healed_head_moved_split_base(context)
+local function assert_self_healed_head_moved_refreshes_split_base_buffer(context)
     vim.fn.delete(context.diff_override_file)
     vim.fn.delete(context.stream_override_file)
     session.toggle_view()
@@ -379,14 +379,14 @@ local function test_self_healed_head_moved_split_base(context)
 end
 
 local context = setup_test_context()
-test_push_command(context)
-test_worktree_status_changed(context)
-test_head_moved_fast_forward(context)
-test_head_moved_warnings(context)
-test_restore_conflict_resolve_myself(context)
-test_restore_conflict_ask_agent(context)
-test_self_healed_head_moved_unified(context)
-test_self_healed_head_moved_split_base(context)
+assert_push_command_updates_view_and_warns_on_sync_error(context)
+assert_worktree_status_changed_redraws_panel_badge(context)
+assert_head_moved_fast_forward_updates_view_and_sanitizes_shas(context)
+assert_head_moved_diverged_and_failed_emit_sanitized_warnings(context)
+assert_restore_conflict_resolve_myself_opens_safe_worktree_path(context)
+assert_restore_conflict_ask_agent_dispatches_safe_paths(context)
+assert_self_healed_head_moved_redraws_unified_diff_and_stream(context)
+assert_self_healed_head_moved_refreshes_split_base_buffer(context)
 session.close_current()
 vim.env.FAKE_ENGINE_LOG = nil
 vim.env.FAKE_ENGINE_DIFF_FILE = nil

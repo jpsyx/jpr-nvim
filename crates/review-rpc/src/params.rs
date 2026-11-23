@@ -297,7 +297,7 @@ mod tests {
     }
 
     #[test]
-    fn round_kind_parses_send_prepass_and_conflict_and_rejects_unknown() {
+    fn get_round_kind_from_params_maps_known_kinds_and_rejects_unknown() {
         assert_eq!(
             get_round_kind_from_params(&json!({ "kind": "send" })).unwrap(),
             AgentRoundKind::Send

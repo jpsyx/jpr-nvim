@@ -70,12 +70,16 @@ mod tests {
         "baseRefName":"main","baseRefOid":"base000","author":{"login":"alice"},"isCrossRepository":false}"#;
 
     #[test]
-    fn pr_fields_requests_is_cross_repository() {
-        assert!(
-            PR_FIELDS
-                .split(',')
-                .any(|field| field == "isCrossRepository")
-        );
+    fn pr_fields_covers_every_key_read_by_parse_pr() {
+        let allowed_keys: std::collections::BTreeSet<&str> = PR_FIELDS.split(',').collect();
+        let mut parsed: Value = serde_json::from_str(OPEN).unwrap();
+        parsed
+            .as_object_mut()
+            .unwrap()
+            .retain(|key, _| allowed_keys.contains(key.as_str()));
+        let filtered_json = serde_json::to_string(&parsed).unwrap();
+        let pr = parse_pr(&filtered_json).unwrap();
+        assert_eq!((pr.number, pr.is_cross_repository), (7, false));
     }
 
     #[test]

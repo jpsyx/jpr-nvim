@@ -112,6 +112,7 @@ impl ReviewSession {
         self.view_with_status(&worktree_status)
     }
 
+    /// Builds the session status view using a pre-read worktree status.
     pub(super) fn view_with_status(&self, worktree_status: &WorktreeStatus) -> SessionView {
         session_view(
             self.saved.session.pr.as_ref(),
@@ -123,6 +124,8 @@ impl ReviewSession {
         )
     }
 
+    /// Remote head SHA to compare `HEAD` against, preferring an in-flight
+    /// pushed SHA until the next forge sync catches up.
     pub(super) fn effective_remote_head_sha(&self) -> Option<&str> {
         self.pushed_head
             .as_ref()
@@ -136,11 +139,15 @@ impl ReviewSession {
             })
     }
 
+    /// Live dirty and ahead/behind status from the workspace, or `None` when
+    /// the workspace cannot report it.
     pub(super) fn read_worktree_status(&self) -> Option<WorktreeStatus> {
         let remote_head_sha = self.effective_remote_head_sha();
         self.ports.workspace.worktree_status(remote_head_sha).ok()
     }
 
+    /// Live worktree status, falling back to the last published status or an
+    /// empty default.
     pub(super) fn current_worktree_status(&self) -> WorktreeStatus {
         self.read_worktree_status()
             .or_else(|| self.last_worktree_status.clone())
@@ -175,7 +182,7 @@ impl ReviewSession {
     }
 
     fn publish(&mut self, event: &Event) {
-        if let Some(view) = extract_event_view(event) {
+        if let Some(view) = get_view_from_event(event) {
             self.last_worktree_status = Some(view.worktree_status.clone());
         }
         self.subscribers
@@ -183,7 +190,7 @@ impl ReviewSession {
     }
 }
 
-const fn extract_event_view(event: &Event) -> Option<&SessionView> {
+const fn get_view_from_event(event: &Event) -> Option<&SessionView> {
     match event {
         Event::Synced { view }
         | Event::ViewedChanged { view }
@@ -209,7 +216,7 @@ mod tests {
         let view = Fakes::new(10).open().view();
         assert_eq!(view.sync, SyncState::Never);
         assert!(view.pr.is_none());
-        assert!(view.files.is_empty());
+        assert_eq!(view.files, Vec::new());
     }
 
     #[test]

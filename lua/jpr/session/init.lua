@@ -364,42 +364,6 @@ function M.show(session, view)
     end
 end
 
---- Asks the engine to sync `session` with GitHub now; the panel, the stream
---- and the diffs redraw from the answer, and a failure is reported to the
---- user.
-function M.sync(session)
-    if session.is_read_only then
-        return M.report_read_only(session)
-    end
-    if not session.client then
-        return jpr().error(
-            ("the review engine for PR #%d is not running; run :Jpr open %d"):format(session.number, session.number)
-        )
-    end
-    session.client:request("sync", nil, function(sync_error, view)
-        if sync_error then
-            return jpr().error("sync failed: " .. crash.build_clean_text_from_raw(sync_error.message))
-        end
-        M.show(session, view)
-    end)
-end
-
---- Pushes local commits on `HEAD` to `session`'s pull request branch and
---- refreshes the session view.
-function M.push(session)
-    M.request(session, "push", nil, function(result)
-        if type(result) == "table" and type(result.view) == "table" then
-            M.show(session, result.view)
-        end
-        local short_sha = crash.build_clean_text_from_raw(type(result) == "table" and result.headSha or ""):sub(1, 7)
-        jpr().info(("pushed %s"):format(short_sha))
-        local sync_error = type(result) == "table" and crash.build_clean_text_from_raw(result.syncError) or ""
-        if sync_error ~= "" then
-            jpr().warn("pushed, but GitHub resync failed: " .. sync_error)
-        end
-    end)
-end
-
 --- Updates `session`'s views and error reporting in response to engine notifications.
 function M.on_notification(session, method, params)
     require("jpr.session.events").on_notification(session, method, params, M.show)
@@ -421,84 +385,7 @@ function M.on_exit(session, code, stderr, exited_client)
     })
 end
 
---- `:Jpr sync`: syncs the current tab's session now.
-function M.sync_current()
-    local session = M.current()
-    if not session then
-        return jpr().error("no pull request is open in this tab")
-    end
-    M.sync(session)
-end
-
---- `:Jpr push`: pushes local `HEAD` commits for the current tab's review session.
-function M.push_current()
-    local session = M.current()
-    if not session then
-        return jpr().error("no pull request is open in this tab")
-    end
-    M.push(session)
-end
-
---- `:Jpr close`: stops the current tab's engine, closes the tab (unless it is
---- the last one) and forgets the session.
-function M.close_current()
-    local session = M.current()
-    if not session then
-        return jpr().error("no pull request is open in this tab")
-    end
-    forget(session, true)
-end
-
---- `:Jpr toggle`: flips every review between unified and split views, and
---- remembers the choice.
-function M.toggle_view()
-    local mode = require("jpr.view_mode").toggle()
-    for _, session in pairs(M.by_tab) do
-        if session.client and not session.is_read_only then
-            require("jpr.views.diff").redraw_all(session)
-            require("jpr.views.stream").refresh(session, true)
-        end
-    end
-    jpr().info(("%s view"):format(mode))
-end
-
---- `:Jpr stream`: shows the current review's stream beside the panel and
---- focuses it.
-function M.stream_current()
-    local session = M.current()
-    if not session then
-        return jpr().error("no pull request is open in this tab")
-    end
-    require("jpr.views.stream").show(session, { focus = true })
-end
-
---- `:Jpr agent`: toggles the interactive agent terminal panel for the current review.
-function M.agent_current()
-    local session = M.current()
-    if not session then
-        return jpr().error("no pull request is open in this tab")
-    end
-    require("jpr.agent").toggle(session)
-end
-
---- `:Jpr send`: sends unsent local review threads to the interactive agent panel.
-function M.send_current()
-    local session = M.current()
-    if not session then
-        return jpr().error("no pull request is open in this tab")
-    end
-    require("jpr.agent").send(session)
-end
-
---- `:Jpr prepass`: sends a pre-pass review prompt to the interactive agent panel.
-function M.prepass_current()
-    local session = M.current()
-    if not session then
-        return jpr().error("no pull request is open in this tab")
-    end
-    require("jpr.agent").prepass(session)
-end
-
+require("jpr.session.commands").attach(M, forget)
 require("jpr.session.comments").attach(M)
 
 return M

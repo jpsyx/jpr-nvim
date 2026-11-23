@@ -126,10 +126,8 @@ pub fn parse_porcelain_z_paths(bytes: &[u8]) -> Vec<String> {
     paths
 }
 
-/// Untracked (`??`) file paths reported by `git status --porcelain=v1 -z --untracked-files=all`.
-///
-/// Consumes rename and copy (`R`/`C`) second-path records so an original path
-/// beginning with `"?? "` is never misread as an untracked entry.
+/// Untracked (`??`) file paths reported by `git status --porcelain=v1 -z --untracked-files=all`,
+/// used to detect untracked restore collisions after an auto-stashed fast-forward.
 #[must_use]
 pub fn parse_untracked_porcelain_z_paths(bytes: &[u8]) -> BTreeSet<String> {
     let mut entries = bytes
@@ -142,6 +140,8 @@ pub fn parse_untracked_porcelain_z_paths(bytes: &[u8]) -> BTreeSet<String> {
         }
         let has_original_path = matches!(entry[0], b'R' | b'C') || matches!(entry[1], b'R' | b'C');
         if has_original_path {
+            // Consume the NUL-terminated source path of rename/copy records so a
+            // source filename starting with "?? " is never misread as untracked.
             let _ = entries.next();
             continue;
         }
@@ -237,7 +237,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_nul_separated_paths_and_skips_empty_entries() {
+    fn parse_nul_paths_returns_non_empty_paths_and_skips_empty_records() {
         let output = b"src/lib.rs\0\0src/dir/file with spaces.rs\0";
         assert_eq!(
             parse_nul_paths(output),
@@ -246,11 +246,11 @@ mod tests {
                 "src/dir/file with spaces.rs".to_owned(),
             ]
         );
-        assert!(parse_nul_paths(b"").is_empty());
+        assert_eq!(parse_nul_paths(b""), Vec::<String>::new());
     }
 
     #[test]
-    fn parses_porcelain_z_paths_including_renames_and_copies() {
+    fn parse_porcelain_z_paths_includes_both_sides_of_renames_and_copies() {
         let output = b"?? a.rs\0 M b.rs\0R  new.rs\0old.rs\0C  copy.rs\0orig.rs\0";
         assert_eq!(
             parse_porcelain_z_paths(output),
@@ -263,7 +263,7 @@ mod tests {
                 "orig.rs".to_owned(),
             ]
         );
-        assert!(parse_porcelain_z_paths(b"").is_empty());
+        assert_eq!(parse_porcelain_z_paths(b""), Vec::<String>::new());
     }
 
     #[test]
@@ -276,13 +276,13 @@ mod tests {
     }
 
     #[test]
-    fn parse_porcelain_z_paths_skips_malformed_and_handles_truncated_renames() {
+    fn parse_porcelain_z_paths_skips_malformed_records_and_keeps_truncated_rename_destination() {
         let output = b"M\0M \0MM \0MXXfoo\0R  new.rs\0";
         assert_eq!(parse_porcelain_z_paths(output), vec!["new.rs".to_owned()]);
     }
 
     #[test]
-    fn parse_porcelain_z_paths_handles_dual_status_special_chars_and_invalid_utf8() {
+    fn parse_porcelain_z_paths_preserves_special_chars_and_skips_invalid_utf8_paths() {
         let output = b"RM a.rs\0b.rs\0CM c.rs\0d.rs\0 M  leading.rs\0?? tab\there.rs\0?? \"quoted\".rs\0 M \xff\xfe.rs\0R  \xff\xfe.rs\0kept_old.rs\0 M after.rs\0";
         assert_eq!(
             parse_porcelain_z_paths(output),
@@ -301,7 +301,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_untracked_porcelain_z_paths_without_misreading_rename_sources() {
+    fn parse_untracked_porcelain_z_paths_ignores_tracked_and_rename_source_entries() {
         let output =
             b"?? scratch.rs\0 M tracked.rs\0R  renamed.rs\0?? old_name.rs\0C  copy.rs\0?? src.rs\0?? nested/new.rs\0";
         assert_eq!(

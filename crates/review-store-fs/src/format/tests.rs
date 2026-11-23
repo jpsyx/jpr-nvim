@@ -217,8 +217,8 @@ fn github_v1_reads_with_default_comment_fields_and_round_trips_as_v2() {
     let v1 = br#"{"version": 1, "queuedViewed": {"src/a.rs": true}}"#;
     let decoded = decode_registry(v1).expect("v1 github.json still decodes");
     assert_eq!(decoded.queued_viewed.get("src/a.rs"), Some(&true));
-    assert!(decoded.threads.is_empty());
-    assert!(decoded.queued_ops.is_empty());
+    assert_eq!(decoded.threads, Vec::new());
+    assert_eq!(decoded.queued_ops, Vec::new());
 
     let registry = create_populated_registry_from_base(decoded);
     let encoded = encode_registry(&registry).expect("v2 encodes");
