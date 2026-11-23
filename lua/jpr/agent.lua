@@ -159,7 +159,7 @@ local function spawn_terminal(session, launch_plan)
     local binary = require("jpr.binary")
     local argv = M.create_launch_argv_from_plan(jpr().config, session.worktree, launch_plan)
     local socket = (type(launch_plan) == "table" and type(launch_plan.socket) == "string") and launch_plan.socket or ""
-    local agent_env = binary.build_agent_env_from_session(jpr().binary_path(), socket, session.number, vim.env.PATH)
+    local agent_env = binary.create_agent_env_from_session(jpr().binary_path(), socket, session.number, vim.env.PATH)
     local agent_state = { buf = buffer, win = window, job = 0, exited = false }
     local ok, job = pcall(vim.fn.jobstart, argv, {
         term = true,

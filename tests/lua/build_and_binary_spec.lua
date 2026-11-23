@@ -20,9 +20,9 @@ end
 
 local function write_corrupt_executable(binary_path)
     vim.fn.mkdir(vim.fs.dirname(binary_path), "p")
-    local fd = assert(vim.uv.fs_open(binary_path, "w", tonumber("755", 8)))
-    assert(vim.uv.fs_write(fd, "\0\1\2\3not-a-valid-binary", 0))
-    assert(vim.uv.fs_close(fd))
+    local file_descriptor = assert(vim.uv.fs_open(binary_path, "w", tonumber("755", 8)))
+    assert(vim.uv.fs_write(file_descriptor, "\0\1\2\3not-a-valid-binary", 0))
+    assert(vim.uv.fs_close(file_descriptor))
 end
 
 local function with_temporary_env(overrides, callback)
@@ -77,29 +77,29 @@ local function assert_agent_env_prepends_binary_directory_without_duplicates_or_
     write_executable_script(fake_executable, { "#!/bin/sh", "exit 0" })
     local expected_directory = vim.fn.fnamemodify(fake_executable, ":p:h")
 
-    local prepended_env = binary.build_agent_env_from_session(fake_executable, "/tmp/jpr.sock", 42, "/usr/bin:/bin")
+    local prepended_env = binary.create_agent_env_from_session(fake_executable, "/tmp/jpr.sock", 42, "/usr/bin:/bin")
     assert(prepended_env.JPR_SOCKET == "/tmp/jpr.sock", "preserves JPR_SOCKET")
     assert(prepended_env.JPR_PR == "42", "stringifies JPR_PR")
     assert(prepended_env.PATH == expected_directory .. ":/usr/bin:/bin", "prepends bundled binary directory: " .. tostring(prepended_env.PATH))
 
-    local deduplicated_env = binary.build_agent_env_from_session(fake_executable, "/tmp/jpr.sock", 42, expected_directory .. ":/usr/bin:/bin")
+    local deduplicated_env = binary.create_agent_env_from_session(fake_executable, "/tmp/jpr.sock", 42, expected_directory .. ":/usr/bin:/bin")
     assert(deduplicated_env.PATH == expected_directory .. ":/usr/bin:/bin", "does not duplicate leading PATH directory")
 
-    local prefix_env = binary.build_agent_env_from_session(fake_executable, "/tmp/jpr.sock", 42, expected_directory .. "-other:/usr/bin")
+    local prefix_env = binary.create_agent_env_from_session(fake_executable, "/tmp/jpr.sock", 42, expected_directory .. "-other:/usr/bin")
     assert(prefix_env.PATH == expected_directory .. ":" .. expected_directory .. "-other:/usr/bin", "distinguishes directory boundary on PATH")
 
-    local empty_path_env = binary.build_agent_env_from_session(fake_executable, "/tmp/jpr.sock", 42, "")
+    local empty_path_env = binary.create_agent_env_from_session(fake_executable, "/tmp/jpr.sock", 42, "")
     assert(empty_path_env.PATH == expected_directory and not vim.endswith(empty_path_env.PATH, ":"), "empty current_path omits trailing separator")
 
     with_temporary_env({ PATH = false }, function()
-        local nil_path_env = binary.build_agent_env_from_session(fake_executable, "/tmp/jpr.sock", 42, nil)
+        local nil_path_env = binary.create_agent_env_from_session(fake_executable, "/tmp/jpr.sock", 42, nil)
         assert(nil_path_env.PATH == expected_directory and not vim.endswith(nil_path_env.PATH, ":"), "nil current_path with unset env PATH omits trailing separator")
     end)
 
-    local bare_env = binary.build_agent_env_from_session("jpr-review", "/tmp/jpr.sock", 42, "/usr/bin:/bin")
+    local bare_env = binary.create_agent_env_from_session("jpr-review", "/tmp/jpr.sock", 42, "/usr/bin:/bin")
     assert(bare_env.PATH == "/usr/bin:/bin", "leaves PATH unchanged for bare command name")
 
-    local missing_env = binary.build_agent_env_from_session(temp_directory .. "/missing/jpr-review", "/tmp/jpr.sock", 42, "/usr/bin:/bin")
+    local missing_env = binary.create_agent_env_from_session(temp_directory .. "/missing/jpr-review", "/tmp/jpr.sock", 42, "/usr/bin:/bin")
     assert(missing_env.PATH == "/usr/bin:/bin", "leaves PATH unchanged for non-executable path")
 end
 
@@ -267,14 +267,11 @@ local function run_plugin_build_with_env(plugin_directory, env_overrides)
     end)
 end
 
-local function assert_build_lua_reports_lazy_build_remediation_when_cargo_fails_or_cannot_exec()
+local function assert_build_lua_reports_remediation_when_cargo_is_missing_or_unexecutable()
     local temp_directory, plugin_directory = create_temp_plugin_checkout()
-    local cargo_bin_directory = temp_directory .. "/cargo-bin"
     local corrupt_cargo_directory = temp_directory .. "/corrupt-cargo-bin"
-    local cargo_log = temp_directory .. "/cargo.log"
     local empty_home = temp_directory .. "/empty-home"
     vim.fn.mkdir(empty_home, "p")
-    create_fake_cargo(cargo_bin_directory, cargo_log)
     write_corrupt_executable(corrupt_cargo_directory .. "/cargo")
 
     local missing_ok, missing_error = pcall(run_plugin_build_with_env, plugin_directory, {
@@ -292,6 +289,15 @@ local function assert_build_lua_reports_lazy_build_remediation_when_cargo_fails_
     })
     assert(not corrupt_ok and tostring(corrupt_error):find("jpr-nvim:", 1, true) ~= nil, "corrupt cargo reports jpr-nvim error: " .. tostring(corrupt_error))
     assert(tostring(corrupt_error):find(":Lazy build jpr-nvim", 1, true) ~= nil, "corrupt cargo mentions :Lazy build jpr-nvim")
+end
+
+local function assert_build_lua_reports_remediation_when_cargo_build_fails_or_omits_binary()
+    local temp_directory, plugin_directory = create_temp_plugin_checkout()
+    local cargo_bin_directory = temp_directory .. "/cargo-bin"
+    local cargo_log = temp_directory .. "/cargo.log"
+    local empty_home = temp_directory .. "/empty-home"
+    vim.fn.mkdir(empty_home, "p")
+    create_fake_cargo(cargo_bin_directory, cargo_log)
 
     local fail_ok, fail_error = pcall(run_plugin_build_with_env, plugin_directory, {
         PATH = cargo_bin_directory .. ":/usr/bin:/bin",
@@ -376,7 +382,8 @@ assert_agent_terminal_discovers_bundled_binary_first_on_path()
 assert_cargo_lookup_falls_back_from_path_to_cargo_home_and_home_cargo_bin()
 assert_build_lua_yields_progress_under_lazy_async_and_preserves_cwd()
 assert_build_lua_runs_without_yielding_outside_lazy_async_and_reloads_cached_modules()
-assert_build_lua_reports_lazy_build_remediation_when_cargo_fails_or_cannot_exec()
+assert_build_lua_reports_remediation_when_cargo_is_missing_or_unexecutable()
+assert_build_lua_reports_remediation_when_cargo_build_fails_or_omits_binary()
 assert_health_check_reports_ok_for_matching_binary_and_error_for_bad_binary()
 
 print("build_and_binary_spec: ok")

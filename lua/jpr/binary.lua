@@ -17,8 +17,9 @@ function M.binary_filename(is_windows)
     return "jpr-review"
 end
 
---- Root directory of this `jpr-nvim` checkout, derived from `lua/jpr/binary.lua`.
+--- Root directory of this `jpr-nvim` plugin checkout.
 function M.plugin_root()
+    -- Walk three parent directories up from `<root>/lua/jpr/binary.lua`.
     local source_path = debug.getinfo(1, "S").source:gsub("^@", "")
     return vim.fn.fnamemodify(source_path, ":p:h:h:h")
 end
@@ -63,9 +64,9 @@ function M.build_path_from_directory(directory, current_path, is_windows)
     return directory .. separator .. active_path
 end
 
---- Builds the environment table for `:Jpr agent` terminals, prepending the bundled
+--- Creates the environment table for `:Jpr agent` terminals, prepending the bundled
 --- binary directory to `PATH` whenever `binary_path` is an executable file path.
-function M.build_agent_env_from_session(binary_path, socket, pr_number, current_path)
+function M.create_agent_env_from_session(binary_path, socket, pr_number, current_path)
     local active_path = current_path ~= nil and tostring(current_path) or (vim.env.PATH or "")
     local updated_path = active_path
     if M.has_path_separator(binary_path) and vim.fn.executable(binary_path) == 1 then

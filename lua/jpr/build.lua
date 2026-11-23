@@ -18,9 +18,9 @@ local function find_executable_in_path(executable_name, path_value, separator)
     return nil
 end
 
-local function get_home_directory(home_dir)
-    if type(home_dir) == "string" and home_dir ~= "" then
-        return home_dir
+local function get_home_directory(home_directory)
+    if type(home_directory) == "string" and home_directory ~= "" then
+        return home_directory
     end
     if type(vim.env.HOME) == "string" and vim.env.HOME ~= "" then
         return vim.env.HOME
@@ -29,8 +29,8 @@ local function get_home_directory(home_dir)
 end
 
 --- Finds an executable `cargo` binary across `env_map.PATH`, `CARGO_HOME/bin`,
---- and `<home_dir>/.cargo/bin` so GUI Neovim sessions without shell PATH still build.
-function M.find_cargo_executable(env_map, home_dir)
+--- and `<home_directory>/.cargo/bin` so GUI Neovim sessions without shell PATH still build.
+function M.find_cargo_executable(env_map, home_directory)
     local is_windows = binary.is_windows_platform()
     local cargo_name = is_windows and "cargo.exe" or "cargo"
     local separator = is_windows and ";" or ":"
@@ -54,7 +54,7 @@ function M.find_cargo_executable(env_map, home_dir)
             return cargo_home_candidate
         end
     end
-    local target_home = get_home_directory(home_dir)
+    local target_home = get_home_directory(home_directory)
     if type(target_home) == "string" and target_home ~= "" then
         local home_candidate = target_home .. "/.cargo/bin/" .. cargo_name
         if vim.fn.executable(home_candidate) == 1 then
@@ -64,7 +64,7 @@ function M.find_cargo_executable(env_map, home_dir)
     return nil
 end
 
-local function build_cargo_env_from_executable(cargo_path, env_map)
+local function create_cargo_env_from_executable(cargo_path, env_map)
     local cargo_directory = vim.fn.fnamemodify(cargo_path, ":p:h")
     local base_path = (type(env_map) == "table" and env_map.PATH ~= nil)
         and tostring(env_map.PATH)
@@ -117,24 +117,25 @@ local function run_cargo_release_build(cargo_path, root_directory, cargo_env)
     return handle_or_error:wait()
 end
 
---- Compiles `target/release/jpr-review` inside `plugin_root` without changing
---- Neovim's global working directory, yielding progress when inside `lazy.async`.
+--- Compiles the bundled `jpr-review` release binary inside `plugin_root` and
+--- returns the resulting executable path, raising an actionable error on failure.
 function M.build_release_binary(plugin_root, options)
     local root_directory = (type(plugin_root) == "string" and plugin_root ~= "")
         and plugin_root
         or binary.plugin_root()
     local active_options = type(options) == "table" and options or {}
-    local cargo_path = M.find_cargo_executable(active_options.env, active_options.home_dir)
+    local cargo_path = M.find_cargo_executable(active_options.env, active_options.home_directory)
     if not cargo_path then
         error(
             "jpr-nvim: cargo executable not found. Install a Rust toolchain from https://rustup.rs and run :Lazy build jpr-nvim",
             0
         )
     end
+    -- Yield a progress status line only when invoked inside lazy.nvim's async runner.
     if is_lazy_async_running() then
         coroutine.yield("Building jpr-review (cargo build --release)...")
     end
-    local cargo_env = build_cargo_env_from_executable(cargo_path, active_options.env)
+    local cargo_env = create_cargo_env_from_executable(cargo_path, active_options.env)
     local result = run_cargo_release_build(cargo_path, root_directory, cargo_env)
     if result.code ~= 0 then
         error(
