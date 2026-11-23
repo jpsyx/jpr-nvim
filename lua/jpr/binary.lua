@@ -19,7 +19,7 @@ end
 
 --- Root directory of this `jpr-nvim` checkout, derived from `lua/jpr/binary.lua`.
 function M.plugin_root()
-    local source_path = debug.getinfo(1, "S").source:sub(2)
+    local source_path = debug.getinfo(1, "S").source:gsub("^@", "")
     return vim.fn.fnamemodify(source_path, ":p:h:h:h")
 end
 

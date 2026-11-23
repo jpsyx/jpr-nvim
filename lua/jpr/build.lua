@@ -80,7 +80,7 @@ local function build_cargo_env_from_executable(cargo_path, env_map)
     return cargo_env
 end
 
-local function format_build_output_suffix(result)
+local function build_output_suffix_from_result(result)
     local detail = vim.trim(result.stderr or "")
     if detail == "" then
         detail = vim.trim(result.stdout or "")
@@ -88,8 +88,37 @@ local function format_build_output_suffix(result)
     return detail ~= "" and ("\n" .. detail) or ""
 end
 
+local function is_lazy_async_running()
+    local running_thread, is_main_thread = coroutine.running()
+    local lazy_async = package.loaded["lazy.async"]
+    return running_thread ~= nil
+        and not is_main_thread
+        and type(lazy_async) == "table"
+        and type(lazy_async.running) == "function"
+        and lazy_async.running() ~= nil
+end
+
+local function run_cargo_release_build(cargo_path, root_directory, cargo_env)
+    local command = { cargo_path, "build", "--release", "-p", "jpr-review" }
+    local is_spawned, handle_or_error = pcall(vim.system, command, {
+        cwd = root_directory,
+        env = cargo_env,
+        text = true,
+    })
+    if not is_spawned then
+        error(
+            ("jpr-nvim: failed to execute cargo at %s (%s); check your Rust toolchain (https://rustup.rs) and run :Lazy build jpr-nvim"):format(
+                cargo_path,
+                tostring(handle_or_error)
+            ),
+            0
+        )
+    end
+    return handle_or_error:wait()
+end
+
 --- Compiles `target/release/jpr-review` inside `plugin_root` without changing
---- Neovim's global working directory, yielding progress when inside a coroutine.
+--- Neovim's global working directory, yielding progress when inside `lazy.async`.
 function M.build_release_binary(plugin_root, options)
     local root_directory = (type(plugin_root) == "string" and plugin_root ~= "")
         and plugin_root
@@ -102,18 +131,16 @@ function M.build_release_binary(plugin_root, options)
             0
         )
     end
-    local running_thread, is_main_thread = coroutine.running()
-    if running_thread ~= nil and not is_main_thread then
+    if is_lazy_async_running() then
         coroutine.yield("Building jpr-review (cargo build --release)...")
     end
     local cargo_env = build_cargo_env_from_executable(cargo_path, active_options.env)
-    local command = { cargo_path, "build", "--release", "-p", "jpr-review" }
-    local result = vim.system(command, { cwd = root_directory, env = cargo_env, text = true }):wait()
+    local result = run_cargo_release_build(cargo_path, root_directory, cargo_env)
     if result.code ~= 0 then
         error(
             ("jpr-nvim: cargo build --release -p jpr-review failed (exit %s); check your Rust toolchain (https://rustup.rs) and run :Lazy build jpr-nvim%s"):format(
                 tostring(result.code),
-                format_build_output_suffix(result)
+                build_output_suffix_from_result(result)
             ),
             0
         )
@@ -123,7 +150,7 @@ function M.build_release_binary(plugin_root, options)
         error(
             ("jpr-nvim: cargo build finished without producing an executable at %s; run :Lazy build jpr-nvim%s"):format(
                 expected_binary,
-                format_build_output_suffix(result)
+                build_output_suffix_from_result(result)
             ),
             0
         )

@@ -1,4 +1,4 @@
-local root = vim.fs.dirname(vim.fs.dirname(vim.fs.dirname(vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p"))))
+local root = vim.fs.dirname(vim.fs.dirname(vim.fs.dirname(vim.fn.fnamemodify(debug.getinfo(1, "S").source:gsub("^@", ""), ":p"))))
 local repo_lua_prefix = root .. "/lua/?.lua;" .. root .. "/lua/?/init.lua;"
 package.path = repo_lua_prefix .. package.path
 
@@ -18,7 +18,50 @@ local function write_executable_script(script_path, lines)
     vim.uv.fs_chmod(script_path, tonumber("755", 8))
 end
 
-local function test_binary_path_helpers()
+local function write_corrupt_executable(binary_path)
+    vim.fn.mkdir(vim.fs.dirname(binary_path), "p")
+    local fd = assert(vim.uv.fs_open(binary_path, "w", tonumber("755", 8)))
+    assert(vim.uv.fs_write(fd, "\0\1\2\3not-a-valid-binary", 0))
+    assert(vim.uv.fs_close(fd))
+end
+
+local function with_temporary_env(overrides, callback)
+    local saved = {
+        PATH = vim.env.PATH,
+        CARGO_HOME = vim.env.CARGO_HOME,
+        HOME = vim.env.HOME,
+        FAKE_CARGO_MODE = vim.env.FAKE_CARGO_MODE,
+    }
+    for key, value in pairs(overrides) do
+        vim.env[key] = value ~= false and value or nil
+    end
+    local is_ok, result = pcall(callback)
+    for key, value in pairs(saved) do
+        vim.env[key] = value
+    end
+    if not is_ok then
+        error(result, 0)
+    end
+    return result
+end
+
+local function with_saved_package_state(callback)
+    local saved_package_path = package.path
+    local saved_build = package.loaded["jpr.build"]
+    local saved_binary = package.loaded["jpr.binary"]
+    local saved_lazy_async = package.loaded["lazy.async"]
+    local is_ok, result = pcall(callback)
+    package.path = saved_package_path
+    package.loaded["jpr.build"] = saved_build
+    package.loaded["jpr.binary"] = saved_binary
+    package.loaded["lazy.async"] = saved_lazy_async
+    if not is_ok then
+        error(result, 0)
+    end
+    return result
+end
+
+local function assert_binary_paths_default_to_bundled_release_and_respect_config_override()
     assert(binary.plugin_root() == root, "plugin_root matches checkout root: " .. tostring(binary.plugin_root()))
     assert(binary.default_binary_path(root, false) == root .. "/target/release/jpr-review", "posix bundled binary path")
     assert(binary.default_binary_path(root, true) == root .. "/target/release/jpr-review.exe", "windows bundled binary path")
@@ -28,7 +71,7 @@ local function test_binary_path_helpers()
     assert(binary.get_binary_path_from_config({ binary = "/custom/jpr-review" }, root) == "/custom/jpr-review", "custom binary override")
 end
 
-local function test_build_agent_env_from_session()
+local function assert_agent_env_prepends_binary_directory_without_duplicates_or_trailing_separator()
     local temp_directory = vim.fn.tempname()
     local fake_executable = temp_directory .. "/target/release/jpr-review"
     write_executable_script(fake_executable, { "#!/bin/sh", "exit 0" })
@@ -45,6 +88,14 @@ local function test_build_agent_env_from_session()
     local prefix_env = binary.build_agent_env_from_session(fake_executable, "/tmp/jpr.sock", 42, expected_directory .. "-other:/usr/bin")
     assert(prefix_env.PATH == expected_directory .. ":" .. expected_directory .. "-other:/usr/bin", "distinguishes directory boundary on PATH")
 
+    local empty_path_env = binary.build_agent_env_from_session(fake_executable, "/tmp/jpr.sock", 42, "")
+    assert(empty_path_env.PATH == expected_directory and not vim.endswith(empty_path_env.PATH, ":"), "empty current_path omits trailing separator")
+
+    with_temporary_env({ PATH = false }, function()
+        local nil_path_env = binary.build_agent_env_from_session(fake_executable, "/tmp/jpr.sock", 42, nil)
+        assert(nil_path_env.PATH == expected_directory and not vim.endswith(nil_path_env.PATH, ":"), "nil current_path with unset env PATH omits trailing separator")
+    end)
+
     local bare_env = binary.build_agent_env_from_session("jpr-review", "/tmp/jpr.sock", 42, "/usr/bin:/bin")
     assert(bare_env.PATH == "/usr/bin:/bin", "leaves PATH unchanged for bare command name")
 
@@ -52,7 +103,7 @@ local function test_build_agent_env_from_session()
     assert(missing_env.PATH == "/usr/bin:/bin", "leaves PATH unchanged for non-executable path")
 end
 
-local function test_agent_terminal_finds_bundled_binary()
+local function assert_agent_terminal_discovers_bundled_binary_first_on_path()
     view_mode.path = vim.fn.tempname()
     local temp_directory = vim.fn.tempname()
     local bundled_binary = temp_directory .. "/bundled/jpr-review"
@@ -91,7 +142,7 @@ local function test_agent_terminal_finds_bundled_binary()
     jpr.setup({})
 end
 
-local function test_find_cargo_executable()
+local function assert_cargo_lookup_falls_back_from_path_to_cargo_home_and_home_cargo_bin()
     local temp_directory = vim.fn.tempname()
     local path_bin = temp_directory .. "/path-bin"
     local cargo_home = temp_directory .. "/cargo-home"
@@ -142,82 +193,35 @@ local function create_fake_cargo(cargo_bin_directory, cargo_log)
     })
 end
 
-local function with_temporary_env(overrides, callback)
-    local saved = {
-        PATH = vim.env.PATH,
-        CARGO_HOME = vim.env.CARGO_HOME,
-        HOME = vim.env.HOME,
-        FAKE_CARGO_MODE = vim.env.FAKE_CARGO_MODE,
-    }
-    for key, value in pairs(overrides) do
-        vim.env[key] = value ~= false and value or nil
-    end
-    local is_ok, result = pcall(callback)
-    for key, value in pairs(saved) do
-        vim.env[key] = value
-    end
-    if not is_ok then
-        error(result, 0)
-    end
-    return result
-end
-
-local function run_build_chunk_in_cold_coroutine(build_file_path)
-    local saved_package_path = package.path
-    local saved_build = package.loaded["jpr.build"]
-    local saved_binary = package.loaded["jpr.binary"]
-    package.path = saved_package_path:gsub(vim.pesc(repo_lua_prefix), "")
-    package.loaded["jpr.build"] = nil
-    package.loaded["jpr.binary"] = nil
-
-    local yielded_messages = {}
-    local build_chunk = assert(loadfile(build_file_path))
-    local build_thread = coroutine.create(build_chunk)
-    local is_ok, failure
-    while coroutine.status(build_thread) ~= "dead" do
-        local resume_ok, yielded_value = coroutine.resume(build_thread)
-        if not resume_ok then
-            is_ok, failure = false, yielded_value
-            break
-        end
-        if yielded_value ~= nil then
-            yielded_messages[#yielded_messages + 1] = yielded_value
-        end
-        is_ok = true
-    end
-
-    package.path = saved_package_path
-    package.loaded["jpr.build"] = saved_build
-    package.loaded["jpr.binary"] = saved_binary
-    assert(is_ok, "build coroutine failed: " .. tostring(failure))
-    return yielded_messages
-end
-
-local function test_root_build_lua_coroutine_and_cwd()
+local function assert_build_lua_yields_progress_under_lazy_async_and_preserves_cwd()
     local temp_directory, plugin_directory = create_temp_plugin_checkout()
-    local cargo_bin_directory = temp_directory .. "/cargo-bin"
-    local cargo_log = temp_directory .. "/cargo.log"
+    local cargo_bin_directory, cargo_log = temp_directory .. "/cargo-bin", temp_directory .. "/cargo.log"
     local outside_cwd = temp_directory .. "/outside-cwd"
     vim.fn.mkdir(outside_cwd, "p")
     create_fake_cargo(cargo_bin_directory, cargo_log)
+    write_executable_script(temp_directory .. "/fake-home/.cargo/bin/cargo", vim.fn.readfile(cargo_bin_directory .. "/cargo"))
 
-    local original_cwd = vim.fn.getcwd()
+    local package_path_before, original_cwd = package.path, vim.fn.getcwd()
     vim.cmd.cd(vim.fn.fnameescape(outside_cwd))
     local cwd_before_build = vim.fn.getcwd()
-    local yielded_messages = with_temporary_env({
-        PATH = "/usr/bin:/bin",
-        CARGO_HOME = false,
-        HOME = temp_directory .. "/fake-home",
-        FAKE_CARGO_MODE = "ok",
-    }, function()
-        write_executable_script(temp_directory .. "/fake-home/.cargo/bin/cargo", vim.fn.readfile(cargo_bin_directory .. "/cargo"))
-        return run_build_chunk_in_cold_coroutine(plugin_directory .. "/build.lua")
+    local env_overrides = { PATH = "/usr/bin:/bin", CARGO_HOME = false, HOME = temp_directory .. "/fake-home", FAKE_CARGO_MODE = "ok" }
+
+    local first_yield = with_saved_package_state(function()
+        package.loaded["lazy.async"] = { running = function() return {} end }
+        return with_temporary_env(env_overrides, function()
+            local build_thread = coroutine.create(assert(loadfile(plugin_directory .. "/build.lua")))
+            local first_ok, yielded_value = coroutine.resume(build_thread)
+            assert(first_ok and coroutine.status(build_thread) == "suspended", "lazy.async coroutine must suspend with progress")
+            local second_ok, second_error = coroutine.resume(build_thread)
+            assert(second_ok and coroutine.status(build_thread) == "dead", "second resume failed: " .. tostring(second_error))
+            return yielded_value
+        end)
     end)
+
     local cwd_after_build = vim.fn.getcwd()
     vim.cmd.cd(vim.fn.fnameescape(original_cwd))
-
-    assert(cwd_after_build == cwd_before_build, "build.lua must not mutate global cwd")
-    assert(#yielded_messages >= 1 and tostring(yielded_messages[1]):find("cargo build --release", 1, true) ~= nil, "yields coroutine progress")
+    assert(package.path == package_path_before and cwd_after_build == cwd_before_build, "restores package.path and preserves cwd")
+    assert(tostring(first_yield):find("Building", 1, true) ~= nil, "yields Building progress message: " .. tostring(first_yield))
     assert(vim.fn.executable(plugin_directory .. "/target/release/jpr-review") == 1, "compiled binary exists and is executable")
     local log_line = vim.fn.readfile(cargo_log)[1]
     local expected_plugin_real = vim.uv.fs_realpath(plugin_directory) or plugin_directory
@@ -225,42 +229,86 @@ local function test_root_build_lua_coroutine_and_cwd()
     assert(log_line:find(".cargo/bin", 1, true) ~= nil, "prepends cargo bin directory to PATH for rustc: " .. log_line)
 end
 
-local function test_root_build_lua_error_cases()
+local function assert_build_lua_runs_without_yielding_outside_lazy_async_and_reloads_cached_modules()
     local temp_directory, plugin_directory = create_temp_plugin_checkout()
     local cargo_bin_directory = temp_directory .. "/cargo-bin"
+    local cargo_log = temp_directory .. "/cargo.log"
+    create_fake_cargo(cargo_bin_directory, cargo_log)
+    local package_path_before = package.path
+
+    with_saved_package_state(function()
+        package.loaded["lazy.async"] = nil
+        package.loaded["jpr.build"] = {
+            build_release_binary = function()
+                error("stale cached jpr.build was not reloaded")
+            end,
+        }
+        package.loaded["jpr.binary"] = { stale = true }
+        with_temporary_env({
+            PATH = cargo_bin_directory .. ":/usr/bin:/bin",
+            CARGO_HOME = false,
+            HOME = temp_directory .. "/empty-home",
+            FAKE_CARGO_MODE = "ok",
+        }, function()
+            local return_value = coroutine.wrap(assert(loadfile(plugin_directory .. "/build.lua")))()
+            assert(return_value == nil, "plain coroutine caller must not receive a progress yield: " .. tostring(return_value))
+        end)
+    end)
+
+    assert(package.path == package_path_before, "package.path restored after non-lazy coroutine build")
+    assert(vim.fn.executable(plugin_directory .. "/target/release/jpr-review") == 1, "single coroutine.wrap call completed full build")
+end
+
+local function run_plugin_build_with_env(plugin_directory, env_overrides)
+    return with_saved_package_state(function()
+        package.loaded["lazy.async"] = nil
+        local build_chunk = assert(loadfile(plugin_directory .. "/build.lua"))
+        return with_temporary_env(env_overrides, build_chunk)
+    end)
+end
+
+local function assert_build_lua_reports_lazy_build_remediation_when_cargo_fails_or_cannot_exec()
+    local temp_directory, plugin_directory = create_temp_plugin_checkout()
+    local cargo_bin_directory = temp_directory .. "/cargo-bin"
+    local corrupt_cargo_directory = temp_directory .. "/corrupt-cargo-bin"
     local cargo_log = temp_directory .. "/cargo.log"
     local empty_home = temp_directory .. "/empty-home"
     vim.fn.mkdir(empty_home, "p")
     create_fake_cargo(cargo_bin_directory, cargo_log)
-    local build_chunk = assert(loadfile(plugin_directory .. "/build.lua"))
+    write_corrupt_executable(corrupt_cargo_directory .. "/cargo")
 
-    local missing_ok, missing_error = pcall(with_temporary_env, {
+    local missing_ok, missing_error = pcall(run_plugin_build_with_env, plugin_directory, {
         PATH = temp_directory .. "/empty-bin",
         CARGO_HOME = false,
         HOME = empty_home,
-    }, build_chunk)
-    assert(not missing_ok, "missing cargo must error")
-    assert(tostring(missing_error):find("https://rustup.rs", 1, true) ~= nil, "missing cargo mentions rustup.rs: " .. tostring(missing_error))
-    assert(tostring(missing_error):find(":Lazy build jpr-nvim", 1, true) ~= nil, "missing cargo mentions :Lazy build jpr-nvim: " .. tostring(missing_error))
+    })
+    assert(not missing_ok and tostring(missing_error):find("https://rustup.rs", 1, true) ~= nil, "missing cargo mentions rustup.rs")
+    assert(tostring(missing_error):find(":Lazy build jpr-nvim", 1, true) ~= nil, "missing cargo mentions :Lazy build jpr-nvim")
 
-    local fail_ok, fail_error = pcall(with_temporary_env, {
+    local corrupt_ok, corrupt_error = pcall(run_plugin_build_with_env, plugin_directory, {
+        PATH = corrupt_cargo_directory .. ":/usr/bin:/bin",
+        CARGO_HOME = false,
+        HOME = empty_home,
+    })
+    assert(not corrupt_ok and tostring(corrupt_error):find("jpr-nvim:", 1, true) ~= nil, "corrupt cargo reports jpr-nvim error: " .. tostring(corrupt_error))
+    assert(tostring(corrupt_error):find(":Lazy build jpr-nvim", 1, true) ~= nil, "corrupt cargo mentions :Lazy build jpr-nvim")
+
+    local fail_ok, fail_error = pcall(run_plugin_build_with_env, plugin_directory, {
         PATH = cargo_bin_directory .. ":/usr/bin:/bin",
         CARGO_HOME = false,
         HOME = empty_home,
         FAKE_CARGO_MODE = "fail",
-    }, build_chunk)
-    assert(not fail_ok, "non-zero cargo exit must error")
-    assert(tostring(fail_error):find("error[E0001]: broken rust build", 1, true) ~= nil, "includes cargo stderr: " .. tostring(fail_error))
-    assert(tostring(fail_error):find(":Lazy build jpr-nvim", 1, true) ~= nil, "failed cargo mentions :Lazy build jpr-nvim: " .. tostring(fail_error))
+    })
+    assert(not fail_ok and tostring(fail_error):find("error[E0001]: broken rust build", 1, true) ~= nil, "includes cargo stderr")
+    assert(tostring(fail_error):find(":Lazy build jpr-nvim", 1, true) ~= nil, "failed cargo mentions :Lazy build jpr-nvim")
 
-    local nobin_ok, nobin_error = pcall(with_temporary_env, {
+    local nobin_ok, nobin_error = pcall(run_plugin_build_with_env, plugin_directory, {
         PATH = cargo_bin_directory .. ":/usr/bin:/bin",
         CARGO_HOME = false,
         HOME = empty_home,
         FAKE_CARGO_MODE = "nobin",
-    }, build_chunk)
-    assert(not nobin_ok, "missing output binary must error")
-    assert(tostring(nobin_error):find(":Lazy build jpr-nvim", 1, true) ~= nil, "missing output mentions :Lazy build jpr-nvim: " .. tostring(nobin_error))
+    })
+    assert(not nobin_ok and tostring(nobin_error):find(":Lazy build jpr-nvim", 1, true) ~= nil, "missing output mentions :Lazy build jpr-nvim")
 end
 
 local function run_health_check_with_stubs(binary_path)
@@ -288,16 +336,18 @@ local function run_health_check_with_stubs(binary_path)
     return report
 end
 
-local function test_health_check()
+local function assert_health_check_reports_ok_for_matching_binary_and_error_for_bad_binary()
     local temp_directory = vim.fn.tempname()
     local tools_bin = temp_directory .. "/tools-bin"
     local matching_binary = temp_directory .. "/jpr-review-ok"
     local mismatched_binary = temp_directory .. "/jpr-review-old"
+    local corrupt_binary = temp_directory .. "/jpr-review-corrupt"
     write_executable_script(tools_bin .. "/git", { "#!/bin/sh", "exit 0" })
     write_executable_script(tools_bin .. "/gh", { "#!/bin/sh", "exit 0" })
     write_executable_script(tools_bin .. "/cargo", { "#!/bin/sh", "exit 0" })
     write_executable_script(matching_binary, { "#!/bin/sh", "echo 'jpr-review " .. jpr.VERSION .. "'" })
     write_executable_script(mismatched_binary, { "#!/bin/sh", "echo 'jpr-review 0.1.0'" })
+    write_corrupt_executable(corrupt_binary)
 
     with_temporary_env({ PATH = tools_bin .. ":/usr/bin:/bin" }, function()
         local healthy = run_health_check_with_stubs(matching_binary)
@@ -313,15 +363,20 @@ local function test_health_check()
         assert(#mismatched.errors >= 1, "mismatched binary records health error")
         local mismatch_text = table.concat(mismatched.errors, "\n")
         assert(mismatch_text:find("0.1.0", 1, true) ~= nil and mismatch_text:find(":Lazy build jpr-nvim", 1, true) ~= nil, "mismatch error text: " .. mismatch_text)
+
+        local corrupt = run_health_check_with_stubs(corrupt_binary)
+        assert(#corrupt.errors >= 1, "corrupt binary records health error instead of raising")
+        assert(table.concat(corrupt.errors, "\n"):find(":Lazy build jpr-nvim", 1, true) ~= nil, "corrupt binary health error mentions :Lazy build jpr-nvim")
     end)
 end
 
-test_binary_path_helpers()
-test_build_agent_env_from_session()
-test_agent_terminal_finds_bundled_binary()
-test_find_cargo_executable()
-test_root_build_lua_coroutine_and_cwd()
-test_root_build_lua_error_cases()
-test_health_check()
+assert_binary_paths_default_to_bundled_release_and_respect_config_override()
+assert_agent_env_prepends_binary_directory_without_duplicates_or_trailing_separator()
+assert_agent_terminal_discovers_bundled_binary_first_on_path()
+assert_cargo_lookup_falls_back_from_path_to_cargo_home_and_home_cargo_bin()
+assert_build_lua_yields_progress_under_lazy_async_and_preserves_cwd()
+assert_build_lua_runs_without_yielding_outside_lazy_async_and_reloads_cached_modules()
+assert_build_lua_reports_lazy_build_remediation_when_cargo_fails_or_cannot_exec()
+assert_health_check_reports_ok_for_matching_binary_and_error_for_bad_binary()
 
 print("build_and_binary_spec: ok")

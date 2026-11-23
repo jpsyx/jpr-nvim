@@ -28,8 +28,9 @@ local function check_engine_binary()
         vim.health.error(("jpr-review binary not found at %s; run :Lazy build jpr-nvim"):format(clean_binary_path))
         return
     end
-    local result = vim.system({ binary_path, "--version" }, { text = true, timeout = 3000 }):wait()
-    local raw_version = result.code == 0 and parse_version_from_stdout(result.stdout) or nil
+    local is_spawned, system_handle = pcall(vim.system, { binary_path, "--version" }, { text = true, timeout = 3000 })
+    local result = is_spawned and system_handle:wait() or nil
+    local raw_version = (result and result.code == 0) and parse_version_from_stdout(result.stdout) or nil
     local engine_version = raw_version and crash.build_clean_text_from_raw(raw_version) or ""
     if engine_version == "" then
         vim.health.error(("failed to query %s --version; run :Lazy build jpr-nvim"):format(clean_binary_path))
@@ -58,8 +59,9 @@ local function check_external_tools()
         vim.health.error("gh (GitHub CLI) is required on PATH")
     else
         vim.health.ok("gh found: " .. vim.fn.exepath("gh"))
-        local auth_result = vim.system({ "gh", "auth", "status" }, { text = true, timeout = 3000 }):wait()
-        if auth_result.code == 0 then
+        local is_auth_spawned, auth_handle = pcall(vim.system, { "gh", "auth", "status" }, { text = true, timeout = 3000 })
+        local auth_result = is_auth_spawned and auth_handle:wait() or nil
+        if auth_result and auth_result.code == 0 then
             vim.health.ok("gh is authenticated")
         else
             vim.health.warn("gh auth status failed; run `gh auth login` before opening pull requests")
