@@ -81,11 +81,11 @@ plugin are out of sync. With lazy.nvim:
 In the panel, `<CR>` opens the PR conversation view on the `Conversation` row
 or opens the file under the cursor from the worktree, and `v` toggles it viewed.
 The panel header prefixes review counts with `dirty · ↑N ↓M` when the worktree
-has uncommitted changes, `↑N ↓M` when ahead or behind its upstream branch, or
-`[read-only]` after engine recovery fallback. Changed file rows show `✎`
-(`JprModified`, linked to `Special`) before locally modified files and suffix
-thread counts as `[G]` (GitHub), `[LL]` (local, e.g. `[2L]`), or `[G · LL]`
-(both, e.g. `[2 · 1L]`).
+has uncommitted changes, `↑N ↓M` when ahead or behind the pull request's remote
+head, or `[read-only]` after engine recovery fallback. Changed file rows show
+`✎` (`JprModified`, linked to `Special`) before locally modified files and
+suffix thread counts as `[G]` (GitHub), `[NL]` (local, e.g. `[2L]`), or
+`[G · NL]` (both, e.g. `[2 · 1L]`).
 
 In the stream:
 
@@ -142,7 +142,7 @@ to `DiagnosticHint`), and locally modified panel entries use `JprModified`
 ## Statusline
 
 `require("jpr").statusline()` returns a compact summary of the current tab's
-review session (`PR #42 · dirty ↑1 ↓0 · 3/8 viewed · 2 drafts · 1 local`),
+review session (`PR #42 · dirty ↑1 · 3/8 viewed · 2 drafts · 1 local`),
 omitting inactive segments and adding `[read-only]` or `sync!` when active. It
 reads in-memory state in O(1) without loading session modules until a review is
 opened and never spawns `git`, `gh`, or RPC calls.
