@@ -18,46 +18,48 @@ the Neovim plugin is a thin Lua frontend over its JSON-RPC protocol. See
 
 ## Install
 
-```sh
-./install.sh                  # builds jpr-review into ~/.local/bin (BIN_DIR to change)
-```
-
-Load the plugin from the same checkout, so the Lua and the engine always come
-from one commit. `:Jpr open` checks both protocol and package versions during
-startup and stops with a prompt to rerun `./install.sh` if `jpr-review` and the
-plugin are out of sync. With lazy.nvim:
+With [lazy.nvim](https://github.com/folke/lazy.nvim):
 
 ```lua
 {
-  dir = "/path/to/jpr-nvim",
-  name = "jpr",
+  "jpsyx/jpr-nvim",
   cmd = "Jpr",
-  config = function()
-    require("jpr").setup({
-      -- Optional: a command that creates the worktree and prints its path.
-      -- worktree_cmd = "my-worktree-tool pr {n}",
-      -- Optional: the diff view until you first run :Jpr toggle,
-      -- "unified" (the default) or "split".
-      -- view = "split",
-      -- Optional: coding agent for :Jpr agent, :Jpr send, and :Jpr prepass:
-      -- "claude" (the default) or "codex".
-      -- agent = "claude",
-      -- claude_cmd = "claude",
-      -- codex_cmd = "codex",
-      -- agent_width = 56,
-      -- Optional: override or disable (false) diff/stream comment & thread keys.
-      -- keys = {
-      --   comment = "gc",
-      --   suggest_comment = "gC",
-      --   file_comment = "gf",
-      --   thread_popup = "gt",
-      --   next_thread = "]t",
-      --   prev_thread = "[t",
-      -- },
-    })
-  end,
+  opts = {
+    -- Optional: a command that creates the worktree and prints its path (`{n}` is the PR number).
+    -- worktree_cmd = "my-worktree-tool pr {n}",
+    -- Optional: the diff view until you first run :Jpr toggle,
+    -- "unified" (the default) or "split".
+    -- view = "split",
+    -- Optional: coding agent for :Jpr agent, :Jpr send, and :Jpr prepass:
+    -- "claude" (the default) or "codex".
+    -- agent = "claude",
+    -- claude_cmd = "claude",
+    -- codex_cmd = "codex",
+    -- agent_width = 56,
+    -- Optional: override or disable (false) diff/stream comment & thread keys.
+    -- keys = {
+    --   comment = "gc",
+    --   suggest_comment = "gC",
+    --   file_comment = "gf",
+    --   thread_popup = "gt",
+    --   next_thread = "]t",
+    --   prev_thread = "[t",
+    -- },
+  },
 }
 ```
+
+`lazy.nvim` automatically detects the `"jpr"` module from `"jpsyx/jpr-nvim"`
+when `opts` is passed and runs `build.lua` (`cargo build --release -p
+jpr-review`) on install and `:Lazy update`, keeping the compiled engine binary
+at `target/release/jpr-review` inside the plugin directory with no `~/.local/bin`
+install step. `:Jpr open` checks both protocol and package versions during
+startup and prompts you to run `:Lazy build jpr-nvim` if the plugin and binary
+are out of sync.
+
+Run `:checkhealth jpr` to verify Neovim `>= 0.11`, the bundled `jpr-review`
+binary, `git`, `gh`, and `cargo`, or `:Lazy build jpr-nvim` to rebuild the
+binary manually.
 
 ## Use
 
@@ -160,7 +162,7 @@ require("lualine").setup({
   sections = {
     lualine_x = {
       function()
-        return require("jpr").statusline()
+        return package.loaded["jpr"] and require("jpr").statusline() or ""
       end,
     },
   },
@@ -186,7 +188,8 @@ require("lualine").setup({
 ## Agent CLI
 
 The coding agent running inside `:Jpr agent` receives `JPR_SOCKET` and `JPR_PR`
-in its environment and drives local review threads through `jpr-review`:
+in its environment, with `<plugin_root>/target/release` prepended to `PATH`, and
+drives local review threads through `jpr-review`:
 
 ```sh
 jpr-review guide                                   # print agent workflow & rules

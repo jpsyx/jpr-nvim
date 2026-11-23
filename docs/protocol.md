@@ -38,8 +38,8 @@ spawns the interactive agent terminal, it exports that path as `JPR_SOCKET`.
 
 The client sends `initialize` first and compares both `protocolVersion` and
 `version` with its own (`"test"` is accepted as `version` in test fixtures). On
-a mismatch it stops the server and tells the user to install the plugin and the
-engine from the same checkout (`./install.sh`).
+a mismatch it stops the server and tells the user to rebuild the bundled engine
+with `:Lazy build jpr-nvim`.
 
 ## Requests
 

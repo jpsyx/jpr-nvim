@@ -680,3 +680,40 @@ mismatches still fail fast without retrying.
 
 **Revisit when.** Reviewers want an in-place `:Jpr reconnect` command to clear
 `[read-only]` without closing and reopening the review tab.
+
+## Root build.lua and plugin-local target/release/jpr-review replace install.sh
+
+**Decision.** `jpr-nvim` removes `install.sh` and the `just install` recipe in
+favor of a root `build.lua` hook (`lua/jpr/build.lua`), plugin-local binary
+resolution (`lua/jpr/binary.lua` defaulting `config.binary = nil` to
+`<plugin_root>/target/release/jpr-review`), coding-agent `PATH` injection in
+`lua/jpr/agent.lua`, and `:checkhealth jpr` (`lua/jpr/health.lua`). `build.lua`
+locates `cargo` across `PATH`, `$CARGO_HOME/bin`, and `~/.cargo/bin`, clears
+cached `jpr.build` and `jpr.binary` entries in `package.loaded`, yields progress
+only when running inside `lazy.nvim`'s `lazy.async` coroutine, and runs
+`cargo build --release -p jpr-review` with `cwd = plugin_root` without changing
+Neovim's global working directory.
+
+**Why.** A separate `./install.sh` step into `~/.local/bin` forced users and
+dotfiles setups to maintain an out-of-band build script and drifted whenever
+`:Lazy update` advanced the Lua plugin without rebuilding the Rust binary.
+`lazy.nvim` natively executes `<plugin_root>/build.lua` on install, `:Lazy
+update`, and `:Lazy build jpr-nvim`, keeping the Lua frontend and compiled
+`jpr-review` binary in lockstep inside one checkout. Prepending
+`<plugin_root>/target/release` to `PATH` inside `:Jpr agent` terminals lets
+coding agents invoke `jpr-review guide`, `jpr-review threads`, `jpr-review
+reply`, and `jpr-review prepass-write` by bare name without writing anything to
+`~/.local/bin`, while GUI Neovim sessions without shell `PATH` still find
+rustup's `cargo` and `rustc` via `$CARGO_HOME/bin` or `~/.cargo/bin`.
+
+**Consequences.** Adding `"jpsyx/jpr-nvim"` to `lazy.nvim` installs and updates
+the entire tool in one step, and `:checkhealth jpr` verifies Neovim, the bundled
+engine version, `git`, `gh`, and `cargo`. `jpr-review` is no longer placed on
+the user's interactive login shell `PATH` outside `:Jpr agent` unless they add
+it themselves, and `setup({ binary = ... })` remains available for test fixtures
+and custom engine builds.
+
+**Revisit when.** Prebuilt platform release binaries on GitHub Releases become
+worth downloading in `build.lua` as a fast path for users without a local Rust
+toolchain, falling back to `cargo build --release -p jpr-review` when no
+matching artifact exists.

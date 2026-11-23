@@ -22,7 +22,7 @@ Neovim (lua/jpr)  --JSON-RPC over stdio-->  jpr-review serve (one per PR)
 | --- | --- | --- |
 | Generic engine | `crates/review-*` | std, small general-purpose crates, other `review-*` crates |
 | Composition root | `crates/jpr-review` | everything above |
-| Neovim adapter | `lua/jpr`, `plugin/jpr.lua` | the protocol in `docs/protocol.md` |
+| Neovim adapter | `build.lua`, `lua/jpr`, `plugin/jpr.lua` | the protocol in `docs/protocol.md` |
 
 **The dependency rule.** A generic crate never depends on Neovim, Lua, a
 terminal UI library, or a frontend crate, directly or transitively.
@@ -272,12 +272,16 @@ locking (`local.lock`) the store on disk when no daemon is running.
 
 | Module | Responsibility |
 | --- | --- |
+| `build.lua` | Root `lazy.nvim` build hook: prepends the checkout's `lua/` search path, clears cached `jpr.build` and `jpr.binary` entries in `package.loaded` on `:Lazy update`, and delegates to `jpr.build` without changing Neovim's global working directory |
 | `plugin/jpr.lua` | Defines `:Jpr` (with range support) and the `<Plug>(jpr-*)` mappings |
-| `jpr` | Release `VERSION`, config (including `agent`, `claude_cmd`, `codex_cmd`, `agent_width`, and `keys`), highlight groups (`JprModified` -> `Special`, `JprThreadLocal` -> `DiagnosticHint`), lazy `require("jpr").statusline()` (`""` without loading `jpr.session` until a review opens), argument parsing, subcommand dispatch (`:Jpr push`), buffer keybinding (`bind_buffer_keys`), and `<Plug>(jpr-*)` action dispatch |
+| `jpr` | Release `VERSION`, config (including optional `binary` override, `agent`, `claude_cmd`, `codex_cmd`, `agent_width`, and `keys`), `binary_path()`, highlight groups (`JprModified` -> `Special`, `JprThreadLocal` -> `DiagnosticHint`), lazy `require("jpr").statusline()` (`""` without loading `jpr.session` until a review opens), argument parsing, subcommand dispatch (`:Jpr push`), buffer keybinding (`bind_buffer_keys`), and `<Plug>(jpr-*)` action dispatch |
+| `jpr.binary` (`lua/jpr/binary.lua`) | Resolves the plugin checkout root, the bundled `target/release/jpr-review` binary path (`.exe` on Windows), `config.binary` overrides, and `:Jpr agent` terminal `PATH` prepending (`build_agent_env_from_session`) |
+| `jpr.build` (`lua/jpr/build.lua`) | Finds `cargo` across `PATH`, `$CARGO_HOME/bin`, and `~/.cargo/bin`, yields build progress only inside `lazy.nvim`'s `lazy.async` coroutine, compiles `target/release/jpr-review` in the plugin root via `vim.system`, and verifies the resulting executable |
+| `jpr.health` (`lua/jpr/health.lua`) | `:checkhealth jpr` diagnostics checking Neovim `>= 0.11`, the bundled or configured `jpr-review` binary and version lockstep against `jpr.VERSION`, `git`, `gh` (including `gh auth status`), and `cargo` |
 | `jpr.rpc` | JSON-RPC client over `jobstart` (`M.PROTOCOL_VERSION = 5`) |
 | `jpr.session` (`lua/jpr/session/init.lua`, `commands.lua`, `comments.lua`, `events.lua`, `crash.lua`) | One review per tab: checkout, engine process, protocol + release version handshake check, requests, redraws of the panel, the stream, the diffs, and the PR conversation view, `:Jpr toggle`, `:Jpr stream`, `:Jpr comment`, `:Jpr suggest`, `:Jpr expand`, `:Jpr conversation`, `:Jpr submit`, `:Jpr push`, `:Jpr agent`, `:Jpr send`, `:Jpr prepass`, `threadsChanged`/`filesChanged`/`agentRound`/`worktreeStatusChanged`/`headMoved` handling (including the `Resolve myself` vs `Ask agent to resolve` restore-conflict prompt), and the one teardown path |
 | `jpr.session.crash` (`lua/jpr/session/crash.lua`) | Mid-review crash recovery: single automatic engine restart, `0600` timestamped crash log at `stdpath("state")/jpr/engine-pr-<n>.log` (inside a `0700` state directory), `[read-only]` fallback on a second crash or failed restart handshake, and control-character sanitization for error messages |
-| `jpr.agent` | Right-hand interactive coding-agent terminal split (`claude` or `codex` with `JPR_SOCKET` and `JPR_PR` in its environment), session resume detection, bracketed-paste prompt dispatch (`confirmSend` after `submitDelayMs` for `send`, `prepass`, and `resolve_conflicts`), and hide/show toggling without killing the live process |
+| `jpr.agent` | Right-hand interactive coding-agent terminal split (`claude` or `codex` with `JPR_SOCKET`, `JPR_PR`, and the bundled binary directory prepended to `PATH` in its environment), session resume detection, bracketed-paste prompt dispatch (`confirmSend` after `submitDelayMs` for `send`, `prepass`, and `resolve_conflicts`), and hide/show toggling without killing the live process |
 | `jpr.view_mode` | The global view mode (unified or split): the one remembered in `stdpath("state")/jpr/view-mode`, else `setup({ view = ... })`'s |
 | `jpr.render.panel` | Pure: `SessionView` to lines, highlights, `paths`, and `conversation_line`. Draws `[read-only]` and `dirty · ↑N ↓M` worktree status prefixes, the engine's `tree` (directories muted with a trailing `/`, files indented under them with `✎` on locally modified files and `[G]`, `[NL]`, or `[G · NL]` thread badges, e.g. `[2 · 1L]`), the Conversation row with count, and `drafts N`, `local unsent N`, and `N waiting for GitHub` on the counts line |
 | `jpr.render.statusline` (`lua/jpr/render/statusline.lua`) | Pure O(1) in-memory formatter backing `require("jpr").statusline()`: formats `PR #N`, `[read-only]`, `dirty ↑A ↓B` (with `dirty`, `↑A`, and `↓B` each included only when active/non-zero), `V/F viewed`, `D drafts`, `L local`, and `sync!` without spawning processes or making RPC calls |
@@ -331,9 +335,11 @@ own, so a callback that raises cannot swallow the messages after it.
   `updateLocalAnchors`; `agentReply` and `prepassWrite` are driven by
   `jpr-review` over the Unix socket and covered in `review-rpc` / `jpr-review`
   Rust tests), and logs the requests it gets (`tests/lua/agent_spec.lua`,
-  `tests/lua/push_and_head_moved_spec.lua`, `tests/lua/session_lifecycle_spec.lua`,
-  and `tests/lua/statusline_spec.lua` cover agent dispatch, push, head-move
-  conflict prompts, crash auto-restart/read-only fallback, and `statusline()`).
+  `tests/lua/build_and_binary_spec.lua`, `tests/lua/push_and_head_moved_spec.lua`,
+  `tests/lua/session_lifecycle_spec.lua`, and `tests/lua/statusline_spec.lua`
+  cover agent dispatch, bundled binary discovery/`build.lua`/`:checkhealth jpr`,
+  push, head-move conflict prompts, crash auto-restart/read-only fallback, and
+  `statusline()`).
   The script points `XDG_STATE_HOME` at a temporary directory, so specs never
   touch the real remembered view mode or crash logs.
 - `just check` runs both plus formatting and clippy.

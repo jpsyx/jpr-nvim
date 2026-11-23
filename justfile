@@ -41,10 +41,6 @@ fmt-check:
 # Everything that has to pass before a change lands (reports only: `just fmt` fixes).
 check: fmt-check lint test test-lua
 
-# Build release and install `jpr-review` into $BIN_DIR (default ~/.local/bin).
-install:
-    ./install.sh
-
 # Restore the agent skills pinned in skills-lock.json (run once after cloning).
 skills-install:
     npx --yes skills experimental_install

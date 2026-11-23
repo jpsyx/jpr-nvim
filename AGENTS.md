@@ -179,9 +179,6 @@ cargo fmt --all                                      # just fmt
 
 # everything that has to pass before a change lands
 just check
-
-# install jpr-review at $BIN_DIR/jpr-review (default ~/.local/bin)
-./install.sh                                         # just install
 ```
 
 ## General Code Style & Formatting

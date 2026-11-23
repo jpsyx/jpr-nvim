@@ -170,8 +170,10 @@ Frontend-specific code:
 
 Other files:
 
-- `install.sh` builds `jpr-review` with cargo and installs it into `BIN_DIR`
-  (default `~/.local/bin`). It supports `--name <command>` and `--help`.
+- `build.lua` (with `lua/jpr/build.lua`, superseding standalone `install.sh`;
+  see `2026-11-23-lazy-nvim-bundled-binary-design.md`) builds
+  `target/release/jpr-review` inside the plugin checkout via `cargo` on
+  `lazy.nvim` install and `:Lazy update`.
 - `docs/protocol.md` (RPC contract) and `docs/architecture.md` (layers and the
   dependency rule).
 - The scaffold's unrelated design-agent boilerplate (`impeccable` agents,
@@ -197,12 +199,16 @@ with that pane, and everything else is shared.
 
 ### Installation and host integration
 
-- `install.sh` is the single build entry point, so any dotfiles manager can
-  install the binary.
-- The host Neovim config loads the plugin from the same checkout that built
-  the binary (a lazy.nvim spec with `dir = <checkout>`), so Lua and Rust always
-  come from one commit. The plugin checks `jpr-review --version` against its
-  own expected protocol version on start and reports a mismatch.
+- `build.lua` is the single build entry point (superseding standalone
+  `install.sh`; see `2026-11-23-lazy-nvim-bundled-binary-design.md`):
+  `lazy.nvim` runs it automatically on install and `:Lazy update` to compile
+  `target/release/jpr-review` inside the plugin checkout.
+- The plugin resolves its bundled `target/release/jpr-review` binary from the
+  same checkout by default (and prepends that directory to `PATH` inside
+  `:Jpr agent` terminals), so Lua and Rust always come from one commit. The
+  plugin checks both `protocolVersion` and `version` during the `initialize`
+  handshake (and in `:checkhealth jpr`) and prompts to run
+  `:Lazy build jpr-nvim` on mismatch.
 - The plugin ships `<Plug>` mappings and `setup({ keys = ... })` defaults. A
   host config may bind them its own way.
 - Required external tools: `gh` (logged in) and `git`. The worktree command is
@@ -468,8 +474,9 @@ Each milestone ends usable and tested.
 1. **Core.** The workspace with the generic crates and the dependency-rule
    test, `review-model`, the ports and `ReviewSession` skeleton, the store and
    GitHub pull adapters, `review-rpc`, `docs/protocol.md`, the `jpr-review`
-   composition root, `:Jpr open`, `install.sh`, host loading. Usable for
-   dogfooding from here on.
+   composition root, `:Jpr open`, `build.lua` (superseding standalone
+   `install.sh`; see `2026-11-23-lazy-nvim-bundled-binary-design.md`), host
+   loading. Usable for dogfooding from here on.
 2. **Review views.** Unified and split overlays, stream, panel, viewed sync
    including DISMISSED.
 3. **GitHub comments.** Drafts (line, range, file), immediate replies,
