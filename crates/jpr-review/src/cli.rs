@@ -10,11 +10,11 @@ use clap::{Parser, Subcommand};
 
 /// jpr-review: the review engine behind the jpr Neovim plugin.
 #[derive(Debug, Clone, Parser)]
-#[command(version, propagate_version = true, arg_required_else_help = true)]
+#[command(version, propagate_version = true)]
 pub struct Cli {
     /// The command to run.
     #[command(subcommand)]
-    pub command: Command,
+    pub command: Option<Command>,
 }
 
 /// The things this tool can be asked to do.
@@ -125,12 +125,9 @@ mod tests {
     }
 
     #[test]
-    fn a_bare_invocation_shows_the_help() {
-        let error = Cli::try_parse_from(["jpr-review"]).expect_err("a subcommand is required");
-        assert_eq!(
-            error.kind(),
-            clap::error::ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
-        );
+    fn a_bare_invocation_has_no_subcommand() {
+        let cli = Cli::try_parse_from(["jpr-review"]).unwrap();
+        assert!(cli.command.is_none());
     }
 
     #[test]
@@ -146,11 +143,11 @@ mod tests {
         .unwrap();
         assert_eq!(
             cli.command,
-            Command::Checkout {
+            Some(Command::Checkout {
                 pr: Some(7),
                 repo: None,
                 worktree_cmd: Some("wt pr {n}".into())
-            }
+            })
         );
     }
 
@@ -167,11 +164,11 @@ mod tests {
         .unwrap();
         assert_eq!(
             cli.command,
-            Command::Checkout {
+            Some(Command::Checkout {
                 pr: Some(12),
                 repo: Some("octo/gadgets".into()),
                 worktree_cmd: None
-            }
+            })
         );
     }
 
@@ -182,11 +179,11 @@ mod tests {
                 .unwrap();
         assert_eq!(
             cli.command,
-            Command::Serve {
+            Some(Command::Serve {
                 pr: 7,
                 repo: "octo/widgets".into(),
                 poll: 60
-            }
+            })
         );
     }
 
@@ -198,7 +195,7 @@ mod tests {
     #[test]
     fn guide_parses_without_arguments() {
         let cli = Cli::try_parse_from(["jpr-review", "guide"]).unwrap();
-        assert_eq!(cli.command, Command::Guide);
+        assert_eq!(cli.command, Some(Command::Guide));
     }
 
     #[test]
@@ -215,12 +212,12 @@ mod tests {
         .unwrap();
         assert_eq!(
             cli.command,
-            Command::Threads {
+            Some(Command::Threads {
                 pr: Some(7),
                 repo: Some("octo/widgets".into()),
                 socket: None,
                 is_local_only: true,
-            }
+            })
         );
     }
 
@@ -231,13 +228,13 @@ mod tests {
                 .unwrap();
         assert_eq!(
             cli.command,
-            Command::Reply {
+            Some(Command::Reply {
                 thread_id: Some("loc-1".into()),
                 body: Some("Done. (abc1234)".into()),
                 pr: None,
                 repo: None,
                 socket: None,
-            }
+            })
         );
     }
 
@@ -247,12 +244,12 @@ mod tests {
             .unwrap();
         assert_eq!(
             cli.command,
-            Command::PrepassWrite {
+            Some(Command::PrepassWrite {
                 input: Some(std::path::PathBuf::from("findings.json")),
                 pr: None,
                 repo: None,
                 socket: None,
-            }
+            })
         );
     }
 
@@ -261,10 +258,10 @@ mod tests {
         let bare = Cli::try_parse_from(["jpr-review", "prs"]).unwrap();
         assert_eq!(
             bare.command,
-            Command::Prs {
+            Some(Command::Prs {
                 repo: None,
                 limit: 50,
-            }
+            })
         );
         let filtered = Cli::try_parse_from([
             "jpr-review",
@@ -277,10 +274,10 @@ mod tests {
         .unwrap();
         assert_eq!(
             filtered.command,
-            Command::Prs {
+            Some(Command::Prs {
                 repo: Some("octo/widgets".into()),
                 limit: 15,
-            }
+            })
         );
         assert!(Cli::try_parse_from(["jpr-review", "prs", "--limit", "0"]).is_err());
     }

@@ -264,3 +264,13 @@ fn explicit_repo_ignores_ambient_jpr_pr_while_inferred_repo_uses_it() {
         "explicit --repo without --pr must not read JPR_PR"
     );
 }
+
+#[test]
+fn bare_invocation_without_tty_prints_help_to_stderr_and_exits_2() {
+    let environment = TestEnvironment::create();
+    let output = environment.run(&[], None, &[]);
+    assert_eq!(output.status.code(), Some(2));
+    assert_eq!(output.stdout, b"");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Usage:"), "{stderr}");
+}

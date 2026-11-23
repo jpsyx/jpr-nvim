@@ -6,6 +6,7 @@ pub mod cli;
 pub mod commands;
 pub mod prompt;
 pub mod theme;
+pub mod tui_schema;
 
 /// The product name shown to people.
 pub const APP_NAME: &str = "jpr-review";

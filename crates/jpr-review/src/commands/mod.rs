@@ -28,9 +28,9 @@ use crate::cli::{Cli, Command};
 use crate::prompt::{self, Question};
 use crate::theme::Theme;
 
-/// Runs the command the arguments selected.
-pub fn run(cli: &Cli, theme: Theme) -> Result<()> {
-    match &cli.command {
+/// Runs a single resolved subcommand.
+pub fn run_command(command: &Command, theme: Theme) -> Result<()> {
+    match command {
         Command::Checkout {
             pr,
             repo,
@@ -50,6 +50,15 @@ pub fn run(cli: &Cli, theme: Theme) -> Result<()> {
         }
         other => run_agent_command(other, theme),
     }
+}
+
+/// Runs the subcommand parsed into `cli`, or fails when no subcommand is present.
+pub fn run(cli: &Cli, theme: Theme) -> Result<()> {
+    let command = cli
+        .command
+        .as_ref()
+        .context("no subcommand specified; run `jpr-review --help` for usage")?;
+    run_command(command, theme)
 }
 
 fn run_agent_command(command: &Command, theme: Theme) -> Result<()> {
