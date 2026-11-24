@@ -50,6 +50,22 @@ local function push_session(session_mod, session)
     end)
 end
 
+local function refresh_worktree_session(session_mod, session, renames, on_done)
+    local params = (type(renames) == "table" and #renames > 0) and { renames = renames } or vim.empty_dict()
+    session_mod.request(session, "refreshWorktree", params, function(view)
+        if type(view) == "table" then
+            session_mod.show(session, view)
+        end
+        if type(on_done) == "function" then
+            on_done(view)
+        end
+    end, function(request_error)
+        if type(on_done) == "function" then
+            on_done(nil, request_error)
+        end
+    end)
+end
+
 local function redraw_all_session_views(session_mod, mode)
     for _, session in pairs(session_mod.by_tab) do
         if session.client and not session.is_read_only then
@@ -136,6 +152,12 @@ function M.attach(session_mod, forget)
     --- refreshes the session view.
     function session_mod.push(session)
         return push_session(session_mod, session)
+    end
+
+    --- Sends `refreshWorktree` to the engine with optional `renames` pairs,
+    --- redraws the panel, diffs, and stream, and invokes `on_done(view, err)`.
+    function session_mod.refresh_worktree(session, renames, on_done)
+        return refresh_worktree_session(session_mod, session, renames, on_done)
     end
 
     --- `:Jpr sync`: syncs the current tab's session now.

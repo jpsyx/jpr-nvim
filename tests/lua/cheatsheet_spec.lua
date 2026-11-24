@@ -72,8 +72,14 @@ end
 
 local EXPECTED_DEFAULT_ITEMS = {
     "PR Sidebar Panel",
+    "j / k",
+    "h / <Left>",
+    "l / <Right>",
     "<CR> / o",
+    "Rename or move file / directory",
+    "Create file or directory",
     "Toggle file viewed",
+    "Show keyboard shortcuts",
     "Diff & Stream Views",
     "gc",
     "gC",
