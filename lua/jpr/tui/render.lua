@@ -131,9 +131,8 @@ local function append_palette_command(layout, command, command_index, is_selecte
     layout.item_for_line[row_number] = command_index
     if is_selected then
         layout.cursor_line = row_number
-        append_highlight(layout.highlights, line_index, 0, #prefix, "JprTitle")
-    end
-    if command.requires_session and not has_session then
+        append_highlight(layout.highlights, line_index, 0, #prefix + #label, "JprTitle")
+    elseif command.requires_session and not has_session then
         append_highlight(layout.highlights, line_index, #prefix, #prefix + #label, "JprMuted")
     end
     local id_col_start = #prefix + #label + 2
@@ -217,7 +216,7 @@ local function append_step_option(layout, option, option_index, is_selected, max
     layout.item_for_line[row_number] = option_index
     if is_selected then
         layout.cursor_line = row_number
-        append_highlight(layout.highlights, line_index, 0, #prefix, "JprTitle")
+        append_highlight(layout.highlights, line_index, 0, #prefix + #label, "JprTitle")
     end
     if badge then
         local badge_col_start = #prefix + #label + 2

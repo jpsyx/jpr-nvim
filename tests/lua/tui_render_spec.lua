@@ -81,15 +81,15 @@ for help_row = 2, sync_row_index - 1 do
 end
 assert(palette_first.item_for_line[sync_row_index] == 2, "item_for_line maps command 2 primary line")
 
--- Verify highlights: "▸ " in JprTitle, [open]/[sync] and Sync with GitHub (no session) in JprMuted.
+-- Verify highlights: "▸ Open Pull Request" in JprTitle, [open]/[sync] and unselected Sync with GitHub (no session) in JprMuted.
 assert(
-    vim.deep_equal(collect_highlighted_texts(palette_first, "JprTitle"), { "▸ " }),
-    "pointer highlighted in JprTitle: " .. vim.inspect(collect_highlighted_texts(palette_first, "JprTitle"))
+    vim.deep_equal(collect_highlighted_texts(palette_first, "JprTitle"), { "▸ Open Pull Request" }),
+    "selected pointer and label highlighted in JprTitle: " .. vim.inspect(collect_highlighted_texts(palette_first, "JprTitle"))
 )
 local muted_first = collect_highlighted_texts(palette_first, "JprMuted")
 assert(vim.tbl_contains(muted_first, "[open]"), "[open] muted")
 assert(vim.tbl_contains(muted_first, "[sync]"), "[sync] muted")
-assert(vim.tbl_contains(muted_first, "Sync with GitHub"), "requires_session label dimmed when has_session == false")
+assert(vim.tbl_contains(muted_first, "Sync with GitHub"), "unselected requires_session label dimmed when has_session == false")
 assert(
     palette_first.lines[#palette_first.lines] == "[j/k] move  [Enter/l] select  [q/Esc] close",
     "palette footer rendered"
@@ -171,7 +171,7 @@ assert(
 local step_one_titles = collect_highlighted_texts(step_one, "JprTitle")
 assert(vim.tbl_contains(step_one_titles, "Step 1 of 2 · Pull Request Source"), "header title in JprTitle")
 assert(vim.tbl_contains(step_one_titles, "●"), "active dot in JprTitle")
-assert(vim.tbl_contains(step_one_titles, "▸ "), "option pointer in JprTitle")
+assert(vim.tbl_contains(step_one_titles, "▸ Pick from Open PRs"), "selected option pointer and label in JprTitle")
 local step_one_muted = collect_highlighted_texts(step_one, "JprMuted")
 assert(vim.tbl_contains(step_one_muted, "○"), "inactive dot in JprMuted")
 assert(vim.tbl_contains(step_one_muted, "[list]"), "option badge in JprMuted")
@@ -246,13 +246,36 @@ assert(
     "text footer single direct step without palette"
 )
 
--- 6. Edge cases: clamping, selected session-dimmed command, toggle step options, empty state, and option swap.
+-- 6. Edge cases: clamping, hovered requires_session command without session, toggle step options, empty state, and option swap.
 local clamped_high = render.create_palette_layout_from_commands(commands, 99, 80, { has_session = false })
 assert(clamped_high.cursor_line == 2, "out-of-range selected_index clamps to last command")
 assert(
-    vim.tbl_contains(collect_highlighted_texts(clamped_high, "JprMuted"), "Sync with GitHub"),
-    "selected requires_session command also dims label when has_session == false"
+    vim.tbl_contains(collect_highlighted_texts(clamped_high, "JprTitle"), "▸ Sync with GitHub"),
+    "hovered requires_session command highlights pointer and label in JprTitle even when has_session == false"
 )
+assert(
+    not vim.tbl_contains(collect_highlighted_texts(clamped_high, "JprMuted"), "Sync with GitHub"),
+    "hovered requires_session command must not mute its label when has_session == false"
+)
+
+local multi_session_commands = {
+    commands[1],
+    commands[2],
+    {
+        id = "submit",
+        label = "Submit Review",
+        help = "Publish pending draft comments to GitHub.",
+        requires_session = true,
+    },
+}
+local palette_hover_session = render.create_palette_layout_from_commands(multi_session_commands, 2, 80, { has_session = false })
+assert(
+    vim.tbl_contains(collect_highlighted_texts(palette_hover_session, "JprTitle"), "▸ Sync with GitHub"),
+    "hovered session command gets JprTitle"
+)
+local hover_session_muted = collect_highlighted_texts(palette_hover_session, "JprMuted")
+assert(not vim.tbl_contains(hover_session_muted, "Sync with GitHub"), "hovered session command is not muted")
+assert(vim.tbl_contains(hover_session_muted, "Submit Review"), "unselected session command remains muted")
 
 local step_one_option_two = render.create_step_layout_from_state(commands[1], active_steps, 1, {
     selected_option_index = 2,
@@ -262,6 +285,10 @@ local step_one_option_two = render.create_step_layout_from_state(commands[1], ac
 assert(step_one_option_two.lines[5] == "  Pick from Open PRs  [list]", "option 1 unselected")
 assert(step_one_option_two.lines[6] == "▸ Enter PR Number or URL  [manual]", "option 2 selected")
 assert(step_one_option_two.cursor_line == 6, "cursor_line moves to option 2")
+assert(
+    vim.tbl_contains(collect_highlighted_texts(step_one_option_two, "JprTitle"), "▸ Enter PR Number or URL"),
+    "option 2 pointer and label highlighted in JprTitle"
+)
 assert(step_one_option_two.lines[7]:sub(1, 4) == "    ", "option 2 help indented")
 assert(vim.fn.strdisplaywidth(step_one_option_two.lines[7]) <= 40, "option 2 help wraps within max_width")
 local option_two_joined = table.concat(step_one_option_two.lines, "\n")

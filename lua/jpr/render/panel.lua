@@ -135,6 +135,70 @@ local function add_file_line(content, file, name, indent)
         { line = line, col_start = stats_start + #plus + 1, col_end = stats_start + #stats, group = "JprRemoved" }
 end
 
+local DEFAULT_PROGRESS_BAR_WIDTH = 16
+local PROGRESS_FILLED_CELL = "█"
+local PROGRESS_UNFILLED_CELL = "░"
+
+--- Builds the reviewed-files visual progress bar text and byte-range metadata.
+--- @param viewed_count integer|nil
+--- @param total_count integer|nil
+--- @param bar_width integer|nil
+--- @return table { text: string, filled_bytes: integer, unfilled_bytes: integer, counter_start: integer, is_complete: boolean }
+function M.build_progress_bar_from_counts(viewed_count, total_count, bar_width)
+    local width = math.max(1, math.floor(tonumber(bar_width) or DEFAULT_PROGRESS_BAR_WIDTH))
+    local safe_total = math.max(0, math.floor(tonumber(total_count) or 0))
+    local clamped_viewed = math.max(0, math.min(math.floor(tonumber(viewed_count) or 0), safe_total))
+    local percent = safe_total > 0 and math.floor((clamped_viewed * 100) / safe_total + 0.5) or 0
+    local filled_cells = 0
+    if safe_total > 0 then
+        if clamped_viewed == safe_total then
+            filled_cells = width
+        elseif clamped_viewed > 0 then
+            filled_cells = math.max(0, math.min(width, math.floor((clamped_viewed * width) / safe_total + 0.5)))
+        end
+    end
+    local filled = PROGRESS_FILLED_CELL:rep(filled_cells)
+    local unfilled = PROGRESS_UNFILLED_CELL:rep(width - filled_cells)
+    local counter = ("%d/%d (%d%%)"):format(clamped_viewed, safe_total, percent)
+    local text = filled .. unfilled .. "  " .. counter
+    return {
+        text = text,
+        filled_bytes = #filled,
+        unfilled_bytes = #unfilled,
+        counter_start = #filled + #unfilled + 2,
+        is_complete = safe_total > 0 and clamped_viewed == safe_total,
+    }
+end
+
+local function add_progress_bar_line(content, view)
+    local files = view.files or {}
+    local progress = M.build_progress_bar_from_counts(view.viewedCount or 0, #files)
+    content.add_line(progress.text)
+    local line = #content.lines - 1
+    if progress.filled_bytes > 0 then
+        content.highlights[#content.highlights + 1] = {
+            line = line,
+            col_start = 0,
+            col_end = progress.filled_bytes,
+            group = "JprViewed",
+        }
+    end
+    if progress.unfilled_bytes > 0 then
+        content.highlights[#content.highlights + 1] = {
+            line = line,
+            col_start = progress.filled_bytes,
+            col_end = progress.filled_bytes + progress.unfilled_bytes,
+            group = "JprMuted",
+        }
+    end
+    content.highlights[#content.highlights + 1] = {
+        line = line,
+        col_start = progress.counter_start,
+        col_end = #progress.text,
+        group = progress.is_complete and "JprViewed" or "JprTitle",
+    }
+end
+
 --- The panel's contents for `view` at time `now` (Unix seconds): its lines,
 --- their highlights, and which file each line shows, for the panel window to
 --- draw and to open files from.
@@ -150,6 +214,7 @@ function M.build(view, now)
     end
     local pr = view.pr
     content.add_line(pr and ("#%d %s"):format(pr.number, M.one_line(pr.title)) or "Loading pull request…", "JprTitle")
+    add_progress_bar_line(content, view)
     content.add_line(M.build_counts_text(view), "JprMuted")
     content.add_line(M.sync_text(view.sync, now))
     content.add_line("")

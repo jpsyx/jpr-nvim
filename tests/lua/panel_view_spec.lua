@@ -51,13 +51,30 @@ for _, win in ipairs(vim.api.nvim_tabpage_list_wins(review.tab)) do
         vim.api.nvim_win_close(win, true)
     end
 end
-press("<CR>", 6)
+press("<CR>", 7)
 local file_win = vim.api.nvim_get_current_win()
 assert(file_win ~= panel_win, "the file opens beside the panel")
 assert(vim.fn.resolve(vim.api.nvim_buf_get_name(0)) == vim.fn.resolve(worktree .. "/README.md"), "<CR> opens README.md")
 for _, name in ipairs(PANEL_OPTIONS) do
     assert(vim.wo[file_win][name] == globals_before[name], ("the file has the panel's %s"):format(name))
 end
+
+-- `o` is mapped on the panel buffer and opens the file under the cursor just like <CR>.
+vim.api.nvim_set_current_win(panel_win)
+local o_keymap = vim.fn.maparg("o", "n", false, true)
+assert(
+    type(o_keymap) == "table" and type(o_keymap.callback) == "function",
+    "o keymap is registered on the panel buffer"
+)
+assert(
+    o_keymap.desc == "Open the conversation or file under the cursor",
+    "o keymap has expected desc: " .. tostring(o_keymap.desc)
+)
+vim.api.nvim_win_close(file_win, true)
+press("o", 7)
+file_win = vim.api.nvim_get_current_win()
+assert(file_win ~= panel_win, "o opens the file beside the panel")
+assert(vim.fn.resolve(vim.api.nvim_buf_get_name(0)) == vim.fn.resolve(worktree .. "/README.md"), "o opens README.md")
 
 -- A tree row whose path is a symlink out of the worktree, or climbs out of
 -- it with `..`, opens nothing and does not throw.
@@ -79,7 +96,7 @@ panel_view.render(review, {
     tree = { { depth = 0, name = "notes.md", file = 0 }, { depth = 0, name = "../x", file = 1 } },
 })
 local buf_before = vim.api.nvim_win_get_buf(file_win)
-for _, line in ipairs({ 6, 7 }) do
+for _, line in ipairs({ 7, 8 }) do
     errors = {}
     local pressed, press_err = pcall(press, "<CR>", line)
     assert(pressed, "line " .. line .. " threw: " .. tostring(press_err))
@@ -96,12 +113,12 @@ local function find_sent_requests(needle)
         return line:find('"method":"setViewed"', 1, true) ~= nil and line:find(needle, 1, true) ~= nil
     end, vim.fn.readfile(log))
 end
-press("v", 6)
+press("v", 7)
 assert(vim.wait(3000, function()
     return review.view.viewedCount == 1
 end), "the engine's viewedChanged reaches the view")
 assert(#find_sent_requests('"viewed":true') == 1 and #find_sent_requests('"path":"README.md"') == 1, vim.inspect(vim.fn.readfile(log)))
-press("v", 6)
+press("v", 7)
 assert(vim.wait(3000, function()
     return #find_sent_requests('"viewed":false') == 1
 end), "v on a viewed file unmarks it")
@@ -110,15 +127,27 @@ vim.wait(200)
 assert(#find_sent_requests("setViewed") == 2, "v on a line with no file sends nothing")
 
 -- <CR> on the Conversation row opens the PR conversation buffer in the main window instead of a file.
-press("<CR>", 5)
+press("<CR>", 6)
 local conversation_win = vim.api.nvim_get_current_win()
-assert(conversation_win ~= panel_win, "<CR> on line 5 focuses the main window beside the panel")
+assert(conversation_win ~= panel_win, "<CR> on line 6 focuses the main window beside the panel")
 local conversation_buf = vim.api.nvim_win_get_buf(conversation_win)
-assert(vim.api.nvim_buf_get_name(conversation_buf) == "jpr://conversation/7", "<CR> on line 5 opens jpr://conversation/7")
+assert(vim.api.nvim_buf_get_name(conversation_buf) == "jpr://conversation/7", "<CR> on line 6 opens jpr://conversation/7")
 assert(vim.wait(3000, function()
     local text = table.concat(vim.api.nvim_buf_get_lines(conversation_buf, 0, -1, false), "\n")
     return text:find("Overall looks clean!", 1, true) ~= nil
 end), "conversation buffer renders PR comments")
+require("jpr.views.conversation").close(review)
+
+-- `o` on the Conversation row also opens the PR conversation buffer identically to <CR>.
+press("o", 6)
+local conversation_win_from_o = vim.api.nvim_get_current_win()
+assert(conversation_win_from_o ~= panel_win, "o on line 6 focuses the main window beside the panel")
+local conversation_buf_from_o = vim.api.nvim_win_get_buf(conversation_win_from_o)
+assert(vim.api.nvim_buf_get_name(conversation_buf_from_o) == "jpr://conversation/7", "o on line 6 opens jpr://conversation/7")
+assert(vim.wait(3000, function()
+    local text = table.concat(vim.api.nvim_buf_get_lines(conversation_buf_from_o, 0, -1, false), "\n")
+    return text:find("Overall looks clean!", 1, true) ~= nil
+end), "o opens conversation buffer with PR comments")
 require("jpr.views.conversation").close(review)
 
 -- With the stream split, <CR> opens the file in the main window, not in the
@@ -133,7 +162,7 @@ end), "the stream is split")
 local left_win = review.stream.left_win
 local stream_win = vim.fn.win_findbuf(review.stream.buffers.main)[1]
 assert(#vim.api.nvim_tabpage_list_wins(review.tab) == 3, "the panel and the halves")
-press("<CR>", 6)
+press("<CR>", 7)
 assert(vim.api.nvim_get_current_win() == stream_win, "README.md opens in the main window")
 assert(vim.fn.resolve(vim.api.nvim_buf_get_name(0)) == vim.fn.resolve(worktree .. "/README.md"), "<CR> opens README.md")
 assert(not vim.api.nvim_win_is_valid(left_win) or vim.api.nvim_win_get_buf(left_win) ~= vim.api.nvim_get_current_buf(), "not in the left half")
