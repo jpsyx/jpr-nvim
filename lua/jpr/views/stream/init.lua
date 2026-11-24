@@ -166,12 +166,13 @@ function M.fill(buf, column)
     vim.bo[buf].modifiable = false
     vim.api.nvim_buf_clear_namespace(buf, namespace, 0, -1)
     for line, group in pairs(column.line_groups) do
-        vim.api.nvim_buf_set_extmark(buf, namespace, line - 1, 0, { line_hl_group = group })
+        vim.api.nvim_buf_set_extmark(buf, namespace, line - 1, 0, { line_hl_group = group, priority = 100 })
     end
     for _, highlight in ipairs(column.highlights) do
         vim.api.nvim_buf_set_extmark(buf, namespace, highlight.line, highlight.col_start, {
             end_col = highlight.col_end,
             hl_group = highlight.group,
+            priority = 110,
             strict = false,
         })
     end
@@ -182,6 +183,7 @@ function M.fill(buf, column)
             strict = false,
         })
     end
+    require("jpr.views.stream.syntax").apply(buf, column)
     for win, cursor in pairs(cursors) do
         pcall(vim.api.nvim_win_set_cursor, win, { math.max(1, math.min(cursor[1], #column.lines)), 0 })
     end

@@ -45,37 +45,11 @@ M.config = vim.deepcopy(M.defaults)
 --- The `:Jpr` subcommands, in the order completion offers them.
 M.subcommands = require("jpr.commands.schema").list_command_ids()
 
---- Links the panel's and thread UI's highlight groups to the colorscheme's,
---- without replacing any link the user set. Runs at `setup` and again when a
---- review starts, so the groups exist even without a `setup` call.
+--- Defines the plugin's highlight groups (semantic links and soft diff tints),
+--- without replacing user overrides. Runs at `setup` and again when a review
+--- starts, so the groups exist even without a `setup` call.
 function M.define_highlights()
-    local links = {
-        JprTitle = "Title",
-        JprMuted = "Comment",
-        JprViewed = "DiagnosticOk",
-        JprDismissed = "DiagnosticWarn",
-        JprModified = "Special",
-        JprAdded = "Added",
-        JprRemoved = "Removed",
-        JprError = "DiagnosticError",
-        JprDiffAdd = "DiffAdd",
-        JprDiffAddText = "DiffText",
-        JprDiffDelete = "DiffDelete",
-        JprDiffDeleteText = "DiffText",
-        JprDiffFiller = "NonText",
-        JprHunk = "Special",
-        JprFileHeader = "Title",
-        JprThreadPublished = "DiagnosticInfo",
-        JprThreadDraft = "DiagnosticWarn",
-        JprThreadLocal = "DiagnosticHint",
-        JprThreadFailed = "DiagnosticError",
-        JprThreadResolved = "Comment",
-        JprReactionActive = "DiagnosticOk",
-        JprAuthor = "Identifier",
-    }
-    for name, target in pairs(links) do
-        vim.api.nvim_set_hl(0, name, { link = target, default = true })
-    end
+    require("jpr.highlights").define_highlights()
 end
 
 --- Configures the plugin from a user's `opts` (see `defaults`), for example

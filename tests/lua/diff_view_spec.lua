@@ -208,6 +208,7 @@ assert(vim.wait(3000, function()
     return count_overlay_marks(buf) > 0
 end), "the overlay is back")
 vim.api.nvim_set_current_win(win)
+vim.api.nvim_set_option_value("winhighlight", "Normal:NormalFloat", { win = win, scope = "local" })
 session.toggle_view()
 assert(view_mode.get() == "split", "the view is split now")
 local function find_base_window(tab)
@@ -223,6 +224,19 @@ end), "a base window opens")
 local base = find_base_window(review.tab)
 assert(vim.deep_equal(vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(base), 0, -1, false), { "hello", "old" }), "it shows the base")
 assert(vim.wo[base].diff and vim.wo[win].diff, "both windows are in diff mode")
+local expected_diff_winhighlight = "DiffAdd:JprDiffAdd,DiffChange:JprDiffAdd,DiffDelete:JprDiffDelete,DiffText:JprDiffAddText"
+assert(
+    vim.wo[base].winhighlight:find(expected_diff_winhighlight, 1, true) ~= nil,
+    "base window maps split diff highlights: " .. vim.wo[base].winhighlight
+)
+assert(
+    vim.wo[win].winhighlight:find("Normal:NormalFloat", 1, true) ~= nil,
+    "existing winhighlight is preserved: " .. vim.wo[win].winhighlight
+)
+assert(
+    vim.wo[win].winhighlight:find(expected_diff_winhighlight, 1, true) ~= nil,
+    "file window maps split diff highlights: " .. vim.wo[win].winhighlight
+)
 assert(count_overlay_marks(buf) == 0, "the unified overlay is gone")
 assert(main_window.find(review) == win, "the base window is a side window")
 
@@ -232,6 +246,8 @@ assert(vim.wait(3000, function()
     return not vim.api.nvim_win_is_valid(base)
 end), "the base window closes")
 assert(not vim.wo[win].diff, "diff mode is off")
+assert(vim.wo[win].winhighlight == "Normal:NormalFloat", "original winhighlight is restored: " .. vim.wo[win].winhighlight)
+vim.api.nvim_set_option_value("winhighlight", "", { win = win, scope = "local" })
 
 -- An engine that stops mid-review restarts once and falls back to read-only on
 -- a second crash while keeping the base window open; closing the tab cleans up.

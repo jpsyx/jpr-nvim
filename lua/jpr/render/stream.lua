@@ -24,7 +24,7 @@ function M.build_file_header(row)
 end
 
 local function create_column()
-    return { lines = {}, line_groups = {}, highlights = {}, eol_marks = {} }
+    return { lines = {}, line_groups = {}, highlights = {}, eol_marks = {}, code_rows = {} }
 end
 
 --- Appends `text` to `column`, colored whole by `group` when given.
@@ -48,22 +48,33 @@ local function add_words(column, cell, gutter)
     end
 end
 
+local function record_code_row(column, path, gutter_len, text)
+    column.code_rows[#column.code_rows + 1] = {
+        line = #column.lines - 1,
+        path = path,
+        gutter_len = gutter_len,
+        text = text,
+    }
+end
+
 --- A unified row: both line numbers, the sign, and the text.
 local function add_unified_row(column, row)
     local cell = row.right or row.left
     local gutter = ("%5s %5s %s "):format(row.left and row.left.line or "", row.right and row.right.line or "", SIGN[cell.change])
     add_line(column, gutter .. cell.text, LINE_GROUP[cell.change])
     add_words(column, cell, #gutter)
+    record_code_row(column, row.path, #gutter, cell.text)
 end
 
 --- One side of a split row, or a filler line when that side has none.
-local function add_split_cell(column, cell)
+local function add_split_cell(column, cell, path)
     if not cell then
         return add_line(column, "", "JprDiffFiller")
     end
     local gutter = ("%5d %s "):format(cell.line, SIGN[cell.change])
     add_line(column, gutter .. cell.text, LINE_GROUP[cell.change])
     add_words(column, cell, #gutter)
+    record_code_row(column, path, #gutter, cell.text)
 end
 
 local function add_line_to_all_columns(columns, text, group)
@@ -164,8 +175,8 @@ local function add_body_row(layout, row, line, is_expanded)
         add_thread_row(layout, row, line, is_expanded)
     else
         if #layout.columns == 2 then
-            add_split_cell(layout.columns[1], row.left)
-            add_split_cell(layout.columns[2], row.right)
+            add_split_cell(layout.columns[1], row.left, row.path)
+            add_split_cell(layout.columns[2], row.right, row.path)
         else
             add_unified_row(layout.columns[1], row)
         end
@@ -179,8 +190,8 @@ end
 --- The lines of `stream` and where each leads:
 --- { mode, columns, targets, files, hunks, folds, threads_by_line, thread_lines, anchors }.
 --- `columns` holds one column when unified and two (left, right) when split;
---- a column is { lines, line_groups, highlights, eol_marks } with `line_groups`
---- keyed by 1-based line and `highlights[].line` / `eol_marks[].line` 0-based.
+--- a column is { lines, line_groups, highlights, eol_marks, code_rows } with `line_groups`
+--- keyed by 1-based line and `highlights[].line` / `eol_marks[].line` / `code_rows[].line` 0-based.
 --- `opts.expanded` renders full indented thread messages across columns.
 function M.create_layout_from_stream(stream, opts)
     local is_split = stream.mode == "split"

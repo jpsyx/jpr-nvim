@@ -109,6 +109,24 @@ function M.draw_overlay(buf, diff, win)
     reveal_lines_above_first(buf, count_lines_above_first(marks))
 end
 
+local SPLIT_DIFF_WINHIGHLIGHT = "DiffAdd:JprDiffAdd,DiffChange:JprDiffAdd,DiffDelete:JprDiffDelete,DiffText:JprDiffAddText"
+local SPLIT_DIFF_GROUPS = { DiffAdd = true, DiffChange = true, DiffDelete = true, DiffText = true }
+
+local function build_split_winhighlight(existing)
+    if type(existing) ~= "string" or existing == "" then
+        return SPLIT_DIFF_WINHIGHLIGHT
+    end
+    local preserved = {}
+    for _, entry in ipairs(vim.split(existing, ",", { plain = true, trimempty = true })) do
+        local source_group = entry:match("^([^:]+):")
+        if not SPLIT_DIFF_GROUPS[source_group] then
+            preserved[#preserved + 1] = entry
+        end
+    end
+    preserved[#preserved + 1] = SPLIT_DIFF_WINHIGHLIGHT
+    return table.concat(preserved, ",")
+end
+
 --- Opens `diff`'s base in a read-only window left of `win`, and turns on
 --- diff mode in both.
 function M.open_base(session, win, buf, diff)
@@ -124,8 +142,18 @@ function M.open_base(session, win, buf, diff)
     require("jpr").bind_buffer_keys(base_buf)
     local base_win = vim.api.nvim_open_win(base_buf, false, { split = "left", win = win })
     vim.w[base_win].jpr_side = true
-    session.diff.splits[win] = { base_win = base_win, base_buf = base_buf }
+    local saved_winhighlight = vim.api.nvim_get_option_value("winhighlight", { win = win, scope = "local" })
+    session.diff.splits[win] = {
+        base_win = base_win,
+        base_buf = base_buf,
+        saved_winhighlight = saved_winhighlight,
+    }
     for _, diff_win in ipairs({ base_win, win }) do
+        local current_winhighlight = vim.api.nvim_get_option_value("winhighlight", { win = diff_win, scope = "local" })
+        vim.api.nvim_set_option_value("winhighlight", build_split_winhighlight(current_winhighlight), {
+            win = diff_win,
+            scope = "local",
+        })
         vim.api.nvim_win_call(diff_win, function()
             vim.cmd("diffthis")
         end)
@@ -178,6 +206,10 @@ function M.clear(session, win)
         vim.api.nvim_win_call(win, function()
             vim.cmd("diffoff")
         end)
+        vim.api.nvim_set_option_value("winhighlight", base_split.saved_winhighlight or "", {
+            win = win,
+            scope = "local",
+        })
     end
 end
 

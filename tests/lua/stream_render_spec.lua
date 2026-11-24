@@ -65,6 +65,21 @@ assert(vim.deep_equal(split.columns[1].lines, { "▾   a.rs  +1 -1", "@@ -1,2 +1
 assert(vim.deep_equal(split.columns[2].lines, { "▾   a.rs  +1 -1", "@@ -1,2 +1,2 @@", "    1   keep", "    2 + x = 2", "    3 + y" }), vim.inspect(split.columns[2].lines))
 assert(split.columns[1].line_groups[5] == "JprDiffFiller", "filler keeps the columns aligned")
 assert(split.columns[2].highlights[1].col_start == 12, "the split gutter is 8 bytes")
+assert(vim.deep_equal(column.code_rows, {
+    { line = 2, path = "a.rs", gutter_len = 14, text = "keep" },
+    { line = 3, path = "a.rs", gutter_len = 14, text = "x = 1" },
+    { line = 4, path = "a.rs", gutter_len = 14, text = "x = 2" },
+    { line = 7, path = "b.rs", gutter_len = 14, text = "new" },
+}), "unified code_rows excludes headers, hunks, and notes: " .. vim.inspect(column.code_rows))
+assert(vim.deep_equal(split.columns[1].code_rows, {
+    { line = 2, path = "a.rs", gutter_len = 8, text = "keep" },
+    { line = 3, path = "a.rs", gutter_len = 8, text = "x = 1" },
+}), "split left code_rows excludes filler: " .. vim.inspect(split.columns[1].code_rows))
+assert(vim.deep_equal(split.columns[2].code_rows, {
+    { line = 2, path = "a.rs", gutter_len = 8, text = "keep" },
+    { line = 3, path = "a.rs", gutter_len = 8, text = "x = 2" },
+    { line = 4, path = "a.rs", gutter_len = 8, text = "y" },
+}), "split right code_rows includes all right-side code lines: " .. vim.inspect(split.columns[2].code_rows))
 
 assert(stream.find_file_at_line(unified, 5).path == "a.rs" and stream.find_file_at_line(unified, 6).path == "b.rs", "find_file_at_line")
 assert(stream.find_next_unviewed_file(unified, 1).path == "c.png", "a viewed file is skipped and a dismissed one is not")
