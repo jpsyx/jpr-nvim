@@ -13,12 +13,47 @@
 - The binary crate `crates/jpr-review` is the composition root: clap (derive)
   for the command-line surface, anyhow errors with context, and a thin
   `src/main.rs`.
-- Every command is reachable with flags alone. A value left out on a terminal
-  is asked for through `crates/jpr-review/src/prompt.rs`; `serve` takes only
-  flags because its stdin is the protocol.
+- Every command is reachable with flags alone. On an interactive TTY, bare
+  `jpr-review` opens the declarative Command Palette (`crates/cli-tui` +
+  `crates/jpr-review/src/tui_schema/`), and subcommands missing required inputs
+  run their interactive stepper (with `crates/jpr-review/src/prompt.rs` for
+  line-prompt fallback and non-TTY flag errors); `serve` takes only flags when
+  driven non-interactively because its stdin is the protocol.
 - Tasks live in the `justfile` (`just --list`). Every recipe is a single
   command you could type by hand. `just check` runs formatting, clippy, the
   Rust tests and the Lua specs.
+
+## Interactive Command Palette & Schema-to-TUI Invariant
+
+**This invariant is binding for every command and option change.**
+
+- Every command and option in **both** `:Jpr` (`lua/jpr/commands/schema.lua`)
+  and `jpr-review` (`crates/jpr-review/src/tui_schema/`) MUST be registered in
+  its declarative command schema so it is interactively launchable from the
+  Command Palette (bare `:Jpr` in Neovim, bare `jpr-review` on a TTY).
+- Every schema entry MUST define:
+  1. A human-readable display label (never just the raw command literal) paired
+     with `[<id>]`.
+  2. Concise helper text (at most 1 sentence unless the option is genuinely
+     confusing), shown on hover in menus (indented dim second line underneath
+     only the hovered item) and on every stepper screen.
+  3. Smart prefilled or preselected defaults wherever inferable from context.
+  4. Discriminant-first step ordering with `when` predicates whenever a boolean
+     or enum controls downstream options, so irrelevant steps are skipped and
+     abandoned branch answers are pruned on completion.
+  5. Neovim-conventional keyboard controls:
+     - Normal-mode menus and toggles: `j`/`k`/`<Down>`/`<Up>` move,
+       `h`/`<Left>`/`<S-Tab>` Back, `l`/`<Right>`/`<Tab>`/`<CR>` Confirm or
+       Forward, `gg`/`<Home>` first item, `G`/`<End>` last item, `q`/`<Esc>`
+       Cancel.
+     - Insert-mode text inputs: prefilled smart default, `<Left>`/`<Right>`
+       cursor movement, `<S-Tab>` Back, `<Tab>`/`<CR>` Validate & Forward,
+       `<Esc>` to Normal mode then `q`/`<Esc>` Cancel.
+  6. Full non-interactive flag and argument parity so scripts, pipes, CI, and
+     coding agents never hit interactive prompts.
+- Schema completeness is enforced by automated unit tests in both Rust
+  (`crates/jpr-review/src/tui_schema/tests.rs`) and Lua
+  (`tests/lua/palette_and_open_picker_spec.lua`).
 
 ## Documentation
 
@@ -161,7 +196,7 @@ the Lua specs also need Neovim on `PATH`.
 also type by hand.
 
 ```sh
-# run the engine (with no subcommand it prints its help)
+# run the engine (bare on a TTY opens the Command Palette; non-TTY prints help)
 cargo run -p jpr-review -- --help                    # just run --help
 cargo run -p jpr-review -- state-path --pr 7 --repo octo/widgets
 
@@ -228,7 +263,9 @@ The rules for this project's language and frameworks live in `docs/rules/`:
   is scriptable, every value a person omits is asked for, every color is
   semantic.
 - [`docs/rules/cli-rust.md`](docs/rules/cli-rust.md): where those rules live in
-  this Rust code: `crates/jpr-review/src/prompt.rs` for questions,
+  this Rust code: `crates/cli-tui` and `crates/jpr-review/src/tui_schema/` for
+  the interactive Command Palette and steppers, `crates/jpr-review/src/prompt.rs`
+  for line-prompt fallback and non-TTY flag errors, and
   `crates/jpr-review/src/theme.rs` for color.
 
 ## PR smoke tests

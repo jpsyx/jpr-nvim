@@ -1,9 +1,11 @@
 # jpr-nvim
 
-Review GitHub pull requests in Neovim. `:Jpr open <number>` checks the pull
-request out into its own worktree and opens a tab with a file tree of its
-changes and a stream of every diff, kept in sync with GitHub. Every changed
-file opens as a diff, unified or split.
+Review GitHub pull requests in Neovim. Run `:Jpr` to open the interactive
+Command Palette or `:Jpr open` to pick an open pull request (or pass a PR
+number or URL directly): `jpr-review` checks the pull request out into its own
+worktree and opens a tab with a file tree of its changes and a stream of every
+diff, kept in sync with GitHub. Every changed file opens as a diff, unified or
+split.
 
 The review engine (`jpr-review`) is a Rust workspace of frontend-neutral crates;
 the Neovim plugin is a thin Lua frontend over its JSON-RPC protocol. See
@@ -65,17 +67,18 @@ binary manually.
 
 | Command | What it does |
 | --- | --- |
-| `:Jpr open <n \| #n \| URL>` | Check the pull request out and open its review tab. A URL must be for the repository Neovim's directory is a checkout of |
+| `:Jpr` | Open the interactive Command Palette with human-readable labels, hover helper text, and multi-step steppers for every command (`j`/`k` move, `l`/`<CR>` forward, `h`/`<S-Tab>` back, `q`/`<Esc>` cancel) |
+| `:Jpr open [n \| #n \| URL]` | Omit the argument to open the interactive open-PR picker (backed by `jpr-review prs`; press `h` to step back and enter a PR number or URL manually), or pass a number, `#number`, or repository PR URL directly |
 | `:Jpr sync` | Sync with GitHub now (it also syncs every minute) |
 | `:Jpr push` | Push committed `HEAD` to the pull request's remote branch and resync (never auto-commits dirty files) |
-| `:Jpr toggle` | Flip every diff between unified and split; the choice is remembered |
+| `:Jpr toggle [unified \| split]` | Flip every diff between unified and split, or jump directly to `unified` or `split`; the choice is remembered |
 | `:Jpr stream` | Show the stream of every change beside the panel |
-| `:[range]Jpr comment` | Open the compose float for a draft or local comment on the cursor line or visual range |
+| `:[range]Jpr comment [line \| file \| suggest]` | Open the compose float for a draft or local comment on the cursor line or visual range, or pass `line`, `file`, or `suggest` directly |
 | `:Jpr suggest` | Turn an uncommitted edit around the cursor into a GitHub draft suggestion and revert just that hunk |
 | `:Jpr expand` | Toggle inline expansion of review thread messages across diff and stream buffers |
 | `:Jpr conversation` | Open the top-level PR conversation view beside the panel |
 | `:Jpr submit` | Open the review submission modal (`COMMENT`, `APPROVE`, or `REQUEST_CHANGES`) |
-| `:Jpr agent` | Toggle the coding-agent terminal split on the right (keeps the session running when hidden) |
+| `:Jpr agent [claude \| codex]` | Toggle the coding-agent terminal split on the right (keeps the session running when hidden), optionally selecting `claude` or `codex` directly |
 | `:Jpr send` | Dispatch all unsent local threads to the coding agent in a numbered round |
 | `:Jpr prepass` | Dispatch a pre-pass review prompt asking the agent to write local findings via `jpr-review prepass-write` |
 | `:Jpr close` | Stop the engine and close the tab |
@@ -184,6 +187,21 @@ require("lualine").setup({
   `stdpath("state")/jpr/engine-pr-<n>.log` (`0600`) and restarts the engine once
   automatically. A second crash switches the tab into `[read-only]` mode while
   preserving open buffers and unsaved compose drafts.
+
+## CLI
+
+Running `jpr-review` with no subcommand on an interactive terminal opens the
+CLI Command Palette on stderr with human-readable labels, hover helper text,
+and discriminant-first steppers for every subcommand (without a TTY, bare
+`jpr-review` prints help to stderr and exits non-zero without blocking). Every
+subcommand and option also has full flag parity for scripts, CI, and agents:
+
+```sh
+jpr-review                                         # interactive Command Palette (TTY)
+jpr-review prs [--repo owner/name] [--limit 50]    # list open pull requests as JSON
+jpr-review checkout --pr 42                        # check out PR #42 into a worktree
+jpr-review state-path --pr 42 --repo owner/name    # print PR state directory
+```
 
 ## Agent CLI
 

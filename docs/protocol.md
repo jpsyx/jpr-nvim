@@ -45,7 +45,7 @@ with `:Lazy build jpr-nvim`.
 
 | Method | Params | Result |
 | --- | --- | --- |
-| `initialize` | `{ "protocolVersion": 5, "client": "..." }` (the server reads neither) | `{ "protocolVersion": 5, "version": "0.5.0" }` |
+| `initialize` | `{ "protocolVersion": 5, "client": "..." }` (the server reads neither) | `{ "protocolVersion": 5, "version": "0.5.1" }` |
 | `snapshot` | none | `SessionView` |
 | `sync` | none | `SessionView`; error `-32000` when GitHub fails, after a `syncFailed` event (announces `headMoved` before `synced` when `pr.headSha` changes) |
 | `push` | none | `PushResult`; pushes `HEAD` to `refs/heads/<headRef>` (stdio-only; refused over `JPR_SOCKET` with `-32600`); error `-32000` before the first sync, when local `HEAD` is behind or already at the remote head, when a cross-repository (`pr.isCrossRepository`) pull request lacks explicit fork tracking or targets the base repository, or when `git push` fails |

@@ -717,3 +717,43 @@ and custom engine builds.
 worth downloading in `build.lua` as a fast path for users without a local Rust
 toolchain, falling back to `cargo build --release -p jpr-review` when no
 matching artifact exists.
+
+## Declarative command schemas drive interactive TUI palettes and steppers
+
+**Decision.** Both frontends describe their full command surface in declarative
+schemas that render an interactive Command Palette and discriminant-first
+steppers: in Neovim (`lua/jpr/tui/schema.lua`, `lua/jpr/tui/render.lua`,
+`lua/jpr/tui/wizard.lua`, `lua/jpr/tui/wizard_window.lua`, and
+`lua/jpr/commands/schema.lua`) for bare `:Jpr` and `:Jpr open`, and in Rust
+(`crates/cli-tui` and `crates/jpr-review/src/tui_schema/`) for bare
+`jpr-review` and missing-input subcommands on an interactive TTY.
+`crates/cli-tui` lives outside `crates/review-*` so generic engine crates stay
+UI-free and `crossterm` never enters `review-*`. Every command and option shows
+a human-readable display label paired with `[<id>]`, reveals concise helper
+text only underneath the currently hovered row in menus (and on every stepper
+screen), orders discriminant booleans and enums before dependent steps via
+`when` predicates, prunes abandoned branch answers on completion, and uses
+Neovim-conventional Normal-vs-Insert keyboard controls (`j`/`k`/`h`/`l`/`gg`/`G`/`<Tab>`/`<S-Tab>`/`<CR>`/`q`/`<Esc>`
+in menus and toggles; prefilled text input with `<S-Tab>` back, `<Tab>`/`<CR>`
+validate & forward, and `<Esc>` to Normal mode).
+
+**Why.** Remembering every subcommand name and flag slows down human reviewers,
+while ad-hoc interactive prompts drift from the actual command surface and risk
+hanging scripts or coding agents. Generating the palette, steppers, and
+argument completions from one declarative schema per frontend keeps interactive
+and non-interactive surfaces in lockstep. Hover-only helper text keeps menus
+compact while still explaining every choice, discriminant-first branching skips
+irrelevant follow-up steps, and Neovim modal keybindings feel native in both
+the editor and the terminal.
+
+**Consequences.** Every new or modified `:Jpr` subcommand or `jpr-review` CLI
+option must update its declarative schema in the same change, enforced by
+`crates/jpr-review/src/tui_schema/tests.rs` and
+`tests/lua/palette_and_open_picker_spec.lua`. `crates/cli-tui` adds `crossterm`
+to the workspace strictly at the frontend layer, rendering to stderr inside an
+RAII raw-mode guard and gating on `cli_tui::is_interactive_terminal()` so
+pipes, CI jobs, and coding agents never hit interactive prompts.
+
+**Revisit when.** A standalone terminal review UI needs richer shared TUI
+widgets beyond palettes and linear discriminant-first steppers, or when
+multiple Rust binaries reuse `crates/cli-tui` as a published crate.

@@ -21,15 +21,19 @@ Neovim (lua/jpr)  --JSON-RPC over stdio-->  jpr-review serve (one per PR)
 | Kind | Crates and paths | May depend on |
 | --- | --- | --- |
 | Generic engine | `crates/review-*` | std, small general-purpose crates, other `review-*` crates |
-| Composition root | `crates/jpr-review` | everything above |
+| Frontend TUI library | `crates/cli-tui` | std, `anyhow`, `crossterm` (never depended on by `crates/review-*`) |
+| Composition root | `crates/jpr-review` | `crates/review-*`, `crates/cli-tui` |
 | Neovim adapter | `build.lua`, `lua/jpr`, `plugin/jpr.lua` | the protocol in `docs/protocol.md` |
 
 **The dependency rule.** A generic crate never depends on Neovim, Lua, a
 terminal UI library, or a frontend crate, directly or transitively.
-`crates/jpr-review/tests/dependency_rule.rs` enforces it against
-`cargo metadata`: a `review-*` crate may not reach a known UI or editor crate,
-or a workspace crate outside `review-*`, through its runtime dependencies.
-Dev-dependencies are exempt. Generic crate names never contain `nvim` or `jpr`.
+`crates/cli-tui` is a reusable frontend-layer TUI crate that lives outside
+`crates/review-*` specifically so `crossterm` and terminal rendering never leak
+into the generic engine. `crates/jpr-review/tests/dependency_rule.rs` enforces
+this against `cargo metadata`: a `review-*` crate may not reach a known UI or
+editor crate, or a workspace crate outside `review-*`, through its runtime
+dependencies. Dev-dependencies are exempt. Generic crate names never contain
+`nvim` or `jpr`.
 
 **Where logic goes.** If a decision would be the same in a terminal UI, it is
 Rust in a generic crate. Lua manages windows, buffers and keys, and draws the
@@ -256,17 +260,42 @@ rejected.
   session applies the queue to the saved files, which a crash can leave
   behind it.
 
+## Frontend TUI crate (`crates/cli-tui`)
+
+`crates/cli-tui` is a reusable frontend-layer schema-to-TUI crate kept outside
+`crates/review-*` so generic engine crates stay UI-free.
+
+| Module | Responsibility |
+| --- | --- |
+| `cli-tui` `schema.rs` | Pure declarative schema types (`CommandSpec`, `StepSpec`, `StepKind`, `SelectOption`, `WhenPredicate`), schema validation (`validate_command_specs`), active-step resolution (`resolve_active_steps`), and abandoned-branch pruning (`prune_inactive_answers`) |
+| `cli-tui` `state/mod.rs`, `state/palette.rs`, `state/wizard.rs` | Pure Neovim-conventional Normal-vs-Insert state machines for the top-level Command Palette and discriminant-first steppers (zero terminal I/O) |
+| `cli-tui` `render.rs` | Pure ANSI frame builders (`render_palette`, `render_wizard`) with human-readable labels paired with `[<id>]`, hover-only dim helper text, step headers, and footer hints |
+| `cli-tui` `runner.rs` | Thin `crossterm` terminal shell: strict `is_interactive_terminal()` TTY gating (stdin + stderr), RAII `RawModeGuard` cleanup on exit/cancel/error, and stderr rendering so stdout stays pure data |
+
 ## The binary
 
 `crates/jpr-review` keeps the scaffold's library-plus-thin-binary shape:
-`src/main.rs` parses, calls `commands::run`, and turns an error into a stderr
-line and exit code 1. Its commands are `checkout`, `serve`, `state-path`,
-`guide`, `threads`, `reply`, and `prepass-write`. `prompt.rs` asks for a value
-left out on a terminal, and `theme.rs` holds the semantic colors. `serve` takes
-only flags, because its stdin is the protocol. `threads`, `reply`, and
-`prepass-write` connect to the running daemon over its Unix domain socket
-(`--socket`, `$JPR_SOCKET`, or `session.json`) and fall back to reading or
-locking (`local.lock`) the store on disk when no daemon is running.
+`src/main.rs` parses, opens the interactive Command Palette (`cli-tui`) when
+invoked bare on a TTY (or prints help to stderr with exit code `2` without a
+TTY), launches a command's stepper when invoked on a TTY with missing required
+inputs, calls `commands::run_command`, and turns any error into a stderr line
+and exit code `1`. Its subcommands are `checkout`, `prs`, `serve`,
+`state-path`, `guide`, `threads`, `reply`, and `prepass-write`:
+
+- `prs` (`crates/jpr-review/src/commands/prs.rs`) lists open pull requests in a
+  repository as a JSON array (`--repo`, `--limit`), backing both scripting and
+  interactive open-PR pickers.
+- `crates/jpr-review/src/tui_schema/` (`mod.rs`, `specs.rs`, `steps.rs`,
+  `prefill.rs`, `convert.rs`, `tests.rs`, `tests_edge_cases.rs`) declares a
+  `CommandSpec` for every `Command` variant in `cli.rs` with discriminant-first
+  steps, smart defaults, and typed answer-to-`Command` conversions.
+- `prompt.rs` handles line-prompt fallback and non-TTY flag errors, and
+  `theme.rs` holds the semantic colors.
+- `serve` takes only flags when driven non-interactively because its stdin is
+  the protocol. `threads`, `reply`, and `prepass-write` connect to the running
+  daemon over its Unix domain socket (`--socket`, `$JPR_SOCKET`, or
+  `session.json`) and fall back to reading or locking (`local.lock`) the store
+  on disk when no daemon is running.
 
 ## The Neovim plugin
 
@@ -274,12 +303,17 @@ locking (`local.lock`) the store on disk when no daemon is running.
 | --- | --- |
 | `build.lua` | Root `lazy.nvim` build hook: prepends the checkout's `lua/` search path, clears cached `jpr.build` and `jpr.binary` entries in `package.loaded` on `:Lazy update`, and delegates to `jpr.build` without changing Neovim's global working directory |
 | `plugin/jpr.lua` | Defines `:Jpr` (with range support) and the `<Plug>(jpr-*)` mappings |
-| `jpr` | Release `VERSION`, config (including optional `binary` override, `agent`, `claude_cmd`, `codex_cmd`, `agent_width`, and `keys`), `binary_path()`, highlight groups (`JprModified` -> `Special`, `JprThreadLocal` -> `DiagnosticHint`), lazy `require("jpr").statusline()` (`""` without loading `jpr.session` until a review opens), argument parsing, subcommand dispatch (`:Jpr push`), buffer keybinding (`bind_buffer_keys`), and `<Plug>(jpr-*)` action dispatch |
+| `jpr` | Release `VERSION`, config (including optional `binary` override, `agent`, `claude_cmd`, `codex_cmd`, `agent_width`, and `keys`), `binary_path()`, highlight groups (`JprModified` -> `Special`, `JprThreadLocal` -> `DiagnosticHint`), lazy `require("jpr").statusline()` (`""` without loading `jpr.session` until a review opens), argument parsing, schema-derived subcommand and direct-argument completion (`toggle`, `comment`, `agent`), bare `:Jpr` Command Palette and `:Jpr open` PR picker dispatch, buffer keybinding (`bind_buffer_keys`), and `<Plug>(jpr-*)` action dispatch |
+| `jpr.commands.schema` (`lua/jpr/commands/schema.lua`) | Declarative schema for all 14 `:Jpr` subcommands (human-readable labels paired with `[<id>]`, concise helper text, smart defaults, discriminant-first steps including the async open-PR picker backed by `jpr-review prs`, and single-step argument completion) |
+| `jpr.tui.schema` (`lua/jpr/tui/schema.lua`) | Pure declarative command/step schema validation (`select`, `async_select`, `toggle`, `text`), `when` predicate resolution, default resolution, and abandoned-branch pruning |
+| `jpr.tui.render` (`lua/jpr/tui/render.lua`) | Pure layout builder for the floating Command Palette and steppers: draws human-readable labels, `[<id>]` badges, indented dim hover-only helper text underneath the selected row, step progress headers, and footer key hints |
+| `jpr.tui.wizard` (`lua/jpr/tui/wizard.lua`) | Floating Command Palette and multi-step wizard modal controller implementing Neovim-conventional Normal-mode (`j`/`k`/`h`/`l`/`gg`/`G`/`<Tab>`/`<S-Tab>`/`<CR>`/`q`/`<Esc>`) and Insert-mode text-step controls, async option loading, and step-back/return-to-palette navigation |
+| `jpr.tui.wizard_window` (`lua/jpr/tui/wizard_window.lua`) | Centered rounded floating window creation, viewport geometry clamping, extmark painting, and safe window/buffer teardown shared by `jpr.tui.wizard` |
 | `jpr.binary` (`lua/jpr/binary.lua`) | Resolves the plugin checkout root, the bundled `target/release/jpr-review` binary path (`.exe` on Windows), `config.binary` overrides, and `:Jpr agent` terminal `PATH` prepending (`create_agent_env_from_session`) |
 | `jpr.build` (`lua/jpr/build.lua`) | Finds `cargo` across `PATH`, `$CARGO_HOME/bin`, and `~/.cargo/bin`, yields build progress only inside `lazy.nvim`'s `lazy.async` coroutine, compiles `target/release/jpr-review` in the plugin root via `vim.system`, and verifies the resulting executable |
 | `jpr.health` (`lua/jpr/health.lua`) | `:checkhealth jpr` diagnostics checking Neovim `>= 0.11`, the bundled or configured `jpr-review` binary and version lockstep against `jpr.VERSION`, `git`, `gh` (including `gh auth status`), and `cargo` |
 | `jpr.rpc` | JSON-RPC client over `jobstart` (`M.PROTOCOL_VERSION = 5`) |
-| `jpr.session` (`lua/jpr/session/init.lua`, `commands.lua`, `comments.lua`, `events.lua`, `crash.lua`) | One review per tab: checkout, engine process, protocol + release version handshake check, requests, redraws of the panel, the stream, the diffs, and the PR conversation view, `:Jpr toggle`, `:Jpr stream`, `:Jpr comment`, `:Jpr suggest`, `:Jpr expand`, `:Jpr conversation`, `:Jpr submit`, `:Jpr push`, `:Jpr agent`, `:Jpr send`, `:Jpr prepass`, `threadsChanged`/`filesChanged`/`agentRound`/`worktreeStatusChanged`/`headMoved` handling (including the `Resolve myself` vs `Ask agent to resolve` restore-conflict prompt), and the one teardown path |
+| `jpr.session` (`lua/jpr/session/init.lua`, `commands.lua`, `comments.lua`, `events.lua`, `crash.lua`) | One review per tab: open-PR listing via `jpr-review prs`, checkout, engine process, protocol + release version handshake check, requests, redraws of the panel, the stream, the diffs, and the PR conversation view, `:Jpr toggle`, `:Jpr stream`, `:Jpr comment`, `:Jpr suggest`, `:Jpr expand`, `:Jpr conversation`, `:Jpr submit`, `:Jpr push`, `:Jpr agent`, `:Jpr send`, `:Jpr prepass`, `threadsChanged`/`filesChanged`/`agentRound`/`worktreeStatusChanged`/`headMoved` handling (including the `Resolve myself` vs `Ask agent to resolve` restore-conflict prompt), and the one teardown path |
 | `jpr.session.crash` (`lua/jpr/session/crash.lua`) | Mid-review crash recovery: single automatic engine restart, `0600` timestamped crash log at `stdpath("state")/jpr/engine-pr-<n>.log` (inside a `0700` state directory), `[read-only]` fallback on a second crash or failed restart handshake, and control-character sanitization for error messages |
 | `jpr.agent` | Right-hand interactive coding-agent terminal split (`claude` or `codex` with `JPR_SOCKET`, `JPR_PR`, and the bundled binary directory prepended to `PATH` in its environment), session resume detection, bracketed-paste prompt dispatch (`confirmSend` after `submitDelayMs` for `send`, `prepass`, and `resolve_conflicts`), and hide/show toggling without killing the live process |
 | `jpr.view_mode` | The global view mode (unified or split): the one remembered in `stdpath("state")/jpr/view-mode`, else `setup({ view = ... })`'s |
@@ -322,8 +356,11 @@ own, so a callback that raises cannot swallow the messages after it.
 
 - `cargo test --workspace --all-features`: the engine against fakes, the
   adapters, the protocol and Unix socket server over in-memory streams and
-  sockets, CLI socket/fallback flows (`crates/jpr-review/tests/agent_cli.rs`),
-  and the dependency rule (`crates/jpr-review/tests/dependency_rule.rs`).
+  sockets, `cli-tui` pure schema/state/render unit tests, CLI schema
+  completeness and answer conversions (`crates/jpr-review/src/tui_schema/tests.rs`
+  and `tests_edge_cases.rs`), CLI socket/fallback flows
+  (`crates/jpr-review/tests/agent_cli.rs`), and the dependency rule
+  (`crates/jpr-review/tests/dependency_rule.rs`).
 - `./scripts/test-lua.sh`: headless Neovim specs against
   `tests/lua/fixtures/fake_engine.sh` (and `crashing_engine.sh`, an engine
   that dies at startup). The fake engine speaks protocol 5, answers plugin-issued
@@ -334,10 +371,13 @@ own, so a callback that raises cannot swallow the messages after it.
   `prepareSend`, `confirmSend`, `preparePrepass`, `prepareConflictResolution`,
   `updateLocalAnchors`; `agentReply` and `prepassWrite` are driven by
   `jpr-review` over the Unix socket and covered in `review-rpc` / `jpr-review`
-  Rust tests), and logs the requests it gets (`tests/lua/agent_spec.lua`,
+  Rust tests), and logs the requests it gets (`tests/lua/tui_schema_spec.lua`,
+  `tests/lua/tui_render_spec.lua`, `tests/lua/tui_wizard_spec.lua`,
+  `tests/lua/palette_and_open_picker_spec.lua`, `tests/lua/agent_spec.lua`,
   `tests/lua/build_and_binary_spec.lua`, `tests/lua/push_and_head_moved_spec.lua`,
   `tests/lua/session_lifecycle_spec.lua`, and `tests/lua/statusline_spec.lua`
-  cover agent dispatch, bundled binary discovery/`build.lua`/`:checkhealth jpr`,
+  cover the declarative TUI engine, Command Palette, `:Jpr open` PR picker,
+  agent dispatch, bundled binary discovery/`build.lua`/`:checkhealth jpr`,
   push, head-move conflict prompts, crash auto-restart/read-only fallback, and
   `statusline()`).
   The script points `XDG_STATE_HOME` at a temporary directory, so specs never
