@@ -166,31 +166,20 @@ function M.close(restore_focus)
     end
 end
 
---- Opens a rounded floating input anchored below the hovered row in `session.panel.win`.
---- @param session table
---- @param context table
---- @param on_confirm fun(resolved: table)
-function M.open(session, context, on_confirm)
-    local panel = session and session.panel
-    if not panel or not vim.api.nvim_win_is_valid(panel.win) then
-        return
-    end
-    require("jpr").define_highlights()
-    M.close(false)
-
+local function create_input_buffer(initial_text)
     local buf = vim.api.nvim_create_buf(false, true)
     vim.bo[buf].buftype = "nofile"
     vim.bo[buf].bufhidden = "wipe"
     vim.bo[buf].filetype = "jpr-panel-input"
     vim.bo[buf].modifiable = true
-
-    local initial_text = tostring(context.initial_text or "")
     vim.api.nvim_buf_set_lines(buf, 0, -1, false, { initial_text })
+    return buf
+end
 
-    local geometry = compute_anchor_geometry(panel.win)
+local function open_input_window(panel_win, buf, context, geometry, initial_text)
     local win_config = {
         relative = "win",
-        win = panel.win,
+        win = panel_win,
         row = geometry.row,
         col = geometry.col,
         width = geometry.width,
@@ -205,12 +194,30 @@ function M.open(session, context, on_confirm)
         pcall(vim.api.nvim_buf_delete, buf, { force = true })
         error(win_or_err)
     end
-
     vim.api.nvim_set_option_value("wrap", false, { win = win_or_err, scope = "local" })
     vim.api.nvim_set_option_value("cursorline", false, { win = win_or_err, scope = "local" })
     pcall(vim.api.nvim_win_set_cursor, win_or_err, { 1, math.max(0, #initial_text) })
+    return win_or_err
+end
 
-    local state = { buf = buf, win = win_or_err, anchor_win = panel.win, geometry = geometry, context = context }
+--- Opens a rounded floating input anchored below the hovered row in `session.panel.win`.
+--- @param session table
+--- @param context table
+--- @param on_confirm fun(resolved: table)
+function M.open(session, context, on_confirm)
+    local panel = session and session.panel
+    if not panel or not vim.api.nvim_win_is_valid(panel.win) then
+        return
+    end
+    require("jpr").define_highlights()
+    M.close(false)
+
+    local initial_text = tostring(context.initial_text or "")
+    local buf = create_input_buffer(initial_text)
+    local geometry = compute_anchor_geometry(panel.win)
+    local win = open_input_window(panel.win, buf, context, geometry, initial_text)
+
+    local state = { buf = buf, win = win, anchor_win = panel.win, geometry = geometry, context = context }
     active_state = state
     paint_virt_lines(state, nil)
     register_autocmds(state)
