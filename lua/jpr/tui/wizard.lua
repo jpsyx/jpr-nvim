@@ -31,6 +31,30 @@ local function create_prefilled_set(initial_answers)
     return prefilled_keys
 end
 
+local function capture_origin_win(preserved_origin_win)
+    if preserved_origin_win ~= nil and vim.api.nvim_win_is_valid(preserved_origin_win) then
+        return preserved_origin_win
+    end
+    if active_state ~= nil and active_state.origin_win ~= nil and vim.api.nvim_win_is_valid(active_state.origin_win) then
+        return active_state.origin_win
+    end
+    local current_win = vim.api.nvim_get_current_win()
+    if vim.api.nvim_win_is_valid(current_win) then
+        return current_win
+    end
+    return nil
+end
+
+local function restore_origin_window(origin_win)
+    if origin_win == nil or not vim.api.nvim_win_is_valid(origin_win) then
+        return
+    end
+    if vim.api.nvim_win_get_tabpage(origin_win) ~= vim.api.nvim_get_current_tabpage() then
+        return
+    end
+    pcall(vim.api.nvim_set_current_win, origin_win)
+end
+
 local function find_option_index_by_value(options, target_value)
     if target_value == nil then
         return 1
@@ -86,6 +110,9 @@ local function validate_step_value(step, value, answers, context)
             or "Invalid value."
         return false, message
     end
+    if first_result == nil and type(second_result) == "string" and second_result ~= "" then
+        return false, second_result
+    end
     if type(first_result) == "string" and first_result ~= "" then
         return false, first_result
     end
@@ -99,15 +126,39 @@ local function get_preferred_step_value(step, answers, context)
     return schema.get_default_value_from_step(step, answers, context)
 end
 
-local function register_wipeout_guard(buf, state)
+local function handle_external_close(state, buf, win, should_close_win)
+    if active_state ~= state or (state.buf ~= buf and state.win ~= win) then
+        return
+    end
+    active_state = nil
+    increment_request_id()
+    state.buf = nil
+    state.win = nil
+    if vim.fn.mode(1):sub(1, 1) == "i" then
+        pcall(vim.cmd, "stopinsert")
+    end
+    local origin_win = state.origin_win
+    vim.schedule(function()
+        window.close_handle(should_close_win and win or nil, buf)
+        if active_state == nil then
+            restore_origin_window(origin_win)
+        end
+    end)
+end
+
+local function register_cleanup_guards(state, buf, win)
     vim.api.nvim_create_autocmd("BufWipeout", {
         buffer = buf,
         once = true,
         callback = function()
-            if active_state == state and state.buf == buf then
-                active_state = nil
-                increment_request_id()
-            end
+            handle_external_close(state, buf, win, true)
+        end,
+    })
+    vim.api.nvim_create_autocmd("WinClosed", {
+        pattern = tostring(win),
+        once = true,
+        callback = function()
+            handle_external_close(state, buf, win, false)
         end,
     })
 end
@@ -132,13 +183,15 @@ local function register_cursor_hover_sync(state, get_index, set_index, repaint)
     })
 end
 
-local function detach_current_window(state)
+local function detach_current_window(state, should_stop_insert)
     local previous_win = state.win
     local previous_buf = state.buf
     state.win = nil
     state.buf = nil
-    if previous_buf and vim.api.nvim_get_current_buf() == previous_buf then
-        pcall(vim.cmd, "stopinsert")
+    if should_stop_insert and previous_buf and vim.api.nvim_get_current_buf() == previous_buf then
+        if vim.fn.mode(1):sub(1, 1) == "i" then
+            pcall(vim.cmd, "stopinsert")
+        end
     end
     window.close_handle(previous_win, previous_buf)
 end
@@ -149,7 +202,8 @@ function M.close()
     local state = active_state
     active_state = nil
     if state then
-        detach_current_window(state)
+        detach_current_window(state, true)
+        restore_origin_window(state.origin_win)
     end
 end
 
@@ -202,6 +256,7 @@ local function activate_palette_command(state)
         can_return_to_palette = true,
         palette_commands = state.commands,
         palette_index = state.selected_index,
+        origin_win = state.origin_win,
     })
 end
 
@@ -223,7 +278,8 @@ local function bind_palette_keys(state)
     for _, lhs in ipairs({ "q", "<Esc>" }) do map(lhs, M.close) end
 end
 
-open_palette_at = function(commands, context, initial_index)
+open_palette_at = function(commands, context, initial_index, preserved_origin_win)
+    local origin_win = capture_origin_win(preserved_origin_win)
     M.close()
     require("jpr").define_highlights()
 
@@ -242,13 +298,14 @@ open_palette_at = function(commands, context, initial_index)
         context = current_context,
         selected_index = clamped_index,
         layout = layout,
+        origin_win = origin_win,
         is_painting = true,
     }
     state.buf, state.win = window.create_menu_window(title, layout, width)
     active_state = state
     state.is_painting = false
 
-    register_wipeout_guard(state.buf, state)
+    register_cleanup_guards(state, state.buf, state.win)
     register_cursor_hover_sync(
         state,
         function() return state.selected_index end,
@@ -262,7 +319,7 @@ end
 --- @param commands table[]
 --- @param context table|nil
 function M.open_palette(commands, context)
-    open_palette_at(commands, context, 1)
+    open_palette_at(commands, context, 1, nil)
 end
 
 local function complete_command(state)
@@ -293,10 +350,16 @@ local function commit_step_answer(state, step, candidate_value, on_validation_er
     end
 end
 
+local function can_return_to_palette(state)
+    return state.can_return_to_palette
+        and type(state.palette_commands) == "table"
+        and #state.palette_commands > 0
+end
+
 local function step_back_from_step(state, step, draft_value, has_draft)
     if state.step_index <= 1 then
-        if state.can_return_to_palette and type(state.palette_commands) == "table" and #state.palette_commands > 0 then
-            open_palette_at(state.palette_commands, state.context, state.palette_index)
+        if can_return_to_palette(state) then
+            open_palette_at(state.palette_commands, state.context, state.palette_index, state.origin_win)
         end
         return
     end
@@ -306,7 +369,11 @@ local function step_back_from_step(state, step, draft_value, has_draft)
     state.step_index = state.step_index - 1
     local active_steps = schema.resolve_active_steps(state.command, state.answers, state.context)
     if #active_steps == 0 then
-        complete_command(state)
+        if can_return_to_palette(state) then
+            open_palette_at(state.palette_commands, state.context, state.palette_index, state.origin_win)
+        else
+            M.close()
+        end
         return
     end
     state.step_index = math.max(1, math.min(state.step_index, #active_steps))
@@ -314,7 +381,7 @@ local function step_back_from_step(state, step, draft_value, has_draft)
     open_current_step(state)
 end
 
-local function create_menu_step_state(step, answers, context, can_return_to_palette)
+local function create_menu_step_state(step, answers, context, is_palette_returnable)
     local preferred = get_preferred_step_value(step, answers, context)
     if step.kind == "toggle" then
         local options = schema.create_toggle_options_from_step(step)
@@ -326,7 +393,7 @@ local function create_menu_step_state(step, answers, context, can_return_to_pale
             is_loading = false,
             options = options,
             selected_option_index = find_option_index_by_value(options, target),
-            can_return_to_palette = can_return_to_palette,
+            can_return_to_palette = is_palette_returnable,
         }
     end
     if step.kind == "async_select" then
@@ -334,7 +401,7 @@ local function create_menu_step_state(step, answers, context, can_return_to_pale
             is_loading = true,
             options = {},
             selected_option_index = 1,
-            can_return_to_palette = can_return_to_palette,
+            can_return_to_palette = is_palette_returnable,
         }
     end
     local options = step.options or {}
@@ -342,7 +409,7 @@ local function create_menu_step_state(step, answers, context, can_return_to_pale
         is_loading = false,
         options = options,
         selected_option_index = find_option_index_by_value(options, preferred),
-        can_return_to_palette = can_return_to_palette,
+        can_return_to_palette = is_palette_returnable,
     }
 end
 
@@ -414,29 +481,51 @@ local function bind_menu_step_keys(state, step)
     for _, lhs in ipairs({ "q", "<Esc>" }) do map(lhs, M.close) end
 end
 
+local function apply_async_loaded_result(state, step, request_id, loaded_options, error_message, empty_message)
+    if active_request_id ~= request_id or active_state ~= state or state.current_step_id ~= step.id then
+        return
+    end
+    if not M.is_open() then
+        return
+    end
+    state.step_state.is_loading = false
+    state.step_state.error_message = error_message
+    state.step_state.empty_message = empty_message
+    if type(loaded_options) == "table" and #loaded_options > 0 then
+        local preferred = get_preferred_step_value(step, state.answers, state.context)
+        state.step_state.options = loaded_options
+        state.step_state.selected_option_index = find_option_index_by_value(loaded_options, preferred)
+    else
+        state.step_state.options = {}
+        state.step_state.selected_option_index = 1
+    end
+    paint_menu_step(state)
+end
+
 local function start_async_step_load(state, step)
     local request_id = increment_request_id()
-    local step_id = step.id
-    step.load(state.answers, state.context, function(loaded_options, error_message, empty_message)
-        if active_request_id ~= request_id or active_state ~= state or state.current_step_id ~= step_id then
+    local is_settled = false
+    local function on_loaded(loaded_options, error_message, empty_message)
+        if is_settled then
             return
         end
-        if not M.is_open() then
-            return
-        end
-        state.step_state.is_loading = false
-        state.step_state.error_message = error_message
-        state.step_state.empty_message = empty_message
-        if type(loaded_options) == "table" and #loaded_options > 0 then
-            local preferred = get_preferred_step_value(step, state.answers, state.context)
-            state.step_state.options = loaded_options
-            state.step_state.selected_option_index = find_option_index_by_value(loaded_options, preferred)
+        is_settled = true
+        if vim.in_fast_event() then
+            vim.schedule(function()
+                apply_async_loaded_result(state, step, request_id, loaded_options, error_message, empty_message)
+            end)
         else
-            state.step_state.options = {}
-            state.step_state.selected_option_index = 1
+            apply_async_loaded_result(state, step, request_id, loaded_options, error_message, empty_message)
         end
-        paint_menu_step(state)
-    end)
+    end
+    if type(step.load) ~= "function" then
+        on_loaded(nil, "Async loader is missing.", nil)
+        return
+    end
+    local is_ok, load_error = pcall(step.load, state.answers, state.context, on_loaded)
+    if not is_ok then
+        on_loaded(nil, tostring(load_error), nil)
+    end
 end
 
 local function open_menu_step(state, step)
@@ -447,7 +536,7 @@ local function open_menu_step(state, step)
     state.buf, state.win = window.create_menu_window(" " .. tostring(state.command.label) .. " ", state.layout, width)
     state.is_painting = false
 
-    register_wipeout_guard(state.buf, state)
+    register_cleanup_guards(state, state.buf, state.win)
     register_cursor_hover_sync(
         state,
         function() return state.step_state.selected_option_index end,
@@ -455,7 +544,7 @@ local function open_menu_step(state, step)
         function() paint_menu_step(state) end
     )
     bind_menu_step_keys(state, step)
-    if step.kind == "async_select" and type(step.load) == "function" then
+    if step.kind == "async_select" then
         start_async_step_load(state, step)
     end
 end
@@ -467,19 +556,35 @@ local function read_text_step_value(buf)
     return vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1] or ""
 end
 
+local function ensure_text_insert_mode(state, target_win)
+    if vim.fn.mode(1):sub(1, 1) == "i" then
+        return
+    end
+    vim.schedule(function()
+        if active_state ~= state or state.win ~= target_win then
+            return
+        end
+        if not target_win or not vim.api.nvim_win_is_valid(target_win) then
+            return
+        end
+        if vim.api.nvim_get_current_win() ~= target_win then
+            return
+        end
+        pcall(vim.cmd, "startinsert!")
+    end)
+end
+
 local function bind_text_step_keys(state, step)
     local submit = function()
-        pcall(vim.cmd, "stopinsert")
         local value = read_text_step_value(state.buf)
         commit_step_answer(state, step, value, function(error_message)
             local width = window.compute_modal_width()
             local virt_lines = render.build_text_step_virt_lines(step, error_message, width)
             window.paint_text_virt_lines(state.buf, state.win, virt_lines, width)
-            pcall(vim.cmd, "startinsert!")
+            ensure_text_insert_mode(state, state.win)
         end)
     end
     local go_back = function()
-        pcall(vim.cmd, "stopinsert")
         local draft_value = read_text_step_value(state.buf)
         step_back_from_step(state, step, draft_value, true)
     end
@@ -502,16 +607,16 @@ local function open_text_step(state, step)
     local virt_lines = render.build_text_step_virt_lines(step, nil, width)
 
     state.buf, state.win = window.create_text_window(title, footer, initial_text, virt_lines, width)
-    register_wipeout_guard(state.buf, state)
+    register_cleanup_guards(state, state.buf, state.win)
     bind_text_step_keys(state, step)
-    pcall(vim.cmd, "startinsert!")
+    ensure_text_insert_mode(state, state.win)
 end
 
 open_current_step = function(state)
     increment_request_id()
-    detach_current_window(state)
     state.active_steps = schema.resolve_active_steps(state.command, state.answers, state.context)
     if #state.active_steps == 0 then
+        detach_current_window(state, true)
         complete_command(state)
         return
     end
@@ -519,8 +624,10 @@ open_current_step = function(state)
     local step = state.active_steps[state.step_index]
     state.current_step_id = step.id
     if step.kind == "text" then
+        detach_current_window(state, false)
         open_text_step(state, step)
     else
+        detach_current_window(state, true)
         open_menu_step(state, step)
     end
 end
@@ -531,10 +638,11 @@ end
 --- @param context table|nil
 --- @param opts table|nil { can_return_to_palette?: boolean, palette_commands?: table[], palette_index?: integer, start_step_id?: string }
 function M.open_command(command, initial_answers, context, opts)
+    local options = opts or {}
+    local origin_win = capture_origin_win(options.origin_win)
     M.close()
     require("jpr").define_highlights()
 
-    local options = opts or {}
     local answers = copy_shallow(initial_answers)
     local current_context = context or {}
     local active_steps = schema.resolve_active_steps(command, answers, current_context)
@@ -560,6 +668,7 @@ function M.open_command(command, initial_answers, context, opts)
         can_return_to_palette = options.can_return_to_palette == true,
         palette_commands = options.palette_commands,
         palette_index = options.palette_index or 1,
+        origin_win = origin_win,
         is_painting = false,
     }
     active_state = state

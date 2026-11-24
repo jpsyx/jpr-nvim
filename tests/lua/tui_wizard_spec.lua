@@ -527,6 +527,164 @@ local function test_async_select_error_renders_jpr_error_and_supports_back()
     wizard.close()
 end
 
+local function test_external_win_close_cleanup_and_origin_focus()
+    local origin_win = vim.api.nvim_get_current_win()
+    local pending_callback = nil
+    local async_cmd = create_async_pr_command(
+        function(_answers, _context, on_loaded) pending_callback = on_loaded end,
+        function() end
+    )
+
+    wizard.open_command(async_cmd, { source = "list" }, {}, { start_step_id = "pr" })
+    local float_win = current_float_win()
+    local stale_callback = pending_callback
+    vim.api.nvim_win_close(float_win, true)
+    assert(wizard.is_open() == false, "external nvim_win_close clears wizard state via WinClosed")
+    stale_callback({ { value = "99", label = "#99 Stale", help = "Ignored." } })
+    assert(wizard.is_open() == false, "stale async callback dropped after WinClosed")
+
+    -- External close on a text step exits Insert mode cleanly and restores origin_win.
+    local text_cmd = create_text_validation_command(function() end)
+    wizard.open_command(text_cmd, {}, {})
+    local text_win = current_float_win()
+    vim.api.nvim_win_close(text_win, true)
+    vim.wait(20, function() return false end)
+    assert(wizard.is_open() == false, "text step external close clears wizard state")
+    assert(vim.fn.mode(1):sub(1, 1) == "n", "no Insert-mode leak after external text window close")
+    assert(vim.api.nvim_get_current_win() == origin_win, "focus restored to origin_win")
+
+    -- Palette -> command -> q close preserves and restores origin_win.
+    local branch_commands = create_branch_commands(function() end)
+    wizard.open_palette(branch_commands, {})
+    helpers.press_key("j")
+    helpers.press_key("<CR>")
+    helpers.press_key("q")
+    assert(vim.api.nvim_get_current_win() == origin_win, "palette -> command -> close restores origin_win")
+end
+
+local function test_async_loader_throw_sync_and_duplicate_callbacks()
+    local throwing_cmd = create_async_pr_command(function() error("network_down") end, function() end)
+    wizard.open_command(throwing_cmd, { source = "list" }, {}, { start_step_id = "pr" })
+    local buf = vim.api.nvim_win_get_buf(current_float_win())
+    assert(current_text():find("network_down", 1, true) ~= nil, "thrown loader error rendered")
+    assert(has_buffer_highlight_group(buf, "JprError", "network_down"), "thrown loader error highlighted with JprError")
+    helpers.press_key("h")
+    assert(current_text():find("Pull Request Source", 1, true) ~= nil, "h steps Back after loader throw")
+    wizard.close()
+
+    local sync_cmd = create_async_pr_command(function(_answers, _context, on_loaded)
+        on_loaded({ { value = "1", label = "#1 First", help = "First sync result." } })
+        on_loaded({ { value = "2", label = "#2 Duplicate", help = "Must be ignored." } })
+    end, function() end)
+    wizard.open_command(sync_cmd, { source = "list" }, {}, { start_step_id = "pr" })
+    assert(current_text():find("▸ #1 First", 1, true) ~= nil, "synchronous on_loaded renders options")
+    assert(current_text():find("#2 Duplicate", 1, true) == nil, "duplicate on_loaded call ignored")
+    wizard.close()
+end
+
+local function test_empty_palette_and_execute_opening_another_modal()
+    wizard.open_palette({}, {})
+    assert(wizard.is_open() == true, "empty palette opens cleanly")
+    assert(current_text():find("(no commands available)", 1, true) ~= nil, "empty palette message rendered")
+    for _, key in ipairs({ "j", "k", "G", "gg", "<CR>" }) do
+        helpers.press_key(key)
+    end
+    assert(wizard.is_open() == true, "navigation and confirm on empty palette are safe no-ops")
+    helpers.press_key("q")
+    assert(wizard.is_open() == false, "q closes empty palette")
+
+    local second_cmd = create_text_validation_command(function() end)
+    local chained_commands = {
+        {
+            id = "chain",
+            label = "Chain Modal",
+            help = "Opens another wizard modal from execute.",
+            execute = function() wizard.open_command(second_cmd, {}, {}) end,
+        },
+    }
+    wizard.open_palette(chained_commands, {})
+    helpers.press_key("<CR>")
+    assert(wizard.is_open() == true, "modal opened by command.execute stays open")
+    assert(helpers.win_title(current_float_win()):find("PR Number", 1, true) ~= nil, "chained modal is active")
+    wizard.close()
+end
+
+local function test_insert_continuity_after_validation_and_consecutive_text_steps()
+    local executed_answers = nil
+    local command = {
+        id = "two_texts",
+        label = "Two Text Steps",
+        help = "Exercises Insert-mode continuity across validation and consecutive text steps.",
+        steps = {
+            {
+                id = "first_text",
+                label = "First Text",
+                help = "Enter digits only.",
+                kind = "text",
+                default = "bad",
+                validate = function(value)
+                    if not tostring(value):match("^%d+$") then
+                        return nil, "Need digits"
+                    end
+                    return true
+                end,
+            },
+            {
+                id = "second_text",
+                label = "Second Text",
+                help = "Append suffix.",
+                kind = "text",
+                default = "prefix-",
+            },
+        },
+        execute = function(answers) executed_answers = answers end,
+    }
+
+    wizard.open_command(command, {}, {})
+    -- Enter Insert mode once, trigger validation failure (<CR>), keep typing without re-entering Insert,
+    -- submit Step 1, then keep typing directly into Step 2 without re-entering Insert, and submit Step 2!
+    helpers.press_key("A<CR><BS><BS><BS>42<CR>done<CR>")
+    assert(wizard.is_open() == false, "consecutive text steps complete cleanly")
+    assert(
+        vim.deep_equal(executed_answers, { first_text = "42", second_text = "prefix-done" }),
+        "Insert mode persisted across validation failure and consecutive text steps: " .. vim.inspect(executed_answers)
+    )
+end
+
+local function test_step_back_never_executes_when_no_active_steps_remain()
+    local execute_count = 0
+    local command = {
+        id = "disappearing",
+        label = "Disappearing Step",
+        help = "Step 1 hides when Step 2 draft is hide.",
+        steps = {
+            {
+                id = "first",
+                label = "First",
+                help = "First step.",
+                kind = "select",
+                when = function(answers) return answers.second ~= "hide" end,
+                options = { { value = "ok", label = "OK", help = "Continue." } },
+            },
+            {
+                id = "second",
+                label = "Second",
+                help = "Second step.",
+                kind = "text",
+                default = "hide",
+                when = function(answers) return answers.first == "ok" and answers.second ~= "hide" end,
+            },
+        },
+        execute = function() execute_count = execute_count + 1 end,
+    }
+
+    wizard.open_command(command, {}, {})
+    helpers.press_key("<CR>")
+    helpers.press_key("<S-Tab>")
+    assert(wizard.is_open() == false, "step back with zero active steps closes modal cleanly")
+    assert(execute_count == 0, "step back MUST NOT execute command")
+end
+
 test_palette_window_and_hover_navigation()
 test_palette_cursor_sync_and_cancel()
 test_zero_step_command_execution()
@@ -538,5 +696,10 @@ test_toggle_and_prefilled_step_skipping()
 test_singleton_menu_validation_and_back_stale_async()
 test_toggle_false_draft_preserved_on_step_back()
 test_async_select_error_renders_jpr_error_and_supports_back()
+test_external_win_close_cleanup_and_origin_focus()
+test_async_loader_throw_sync_and_duplicate_callbacks()
+test_empty_palette_and_execute_opening_another_modal()
+test_insert_continuity_after_validation_and_consecutive_text_steps()
+test_step_back_never_executes_when_no_active_steps_remain()
 
 print("tui_wizard_spec: ok")
