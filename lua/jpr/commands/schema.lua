@@ -35,18 +35,28 @@ local function build_pr_badge(pr, open_tabs)
     return table.concat(tags, " ")
 end
 
+local function build_pr_help(pr)
+    local author = (type(pr.author) == "string" and pr.author ~= "") and pr.author or "ghost"
+    local parts = { "@" .. author }
+    if type(pr.headRef) == "string" and pr.headRef ~= "" then
+        parts[#parts + 1] = pr.headRef
+    end
+    parts[#parts + 1] = "updated " .. M.format_pr_updated_date(pr.updatedAt)
+    return table.concat(parts, " · ")
+end
+
 local function create_pr_options_from_list(prs, open_tabs)
     local options = {}
     for _, pr in ipairs(prs) do
-        local author = (type(pr.author) == "string" and pr.author ~= "") and pr.author or "ghost"
-        local head_ref = type(pr.headRef) == "string" and pr.headRef or ""
-        local updated = M.format_pr_updated_date(pr.updatedAt)
-        options[#options + 1] = {
-            value = { number = pr.number, repo = nil },
-            label = ("#%d  %s"):format(pr.number, pr.title or ""),
-            badge = build_pr_badge(pr, open_tabs),
-            help = ("@%s · %s · updated %s"):format(author, head_ref, updated),
-        }
+        if type(pr) == "table" and type(pr.number) == "number" then
+            local title = type(pr.title) == "string" and pr.title or ""
+            options[#options + 1] = {
+                value = { number = pr.number, repo = nil },
+                label = ("#%d  %s"):format(pr.number, title),
+                badge = build_pr_badge(pr, open_tabs),
+                help = build_pr_help(pr),
+            }
+        end
     end
     return options
 end
@@ -213,7 +223,7 @@ local function create_agent_command_spec()
                 help = "Choose which coding agent CLI to launch in the review terminal split.",
                 kind = "select",
                 when = function(_answers, context)
-                    return not (context and context.is_agent_open)
+                    return not (context and (context.is_agent_open or context.has_live_agent))
                 end,
                 default = function()
                     return jpr().config.agent or "claude"

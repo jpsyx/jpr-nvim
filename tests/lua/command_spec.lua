@@ -38,6 +38,9 @@ assert(vim.deep_equal(jpr.complete("s", "Jpr toggle s"), { "split" }), "filtered
 assert(vim.deep_equal(jpr.complete("", "Jpr comment "), { "line", "file", "suggest" }), "comment argument completions")
 assert(vim.deep_equal(jpr.complete("", "Jpr agent "), { "claude", "codex" }), "agent argument completions")
 assert(vim.deep_equal(jpr.complete("", "Jpr toggle split "), {}), "no completions after subcommand argument")
+assert(vim.deep_equal(jpr.complete("", "1,2 Jpr toggle "), { "unified", "split" }), "spaced range toggle completions")
+assert(vim.deep_equal(jpr.complete("s", "1,2 Jpr toggle s"), { "split" }), "spaced range filtered toggle completion")
+assert(vim.deep_equal(jpr.complete("c", "'<,'> Jpr c"), { "comment", "conversation", "close" }), "spaced visual range subcommands")
 
 jpr.setup({ worktree_cmd = "wt pr {n}" })
 assert(jpr.config.worktree_cmd == "wt pr {n}", "setup takes options")
@@ -254,6 +257,39 @@ assert(
         and vim.fn.mode(1) == "n",
     "reverse visual Vkk gc: " .. vim.inspect(reverse_visual) .. " mode=" .. vim.fn.mode(1)
 )
+
+vim.cmd("1,2Jpr comment line")
+local ranged_line = calls[#calls]
+assert(
+    ranged_line.fn == "comment_current"
+        and ranged_line.opts.line1 == 1
+        and ranged_line.opts.line2 == 2
+        and ranged_line.opts.range == 2
+        and not ranged_line.opts.suggest
+        and not ranged_line.opts.file,
+    "1,2Jpr comment line preserves range: " .. vim.inspect(ranged_line)
+)
+
+vim.cmd("1,2Jpr comment suggest")
+local ranged_suggest = calls[#calls]
+assert(
+    ranged_suggest.fn == "comment_current"
+        and ranged_suggest.opts.line1 == 1
+        and ranged_suggest.opts.line2 == 2
+        and ranged_suggest.opts.range == 2
+        and ranged_suggest.opts.suggest == true,
+    "1,2Jpr comment suggest preserves range: " .. vim.inspect(ranged_suggest)
+)
+
+local extra_before = #messages
+jpr.command({ "toggle", "split", "extra" })
+assert(#messages == extra_before + 1 and messages[#messages].level == vim.log.levels.ERROR, "extra arg on toggle errors")
+assert(messages[#messages].text:find("too many arguments", 1, true) ~= nil, messages[#messages].text)
+
+local zero_arg_before = #messages
+jpr.command({ "sync", "unexpected" })
+assert(#messages == zero_arg_before + 1 and messages[#messages].level == vim.log.levels.ERROR, "arg on sync errors")
+assert(messages[#messages].text:find("does not accept arguments", 1, true) ~= nil, messages[#messages].text)
 
 vim.api.nvim_buf_delete(range_buf, { force = true })
 package.loaded["jpr.session"] = nil

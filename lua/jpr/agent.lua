@@ -148,7 +148,7 @@ local function ensure_agent_window(session, agent_state)
     return agent_state.win
 end
 
-local function spawn_terminal(session, launch_plan)
+local function spawn_terminal(session, launch_plan, selected_agent)
     local buffer = vim.api.nvim_create_buf(false, true)
     local window = open_right_split(session, buffer)
     if not window then
@@ -160,7 +160,12 @@ local function spawn_terminal(session, launch_plan)
     local argv = M.create_launch_argv_from_plan(jpr().config, session.worktree, launch_plan)
     local socket = (type(launch_plan) == "table" and type(launch_plan.socket) == "string") and launch_plan.socket or ""
     local agent_env = binary.create_agent_env_from_session(jpr().binary_path(), socket, session.number, vim.env.PATH)
-    local agent_state = { buf = buffer, win = window, job = 0, exited = false }
+    local launched_kind = (type(launch_plan) == "table" and type(launch_plan.kind) == "string" and launch_plan.kind ~= "")
+        and launch_plan.kind
+        or selected_agent
+        or jpr().config.agent
+        or "claude"
+    local agent_state = { buf = buffer, win = window, job = 0, exited = false, kind = launched_kind }
     local ok, job = pcall(vim.fn.jobstart, argv, {
         term = true,
         cwd = session.worktree,
@@ -187,7 +192,7 @@ local function drain_callbacks(callbacks, agent_state)
     end
 end
 
-local function finish_pending_launch(session, pending, launch_plan)
+local function finish_pending_launch(session, pending, launch_plan, selected_agent)
     if session.closing or session.agent_pending_callbacks ~= pending then
         return
     end
@@ -198,7 +203,7 @@ local function finish_pending_launch(session, pending, launch_plan)
         agent_state = session.agent
     else
         M.close(session)
-        agent_state = spawn_terminal(session, launch_plan)
+        agent_state = spawn_terminal(session, launch_plan, selected_agent)
     end
     if agent_state then
         drain_callbacks(pending, agent_state)
@@ -213,8 +218,16 @@ function M.is_open(session)
         and vim.api.nvim_win_is_valid(agent_state.win)
 end
 
+--- Whether `session` has a live interactive agent terminal process, whether its
+--- split window is currently visible or hidden.
+function M.has_live_agent(session)
+    return session ~= nil and is_live_agent(session.agent)
+end
+
 --- Ensures `session`'s interactive agent terminal is alive and visible on the
 --- right side of the tab, then calls `on_ready(agent_state)` when given.
+--- Optional `agent_kind` (`"claude"` or `"codex"`) selects the CLI when
+--- launching a new agent process.
 function M.ensure_open(session, on_ready, agent_kind)
     if is_live_agent(session.agent) then
         ensure_agent_window(session, session.agent)
@@ -238,7 +251,7 @@ function M.ensure_open(session, on_ready, agent_kind)
         or jpr().config.agent
     session.agent_pending_callbacks = pending
     require("jpr.session").request(session, "prepareAgentLaunch", { agent = selected_agent }, function(launch_plan)
-        finish_pending_launch(session, pending, launch_plan)
+        finish_pending_launch(session, pending, launch_plan, selected_agent)
     end, function()
         if session.agent_pending_callbacks == pending then
             session.agent_pending_callbacks = nil
@@ -246,9 +259,28 @@ function M.ensure_open(session, on_ready, agent_kind)
     end)
 end
 
+local function toggle_explicit_agent_kind(session, agent_kind)
+    if not is_live_agent(session.agent) then
+        return M.ensure_open(session, nil, agent_kind)
+    end
+    local running_kind = session.agent.kind or jpr().config.agent or "claude"
+    if running_kind ~= agent_kind then
+        jpr().info(("agent panel is already running %s; close it before switching to %s"):format(running_kind, agent_kind))
+    end
+    M.ensure_open(session)
+    if M.is_open(session) then
+        pcall(vim.api.nvim_set_current_win, session.agent.win)
+    end
+end
+
 --- Toggles `session`'s right-hand agent terminal split without stopping a live
---- agent process when hiding its window.
+--- agent process when hiding its window. When optional `agent_kind` (`"claude"`
+--- or `"codex"`) is provided, launches or focuses the panel explicitly instead
+--- of hiding a running agent.
 function M.toggle(session, agent_kind)
+    if type(agent_kind) == "string" and agent_kind ~= "" then
+        return toggle_explicit_agent_kind(session, agent_kind)
+    end
     if M.is_open(session) then
         local agent_state = session.agent
         local window_tab = vim.api.nvim_win_get_tabpage(agent_state.win)
@@ -263,7 +295,7 @@ function M.toggle(session, agent_kind)
         end
         return
     end
-    M.ensure_open(session, nil, agent_kind)
+    M.ensure_open(session)
 end
 
 local function send_terminal_bytes(agent_state, bytes, error_message)

@@ -129,13 +129,22 @@ local function filter_by_prefix(items, prefix)
     end, items)
 end
 
+local function slice_from_jpr_command(cmdline)
+    local raw = cmdline or ""
+    local start_index = raw:find("%f[%a]Jpr%f[%A]")
+    if start_index then
+        return raw:sub(start_index)
+    end
+    return raw
+end
+
 --- Completes `:Jpr <subcommand>` and schema-defined single-step arguments
 --- (`toggle`, `comment`, `agent`).
 function M.complete(arglead, cmdline)
-    local raw_cmdline = cmdline or ""
-    local trimmed = vim.trim(raw_cmdline)
+    local command_tail = slice_from_jpr_command(cmdline)
+    local trimmed = vim.trim(command_tail)
     local words = trimmed ~= "" and vim.split(trimmed, "%s+") or {}
-    local has_trailing_space = raw_cmdline:match("%s$") ~= nil
+    local has_trailing_space = command_tail:match("%s$") ~= nil
     local token_index = has_trailing_space and (#words + 1) or #words
     if token_index <= 2 then
         return filter_by_prefix(M.subcommands, arglead or "")
@@ -191,14 +200,17 @@ end
 local function build_tui_context(session, cmd_opts)
     local current_session = type(session.current) == "function" and session.current() or nil
     local is_agent_open = false
+    local has_live_agent = false
     if current_session ~= nil then
         local agent_module = require("jpr.agent")
         is_agent_open = type(agent_module.is_open) == "function" and agent_module.is_open(current_session) == true
+        has_live_agent = type(agent_module.has_live_agent) == "function" and agent_module.has_live_agent(current_session) == true
     end
     return {
         cmd_opts = cmd_opts,
         has_session = current_session ~= nil,
         is_agent_open = is_agent_open,
+        has_live_agent = has_live_agent,
         is_on_diff_line = is_cursor_on_diff_line(current_session),
     }
 end
@@ -233,7 +245,7 @@ local function dispatch_comment_subcommand(session, argument, cmd_opts, context)
     end)
 end
 
-local function dispatch_direct_subcommand(session, subcommand, argument, cmd_opts, context)
+local function dispatch_optional_arg_subcommand(session, subcommand, argument, cmd_opts, context)
     if subcommand == "open" then
         return dispatch_open_subcommand(session, argument, context)
     end
@@ -252,21 +264,37 @@ local function dispatch_direct_subcommand(session, subcommand, argument, cmd_opt
         end
         return dispatch_validated_arg("agent", argument, "agent", session.agent_current)
     end
-    local dispatch = {
-        sync = session.sync_current,
-        stream = session.stream_current,
-        suggest = session.suggest_current,
-        expand = session.expand_current,
-        conversation = session.conversation_current,
-        submit = session.submit_current,
-        push = session.push_current,
-        send = session.send_current,
-        prepass = session.prepass_current,
-        close = session.close_current,
-    }
-    local handler = dispatch[subcommand]
-    if handler then
-        return handler()
+    return nil
+end
+
+local OPTIONAL_ARG_SUBCOMMANDS = { open = true, toggle = true, comment = true, agent = true }
+local ZERO_ARG_SESSION_METHODS = {
+    sync = "sync_current",
+    stream = "stream_current",
+    suggest = "suggest_current",
+    expand = "expand_current",
+    conversation = "conversation_current",
+    submit = "submit_current",
+    push = "push_current",
+    send = "send_current",
+    prepass = "prepass_current",
+    close = "close_current",
+}
+
+local function dispatch_direct_subcommand(session, args, cmd_opts, context)
+    local subcommand = args[1]
+    if OPTIONAL_ARG_SUBCOMMANDS[subcommand] then
+        if #args > 2 then
+            return M.error(("too many arguments for :Jpr %s"):format(subcommand))
+        end
+        return dispatch_optional_arg_subcommand(session, subcommand, args[2], cmd_opts, context)
+    end
+    local method_name = ZERO_ARG_SESSION_METHODS[subcommand]
+    if method_name then
+        if #args > 1 then
+            return M.error((":Jpr %s does not accept arguments"):format(subcommand))
+        end
+        return session[method_name]()
     end
     M.error(("unknown subcommand %q; expected one of: %s"):format(tostring(subcommand), table.concat(M.subcommands, ", ")))
 end
@@ -280,7 +308,7 @@ function M.command(fargs, cmd_opts)
         local commands = require("jpr.commands.schema").create_command_specs()
         return require("jpr.tui.wizard").open_palette(commands, context)
     end
-    return dispatch_direct_subcommand(session, args[1], args[2], cmd_opts, context)
+    return dispatch_direct_subcommand(session, args, cmd_opts, context)
 end
 
 --- Captures the 1-indexed inclusive visual line range and exits visual mode,

@@ -5,6 +5,7 @@ dofile(root .. "/plugin/jpr.lua")
 
 local helpers = dofile(root .. "/tests/lua/support/helpers.lua")
 local jpr = require("jpr")
+local agent = require("jpr.agent")
 local session = require("jpr.session")
 local view_mode = require("jpr.view_mode")
 local wizard = require("jpr.tui.wizard")
@@ -12,6 +13,8 @@ local tui_schema = require("jpr.tui.schema")
 local commands_schema = require("jpr.commands.schema")
 
 local notifications = {}
+local temp_files = {}
+
 vim.notify = function(message, level)
     notifications[#notifications + 1] = { text = message, level = level }
 end
@@ -43,18 +46,34 @@ local function current_text()
     return table.concat(lines, "\n")
 end
 
+local function track_temp_file(path)
+    temp_files[#temp_files + 1] = path
+    return path
+end
+
+local function cleanup_temp_files()
+    for _, path in ipairs(temp_files) do
+        pcall(vim.fn.delete, path)
+    end
+    temp_files = {}
+end
+
+local function write_executable_script(script_lines)
+    local script_path = track_temp_file(vim.fn.tempname() .. "-jpr-review")
+    vim.fn.writefile(script_lines, script_path)
+    vim.uv.fs_chmod(script_path, tonumber("755", 8))
+    return script_path
+end
+
 local function write_fake_prs_binary(payload_json)
-    local script_path = vim.fn.tempname() .. "-jpr-review"
-    vim.fn.writefile({
+    return write_executable_script({
         "#!/bin/sh",
         'if [ "$1" = "prs" ]; then',
         "  printf '%s\\n' " .. vim.fn.shellescape(payload_json),
         "  exit 0",
         "fi",
         "exit 1",
-    }, script_path)
-    vim.uv.fs_chmod(script_path, tonumber("755", 8))
-    return script_path
+    })
 end
 
 local function create_two_pr_payload()
@@ -78,6 +97,22 @@ local function create_two_pr_payload()
     })
 end
 
+local function with_temp_view_mode(initial_mode, callback)
+    local original_path = view_mode.path
+    local temp_path = track_temp_file(vim.fn.tempname())
+    view_mode.path = temp_path
+    view_mode.reset()
+    if initial_mode then
+        view_mode.set(initial_mode)
+    end
+    local is_ok, err = pcall(callback)
+    view_mode.path = original_path
+    view_mode.reset()
+    if not is_ok then
+        error(err, 0)
+    end
+end
+
 local function with_stubbed_session_methods(stubs, callback)
     local originals = {}
     for key, replacement in pairs(stubs) do
@@ -85,8 +120,9 @@ local function with_stubbed_session_methods(stubs, callback)
         session[key] = replacement
     end
     local is_ok, err = pcall(callback)
-    for key, original in pairs(originals) do
-        session[key] = original
+    wizard.close()
+    for key in pairs(stubs) do
+        session[key] = originals[key]
     end
     jpr.setup({})
     if not is_ok then
@@ -164,6 +200,22 @@ local function test_open_picker_lists_prs_hovers_metadata_and_opens_selected()
     end)
 end
 
+local function test_open_picker_skips_malformed_entries_and_handles_null_title()
+    local payload = '["bad",{"title":"missing number"},{"number":55,"title":null,"author":null,"headRef":null,"isDraft":false,"updatedAt":null}]'
+    local fake_binary = write_fake_prs_binary(payload)
+    with_stubbed_session_methods({}, function()
+        jpr.setup({ binary = fake_binary })
+        jpr.command({ "open" })
+        assert(vim.wait(3000, function()
+            return wizard.is_open() and current_text():find("#55", 1, true) ~= nil
+        end), "PR picker renders valid PR even when malformed entries exist")
+
+        local text = current_text()
+        assert(text:find("vim.NIL", 1, true) == nil, "null title must not render vim.NIL: " .. text)
+        assert(text:find("@ghost · updated unknown", 1, true) ~= nil, "null fields fall back safely: " .. text)
+    end)
+end
+
 local function test_open_picker_step_back_to_manual_pr_input()
     local fake_binary = write_fake_prs_binary(create_two_pr_payload())
     local opened_call = nil
@@ -193,49 +245,46 @@ end
 local function test_open_picker_empty_prs_notifies_user()
     local fake_binary = write_fake_prs_binary("[]")
     clear_notifications()
-    jpr.setup({ binary = fake_binary })
-    jpr.command({ "open" })
+    with_stubbed_session_methods({}, function()
+        jpr.setup({ binary = fake_binary })
+        jpr.command({ "open" })
 
-    assert(vim.wait(3000, function()
-        return has_notification("no open pull requests in this repository", vim.log.levels.INFO)
-    end), "empty PR list notifies user: " .. vim.inspect(notifications))
+        assert(vim.wait(3000, function()
+            return has_notification("no open pull requests in this repository", vim.log.levels.INFO)
+        end), "empty PR list notifies user: " .. vim.inspect(notifications))
 
-    assert(wizard.is_open() == true, "empty picker stays open for h back or close")
-    assert(current_text():find("No open pull requests in this repository", 1, true) ~= nil, "empty state message rendered")
-
-    wizard.close()
-    jpr.setup({})
+        assert(wizard.is_open() == true, "empty picker stays open for h back or close")
+        assert(current_text():find("No open pull requests in this repository", 1, true) ~= nil, "empty state message rendered")
+    end)
 end
 
 local function test_multi_step_palette_commands_smart_defaults()
-    view_mode.path = vim.fn.tempname()
-    view_mode.reset()
-    view_mode.set("unified")
+    with_temp_view_mode("unified", function()
+        local recorded = {}
+        with_stubbed_session_methods({
+            set_view_mode = function(mode) recorded[#recorded + 1] = { fn = "set_view_mode", mode = mode } end,
+            comment_current = function(opts) recorded[#recorded + 1] = { fn = "comment_current", opts = opts } end,
+            agent_current = function(provider) recorded[#recorded + 1] = { fn = "agent_current", provider = provider } end,
+        }, function()
+            jpr.command({})
+            helpers.press_key("jj<CR>")
+            assert(wizard.is_open() and current_text():find("▸ Side-by-Side Split  [split]", 1, true) ~= nil, "toggle defaults to split")
+            helpers.press_key("<CR>")
+            assert(not wizard.is_open() and recorded[#recorded].mode == "split", "toggle stepper calls set_view_mode('split')")
 
-    local recorded = {}
-    with_stubbed_session_methods({
-        set_view_mode = function(mode) recorded[#recorded + 1] = { fn = "set_view_mode", mode = mode } end,
-        comment_current = function(opts) recorded[#recorded + 1] = { fn = "comment_current", opts = opts } end,
-        agent_current = function(provider) recorded[#recorded + 1] = { fn = "agent_current", provider = provider } end,
-    }, function()
-        jpr.command({})
-        helpers.press_key("jj<CR>")
-        assert(wizard.is_open() and current_text():find("▸ Side-by-Side Split  [split]", 1, true) ~= nil, "toggle defaults to split")
-        helpers.press_key("<CR>")
-        assert(not wizard.is_open() and recorded[#recorded].mode == "split", "toggle stepper calls set_view_mode('split')")
+            jpr.command({})
+            helpers.press_key("jjjj<CR>")
+            assert(wizard.is_open() and current_text():find("▸ File-Level Comment  [file]", 1, true) ~= nil, "comment defaults to file")
+            helpers.press_key("<CR>")
+            assert(not wizard.is_open() and recorded[#recorded].opts.file == true, "comment stepper calls comment_current({ file = true })")
 
-        jpr.command({})
-        helpers.press_key("jjjj<CR>")
-        assert(wizard.is_open() and current_text():find("▸ File-Level Comment  [file]", 1, true) ~= nil, "comment defaults to file")
-        helpers.press_key("<CR>")
-        assert(not wizard.is_open() and recorded[#recorded].opts.file == true, "comment stepper calls comment_current({ file = true })")
-
-        jpr.setup({ agent = "codex" })
-        jpr.command({})
-        helpers.press_key(string.rep("j", 10) .. "<CR>")
-        assert(wizard.is_open() and current_text():find("▸ Codex  [codex]", 1, true) ~= nil, "agent defaults to config.agent")
-        helpers.press_key("<CR>")
-        assert(not wizard.is_open() and recorded[#recorded].provider == "codex", "agent stepper calls agent_current('codex')")
+            jpr.setup({ agent = "codex" })
+            jpr.command({})
+            helpers.press_key(string.rep("j", 10) .. "<CR>")
+            assert(wizard.is_open() and current_text():find("▸ Codex  [codex]", 1, true) ~= nil, "agent defaults to config.agent")
+            helpers.press_key("<CR>")
+            assert(not wizard.is_open() and recorded[#recorded].provider == "codex", "agent stepper calls agent_current('codex')")
+        end)
     end)
 end
 
@@ -272,18 +321,17 @@ local function test_direct_subcommand_args_and_validation()
     end)
 end
 
-local function test_open_tab_badge_and_open_agent_skips_provider_step()
+local function test_open_tab_badge_and_live_agent_skips_provider_step()
     local fake_binary = write_fake_prs_binary(create_two_pr_payload())
     local tab = vim.api.nvim_get_current_tabpage()
     local current_win = vim.api.nvim_get_current_win()
+    local live_buf = vim.api.nvim_create_buf(false, true)
     local original_by_tab = session.by_tab[tab]
     local agent_calls = {}
 
-    session.by_tab[tab] = { number = 42, repo = "octo/widgets", tab = tab, agent = { win = current_win } }
-    with_stubbed_session_methods({
-        agent_current = function(provider)
-            agent_calls[#agent_calls + 1] = { provider = provider }
-        end,
+    session.by_tab[tab] = { number = 42, repo = "octo/widgets", tab = tab, agent = { win = current_win, buf = live_buf, job = 99, exited = false, kind = "claude" } }
+    local is_ok, err = pcall(with_stubbed_session_methods, {
+        agent_current = function(provider) agent_calls[#agent_calls + 1] = { provider = provider } end,
     }, function()
         jpr.setup({ binary = fake_binary })
         jpr.command({ "open" })
@@ -293,19 +341,31 @@ local function test_open_tab_badge_and_open_agent_skips_provider_step()
         assert(current_text():find("#42  Add OAuth  [open]", 1, true) ~= nil, "open PR displays [open] badge")
         wizard.close()
 
-        assert(require("jpr.agent").is_open(session.by_tab[tab]) == true, "agent.is_open detects open window")
+        assert(agent.is_open(session.by_tab[tab]) == true, "agent.is_open detects open window")
         jpr.command({})
         helpers.press_key(string.rep("j", 10) .. "<CR>")
-        assert(not wizard.is_open(), "open agent skips provider stepper and closes palette")
-        assert(#agent_calls == 1 and agent_calls[1].provider == nil, "open agent calls agent_current(nil) immediately")
+        assert(not wizard.is_open() and #agent_calls == 1 and agent_calls[1].provider == nil, "open agent skips stepper")
+
+        -- Live-but-hidden agent also skips provider stepper.
+        session.by_tab[tab].agent.win = nil
+        assert(agent.is_open(session.by_tab[tab]) == false and agent.has_live_agent(session.by_tab[tab]) == true, "hidden live agent detected")
+        jpr.command({})
+        helpers.press_key(string.rep("j", 10) .. "<CR>")
+        assert(not wizard.is_open() and #agent_calls == 2 and agent_calls[2].provider == nil, "hidden live agent skips stepper")
     end)
     session.by_tab[tab] = original_by_tab
+    pcall(vim.api.nvim_buf_delete, live_buf, { force = true })
+    if not is_ok then
+        error(err, 0)
+    end
 end
 
-local function test_agent_toggle_forwards_explicit_agent_kind()
+local function test_agent_toggle_explicit_kind_launch_same_and_different()
     local launched_params = nil
-    local fake_session = { number = 7, tab = vim.api.nvim_get_current_tabpage() }
-    with_stubbed_session_methods({
+    local tab = vim.api.nvim_get_current_tabpage()
+    local fake_session = { number = 7, tab = tab }
+    local live_buf = vim.api.nvim_create_buf(false, true)
+    local is_ok, err = pcall(with_stubbed_session_methods, {
         request = function(_session, method, params)
             if method == "prepareAgentLaunch" then
                 launched_params = params
@@ -313,55 +373,65 @@ local function test_agent_toggle_forwards_explicit_agent_kind()
         end,
     }, function()
         jpr.setup({ agent = "claude" })
-        require("jpr.agent").toggle(fake_session, "codex")
-        assert(launched_params ~= nil and launched_params.agent == "codex", "agent.toggle forwards explicit agent_kind")
+        agent.toggle(fake_session, "codex")
+        assert(launched_params ~= nil and launched_params.agent == "codex", "agent.toggle launches explicit agent_kind")
         fake_session.agent_pending_callbacks = nil
+
+        -- Live hidden claude agent: explicit same provider reopens without switching notice.
+        fake_session.agent = { buf = live_buf, win = nil, job = 42, exited = false, kind = "claude" }
+        clear_notifications()
+        agent.toggle(fake_session, "claude")
+        assert(agent.is_open(fake_session) == true, "same explicit provider reopens hidden live agent")
+        assert(not has_notification("already running", vim.log.levels.INFO), "same provider emits no switch warning")
+
+        -- Live open claude agent: explicit different provider informs user and keeps window open.
+        clear_notifications()
+        agent.toggle(fake_session, "codex")
+        assert(agent.is_open(fake_session) == true, "different explicit provider does not close running agent")
+        assert(has_notification("already running claude; close it before switching to codex", vim.log.levels.INFO), "notifies running provider")
     end)
-end
-
-local function write_executable_script(script_lines)
-    local script_path = vim.fn.tempname() .. "-jpr-review"
-    vim.fn.writefile(script_lines, script_path)
-    vim.uv.fs_chmod(script_path, tonumber("755", 8))
-    return script_path
-end
-
-local function test_real_session_set_view_mode_updates_mode_and_redraws()
-    view_mode.path = vim.fn.tempname()
-    view_mode.reset()
-    view_mode.set("unified")
-
-    local tab = vim.api.nvim_get_current_tabpage()
-    local original_by_tab = session.by_tab[tab]
-    local original_diff, original_stream = package.loaded["jpr.views.diff"], package.loaded["jpr.views.stream"]
-    local diff_redraws, stream_refreshes = 0, 0
-    local fake_session = { number = 7, tab = tab, client = {}, is_read_only = false }
-    session.by_tab[tab] = fake_session
-    package.loaded["jpr.views.diff"] = { redraw_all = function() diff_redraws = diff_redraws + 1 end }
-    package.loaded["jpr.views.stream"] = { refresh = function() stream_refreshes = stream_refreshes + 1 end }
-
-    local is_ok, err = pcall(function()
-        clear_notifications()
-        session.set_view_mode("split")
-        assert(view_mode.get() == "split" and diff_redraws == 1 and stream_refreshes == 1, "set_view_mode switches to split and redraws")
-        assert(has_notification("split view", vim.log.levels.INFO), "set_view_mode notifies split view")
-
-        clear_notifications()
-        session.set_view_mode("unified")
-        assert(view_mode.get() == "unified" and diff_redraws == 2 and stream_refreshes == 2, "set_view_mode switches to unified and redraws")
-        assert(has_notification("unified view", vim.log.levels.INFO), "set_view_mode notifies unified view")
-
-        clear_notifications()
-        session.set_view_mode("invalid")
-        assert(view_mode.get() == "unified" and diff_redraws == 2, "invalid mode keeps previous view_mode")
-        assert(has_notification("invalid diff view", vim.log.levels.ERROR), "invalid mode emits error")
-    end)
-
-    session.by_tab[tab] = original_by_tab
-    package.loaded["jpr.views.diff"], package.loaded["jpr.views.stream"] = original_diff, original_stream
+    if fake_session.agent and fake_session.agent.win and vim.api.nvim_win_is_valid(fake_session.agent.win) then
+        pcall(vim.api.nvim_win_close, fake_session.agent.win, true)
+    end
+    pcall(vim.api.nvim_buf_delete, live_buf, { force = true })
     if not is_ok then
         error(err, 0)
     end
+end
+
+local function test_real_session_set_view_mode_updates_mode_and_redraws()
+    with_temp_view_mode("unified", function()
+        local tab = vim.api.nvim_get_current_tabpage()
+        local original_by_tab = session.by_tab[tab]
+        local original_diff, original_stream = package.loaded["jpr.views.diff"], package.loaded["jpr.views.stream"]
+        local diff_redraws, stream_refreshes = 0, 0
+        session.by_tab[tab] = { number = 7, tab = tab, client = {}, is_read_only = false }
+        package.loaded["jpr.views.diff"] = { redraw_all = function() diff_redraws = diff_redraws + 1 end }
+        package.loaded["jpr.views.stream"] = { refresh = function() stream_refreshes = stream_refreshes + 1 end }
+
+        local is_ok, err = pcall(function()
+            clear_notifications()
+            session.set_view_mode("split")
+            assert(view_mode.get() == "split" and diff_redraws == 1 and stream_refreshes == 1, "set_view_mode switches to split and redraws")
+            assert(has_notification("split view", vim.log.levels.INFO), "set_view_mode notifies split view")
+
+            clear_notifications()
+            session.set_view_mode("unified")
+            assert(view_mode.get() == "unified" and diff_redraws == 2 and stream_refreshes == 2, "set_view_mode switches to unified and redraws")
+            assert(has_notification("unified view", vim.log.levels.INFO), "set_view_mode notifies unified view")
+
+            clear_notifications()
+            session.set_view_mode("invalid")
+            assert(view_mode.get() == "unified" and diff_redraws == 2, "invalid mode keeps previous view_mode")
+            assert(has_notification("invalid diff view", vim.log.levels.ERROR), "invalid mode emits error")
+        end)
+
+        session.by_tab[tab] = original_by_tab
+        package.loaded["jpr.views.diff"], package.loaded["jpr.views.stream"] = original_diff, original_stream
+        if not is_ok then
+            error(err, 0)
+        end
+    end)
 end
 
 local function collect_list_open_prs_error(binary_path)
@@ -385,19 +455,19 @@ local function test_list_open_prs_error_paths()
 
     local failing_bin = write_executable_script({
         "#!/bin/sh",
-        "echo 'gh auth required' >&2",
+        "printf 'gh auth required\\007\\nsecond line\\n' >&2",
         "exit 1",
     })
     local exit_err = collect_list_open_prs_error(failing_bin)
-    assert(exit_err:find("gh auth required", 1, true) ~= nil, "non-zero exit surfaces stderr: " .. exit_err)
+    assert(exit_err == "gh auth required second line", "non-zero exit sanitizes control bytes and newlines: " .. vim.inspect(exit_err))
 
-    local malformed_bin = write_executable_script({
-        "#!/bin/sh",
-        "printf '{not-json\\n'",
-        "exit 0",
-    })
+    local malformed_bin = write_executable_script({ "#!/bin/sh", "printf '{not-json\\n'", "exit 0" })
     local parse_err = collect_list_open_prs_error(malformed_bin)
     assert(parse_err:find("failed to parse open pull requests", 1, true) ~= nil, "malformed JSON reports parse error: " .. parse_err)
+
+    local object_bin = write_executable_script({ "#!/bin/sh", "printf '{}\\n'", "exit 0" })
+    local object_err = collect_list_open_prs_error(object_bin)
+    assert(object_err:find("failed to parse open pull requests", 1, true) ~= nil, "JSON object {} rejected as non-list: " .. object_err)
 end
 
 local function test_comment_smart_default_preselects_line_on_diff_line()
@@ -411,10 +481,8 @@ local function test_comment_smart_default_preselects_line_on_diff_line()
     vim.b[buf].jpr_base_path = "README.md"
     session.by_tab[tab] = { number = 7, repo = "octo/widgets", tab = tab }
 
-    with_stubbed_session_methods({
-        comment_current = function(opts)
-            recorded_opts = opts
-        end,
+    local is_ok, err = pcall(with_stubbed_session_methods, {
+        comment_current = function(opts) recorded_opts = opts end,
     }, function()
         jpr.command({})
         helpers.press_key("jjjj<CR>")
@@ -427,20 +495,30 @@ local function test_comment_smart_default_preselects_line_on_diff_line()
 
     session.by_tab[tab] = original_by_tab
     vim.api.nvim_win_set_buf(0, previous_buf)
-    vim.api.nvim_buf_delete(buf, { force = true })
+    pcall(vim.api.nvim_buf_delete, buf, { force = true })
+    if not is_ok then
+        error(err, 0)
+    end
 end
 
-test_command_schema_completeness()
-test_bare_jpr_opens_palette_with_hover_helper_text()
-test_open_picker_lists_prs_hovers_metadata_and_opens_selected()
-test_open_picker_step_back_to_manual_pr_input()
-test_open_picker_empty_prs_notifies_user()
-test_multi_step_palette_commands_smart_defaults()
-test_direct_subcommand_args_and_validation()
-test_open_tab_badge_and_open_agent_skips_provider_step()
-test_agent_toggle_forwards_explicit_agent_kind()
-test_real_session_set_view_mode_updates_mode_and_redraws()
-test_list_open_prs_error_paths()
-test_comment_smart_default_preselects_line_on_diff_line()
+local is_suite_ok, suite_error = pcall(function()
+    test_command_schema_completeness()
+    test_bare_jpr_opens_palette_with_hover_helper_text()
+    test_open_picker_lists_prs_hovers_metadata_and_opens_selected()
+    test_open_picker_skips_malformed_entries_and_handles_null_title()
+    test_open_picker_step_back_to_manual_pr_input()
+    test_open_picker_empty_prs_notifies_user()
+    test_multi_step_palette_commands_smart_defaults()
+    test_direct_subcommand_args_and_validation()
+    test_open_tab_badge_and_live_agent_skips_provider_step()
+    test_agent_toggle_explicit_kind_launch_same_and_different()
+    test_real_session_set_view_mode_updates_mode_and_redraws()
+    test_list_open_prs_error_paths()
+    test_comment_smart_default_preselects_line_on_diff_line()
+end)
+cleanup_temp_files()
+if not is_suite_ok then
+    error(suite_error, 0)
+end
 
 print("palette_and_open_picker_spec: ok")

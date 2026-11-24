@@ -45,11 +45,11 @@ function M.list_open_prs(on_result, on_error)
         { cwd = vim.fn.getcwd(), text = true },
         vim.schedule_wrap(function(result)
             if result.code ~= 0 then
-                local stderr = vim.trim(result.stderr or "")
+                local stderr = crash.build_clean_text_from_raw(result.stderr)
                 return on_error(stderr ~= "" and stderr or "failed to list open pull requests")
             end
             local is_decoded, prs = pcall(vim.json.decode, result.stdout or "")
-            if not is_decoded or type(prs) ~= "table" or (next(prs) ~= nil and not vim.islist(prs)) then
+            if not is_decoded or not vim.islist(prs) then
                 return on_error("failed to parse open pull requests response")
             end
             on_result(prs)
