@@ -319,6 +319,117 @@ local function test_agent_toggle_forwards_explicit_agent_kind()
     end)
 end
 
+local function write_executable_script(script_lines)
+    local script_path = vim.fn.tempname() .. "-jpr-review"
+    vim.fn.writefile(script_lines, script_path)
+    vim.uv.fs_chmod(script_path, tonumber("755", 8))
+    return script_path
+end
+
+local function test_real_session_set_view_mode_updates_mode_and_redraws()
+    view_mode.path = vim.fn.tempname()
+    view_mode.reset()
+    view_mode.set("unified")
+
+    local tab = vim.api.nvim_get_current_tabpage()
+    local original_by_tab = session.by_tab[tab]
+    local original_diff, original_stream = package.loaded["jpr.views.diff"], package.loaded["jpr.views.stream"]
+    local diff_redraws, stream_refreshes = 0, 0
+    local fake_session = { number = 7, tab = tab, client = {}, is_read_only = false }
+    session.by_tab[tab] = fake_session
+    package.loaded["jpr.views.diff"] = { redraw_all = function() diff_redraws = diff_redraws + 1 end }
+    package.loaded["jpr.views.stream"] = { refresh = function() stream_refreshes = stream_refreshes + 1 end }
+
+    local is_ok, err = pcall(function()
+        clear_notifications()
+        session.set_view_mode("split")
+        assert(view_mode.get() == "split" and diff_redraws == 1 and stream_refreshes == 1, "set_view_mode switches to split and redraws")
+        assert(has_notification("split view", vim.log.levels.INFO), "set_view_mode notifies split view")
+
+        clear_notifications()
+        session.set_view_mode("unified")
+        assert(view_mode.get() == "unified" and diff_redraws == 2 and stream_refreshes == 2, "set_view_mode switches to unified and redraws")
+        assert(has_notification("unified view", vim.log.levels.INFO), "set_view_mode notifies unified view")
+
+        clear_notifications()
+        session.set_view_mode("invalid")
+        assert(view_mode.get() == "unified" and diff_redraws == 2, "invalid mode keeps previous view_mode")
+        assert(has_notification("invalid diff view", vim.log.levels.ERROR), "invalid mode emits error")
+    end)
+
+    session.by_tab[tab] = original_by_tab
+    package.loaded["jpr.views.diff"], package.loaded["jpr.views.stream"] = original_diff, original_stream
+    if not is_ok then
+        error(err, 0)
+    end
+end
+
+local function collect_list_open_prs_error(binary_path)
+    local received_error = nil
+    jpr.setup({ binary = binary_path })
+    session.list_open_prs(function()
+        error("expected list_open_prs to fail for " .. tostring(binary_path))
+    end, function(error_message)
+        received_error = error_message
+    end)
+    assert(vim.wait(3000, function()
+        return received_error ~= nil
+    end), "expected on_error callback to fire")
+    jpr.setup({})
+    return received_error
+end
+
+local function test_list_open_prs_error_paths()
+    local missing_err = collect_list_open_prs_error(vim.fn.tempname() .. "/missing-jpr-review")
+    assert(missing_err:find(":Lazy build jpr-nvim", 1, true) ~= nil, "missing binary hints :Lazy build jpr-nvim: " .. missing_err)
+
+    local failing_bin = write_executable_script({
+        "#!/bin/sh",
+        "echo 'gh auth required' >&2",
+        "exit 1",
+    })
+    local exit_err = collect_list_open_prs_error(failing_bin)
+    assert(exit_err:find("gh auth required", 1, true) ~= nil, "non-zero exit surfaces stderr: " .. exit_err)
+
+    local malformed_bin = write_executable_script({
+        "#!/bin/sh",
+        "printf '{not-json\\n'",
+        "exit 0",
+    })
+    local parse_err = collect_list_open_prs_error(malformed_bin)
+    assert(parse_err:find("failed to parse open pull requests", 1, true) ~= nil, "malformed JSON reports parse error: " .. parse_err)
+end
+
+local function test_comment_smart_default_preselects_line_on_diff_line()
+    local tab = vim.api.nvim_get_current_tabpage()
+    local buf = vim.api.nvim_create_buf(false, true)
+    local previous_buf = vim.api.nvim_get_current_buf()
+    local original_by_tab = session.by_tab[tab]
+    local recorded_opts = nil
+
+    vim.api.nvim_win_set_buf(0, buf)
+    vim.b[buf].jpr_base_path = "README.md"
+    session.by_tab[tab] = { number = 7, repo = "octo/widgets", tab = tab }
+
+    with_stubbed_session_methods({
+        comment_current = function(opts)
+            recorded_opts = opts
+        end,
+    }, function()
+        jpr.command({})
+        helpers.press_key("jjjj<CR>")
+        assert(wizard.is_open() == true, "comment opens stepper from palette on diff line")
+        assert(current_text():find("▸ Line / Selection Comment  [line]", 1, true) ~= nil, "comment defaults to line on diff line: " .. current_text())
+        helpers.press_key("<CR>")
+        assert(wizard.is_open() == false, "confirming line comment closes stepper")
+        assert(recorded_opts == nil or (not recorded_opts.file and not recorded_opts.suggest), "line comment dispatched without file/suggest flag")
+    end)
+
+    session.by_tab[tab] = original_by_tab
+    vim.api.nvim_win_set_buf(0, previous_buf)
+    vim.api.nvim_buf_delete(buf, { force = true })
+end
+
 test_command_schema_completeness()
 test_bare_jpr_opens_palette_with_hover_helper_text()
 test_open_picker_lists_prs_hovers_metadata_and_opens_selected()
@@ -328,5 +439,8 @@ test_multi_step_palette_commands_smart_defaults()
 test_direct_subcommand_args_and_validation()
 test_open_tab_badge_and_open_agent_skips_provider_step()
 test_agent_toggle_forwards_explicit_agent_kind()
+test_real_session_set_view_mode_updates_mode_and_redraws()
+test_list_open_prs_error_paths()
+test_comment_smart_default_preselects_line_on_diff_line()
 
 print("palette_and_open_picker_spec: ok")

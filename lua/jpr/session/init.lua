@@ -20,11 +20,6 @@ function M.current()
     return M.by_tab[vim.api.nvim_get_current_tabpage()]
 end
 
---- Whether the current tab has an active pull request review session.
-function M.has_current_session()
-    return M.current() ~= nil
-end
-
 --- Returns a set `{ [number] = true }` of pull request numbers currently open
 --- in valid tabs, used to mark `[open]` badges in the PR picker.
 function M.open_tab_numbers()
