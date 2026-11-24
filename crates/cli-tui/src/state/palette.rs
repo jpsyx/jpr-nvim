@@ -121,7 +121,7 @@ mod tests {
     }
 
     #[test]
-    fn palette_state_handles_empty_command_list_and_clamps_out_of_bounds_selection() {
+    fn palette_state_continues_on_empty_list_and_clamps_out_of_bounds_selection() {
         let mut empty = PaletteState::new();
         assert_eq!(empty.handle_key(KeyAction::Up, 0), PaletteAction::Continue);
         assert_eq!(

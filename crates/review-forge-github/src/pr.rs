@@ -219,7 +219,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_empty_pr_list() {
+    fn parse_pr_list_returns_empty_vec_for_empty_json_array() {
         assert_eq!(parse_pr_list("[]").unwrap(), Vec::new());
     }
 

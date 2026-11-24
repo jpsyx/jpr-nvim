@@ -3,9 +3,9 @@
 use cli_tui::{CommandSpec, SelectOption, StepKind, StepSpec};
 
 use super::steps::{
-    answer_equals, create_custom_repo_steps, create_open_pr_picker_step, create_required_pr_step,
-    create_required_repo_step, create_target_steps, non_empty_env, validate_non_empty,
-    validate_positive_u32, validate_pr_number, validate_u64,
+    create_custom_repo_steps, create_open_pr_picker_step, create_required_pr_step,
+    create_required_repo_step, create_target_steps, has_answer_value, non_empty_env,
+    validate_non_empty, validate_positive_u32, validate_pr_number, validate_u64,
 };
 
 const DEFAULT_POLL_SECONDS: &str = "60";
@@ -91,7 +91,7 @@ fn create_checkout_pr_steps() -> Vec<StepSpec> {
                 placeholder: Some("42".to_owned()),
             },
         )
-        .with_when(|answers| answer_equals(answers, "source", "manual"))
+        .with_when(|answers| has_answer_value(answers, "source", "manual"))
         .with_validate(validate_pr_number),
     ]
 }
@@ -127,7 +127,7 @@ fn create_custom_worktree_steps() -> Vec<StepSpec> {
             },
         )
         .with_default_fn(|_| non_empty_env("JPR_WORKTREE_CMD").unwrap_or_default())
-        .with_when(|answers| answer_equals(answers, "custom_worktree", "true"))
+        .with_when(|answers| has_answer_value(answers, "custom_worktree", "true"))
         .with_validate(validate_non_empty("worktree command")),
     ]
 }
@@ -214,7 +214,7 @@ fn create_prepass_write_spec() -> CommandSpec {
                 placeholder: Some("findings.json".to_owned()),
             },
         )
-        .with_when(|answers| answer_equals(answers, "input_mode", "file"))
+        .with_when(|answers| has_answer_value(answers, "input_mode", "file"))
         .with_validate(validate_non_empty("input file path")),
     );
     CommandSpec::new(

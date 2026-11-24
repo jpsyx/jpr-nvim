@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result, bail};
 use cli_tui::Answers;
 
-use super::steps::non_empty_env;
+use super::steps::{has_answer_value, non_empty_env};
 use crate::cli::Command;
 use crate::commands;
 
@@ -103,7 +103,7 @@ struct ResolvedTarget {
 }
 
 fn answers_to_prs(answers: &Answers) -> Result<Command> {
-    let repo = if is_answer_true(answers, "custom_repo") {
+    let repo = if has_answer_value(answers, "custom_repo", "true") {
         Some(parse_required_repo(answers, "repo")?)
     } else {
         None
@@ -124,12 +124,12 @@ fn answers_to_checkout(answers: &Answers) -> Result<Command> {
         Some("list") | None => parse_required_pr(answers, "pr")?,
         Some(other) => bail!("unknown checkout source {other:?}"),
     };
-    let repo = if is_answer_true(answers, "custom_repo") {
+    let repo = if has_answer_value(answers, "custom_repo", "true") {
         Some(parse_required_repo(answers, "repo")?)
     } else {
         None
     };
-    let worktree_cmd = if is_answer_true(answers, "custom_worktree") {
+    let worktree_cmd = if has_answer_value(answers, "custom_worktree", "true") {
         Some(require_non_empty(answers, "worktree_cmd")?)
     } else {
         None
@@ -147,7 +147,7 @@ fn answers_to_threads(answers: &Answers) -> Result<Command> {
         pr: target.pr,
         repo: target.repo,
         socket: target.socket,
-        is_local_only: is_answer_true(answers, "is_local_only"),
+        is_local_only: has_answer_value(answers, "is_local_only", "true"),
     })
 }
 
@@ -216,10 +216,6 @@ fn answers_to_target(answers: &Answers) -> Result<ResolvedTarget> {
         Some(other) => bail!("unknown target mode {other:?}"),
         None => bail!("missing target_mode answer"),
     }
-}
-
-fn is_answer_true(answers: &Answers, step_id: &str) -> bool {
-    answers.get(step_id).map(String::as_str) == Some("true")
 }
 
 fn require_non_empty(answers: &Answers, step_id: &str) -> Result<String> {

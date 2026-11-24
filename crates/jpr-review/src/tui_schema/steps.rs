@@ -33,7 +33,7 @@ pub(super) fn non_empty_env(variable_name: &str) -> Option<String> {
         .filter(|value| !value.is_empty())
 }
 
-pub(super) fn answer_equals(answers: &Answers, step_id: &str, expected: &str) -> bool {
+pub(super) fn has_answer_value(answers: &Answers, step_id: &str, expected: &str) -> bool {
     answers.get(step_id).map(String::as_str) == Some(expected)
 }
 
@@ -56,7 +56,7 @@ pub(super) fn create_custom_repo_steps(
         )
         .with_default("false"),
         create_required_repo_step()
-            .with_when(|answers| answer_equals(answers, "custom_repo", "true")),
+            .with_when(|answers| has_answer_value(answers, "custom_repo", "true")),
     ]
 }
 
@@ -72,9 +72,13 @@ pub(super) fn create_target_steps() -> Vec<StepSpec> {
             },
         )
         .with_default_fn(|_| non_empty_env("JPR_SOCKET").unwrap_or_default())
-        .with_when(|answers| answer_equals(answers, "target_mode", "socket"))
+        .with_when(|answers| has_answer_value(answers, "target_mode", "socket"))
         .with_validate(validate_non_empty("socket path")),
-        create_agent_pr_step().with_when(|answers| answer_equals(answers, "target_mode", "pr")),
+        create_required_pr_step()
+            .with_default_fn(|answers| {
+                get_agent_pr_default_from_answers(answers, non_empty_env("JPR_PR").as_deref())
+            })
+            .with_when(|answers| has_answer_value(answers, "target_mode", "pr")),
         StepSpec::new(
             "repo",
             "Repository (Optional)",
@@ -83,7 +87,7 @@ pub(super) fn create_target_steps() -> Vec<StepSpec> {
                 placeholder: Some("owner/name (blank infers from git)".to_owned()),
             },
         )
-        .with_when(|answers| answer_equals(answers, "target_mode", "pr"))
+        .with_when(|answers| has_answer_value(answers, "target_mode", "pr"))
         .with_validate(validate_optional_repo),
     ]
 }
@@ -121,13 +125,7 @@ pub(super) fn create_required_pr_step() -> StepSpec {
     .with_validate(validate_pr_number)
 }
 
-fn create_agent_pr_step() -> StepSpec {
-    create_required_pr_step().with_default_fn(|answers| {
-        resolve_agent_pr_default(answers, non_empty_env("JPR_PR").as_deref())
-    })
-}
-
-pub(super) fn resolve_agent_pr_default(answers: &Answers, env_pr: Option<&str>) -> String {
+pub(super) fn get_agent_pr_default_from_answers(answers: &Answers, env_pr: Option<&str>) -> String {
     let has_explicit_repo = answers
         .get("repo")
         .is_some_and(|value| !value.trim().is_empty());
@@ -157,11 +155,11 @@ pub(super) fn create_open_pr_picker_step() -> StepSpec {
         "Select the open pull request to check out into a review worktree.",
         StepKind::DynamicSelect(Arc::new(load_open_pull_request_options)),
     )
-    .with_when(|answers| answer_equals(answers, "source", "list"))
+    .with_when(|answers| has_answer_value(answers, "source", "list"))
 }
 
-pub(super) fn resolve_checkout_loader_repo(answers: &Answers) -> Option<String> {
-    if !answer_equals(answers, "custom_repo", "true") {
+pub(super) fn get_checkout_repo_from_answers(answers: &Answers) -> Option<String> {
+    if !has_answer_value(answers, "custom_repo", "true") {
         return None;
     }
     answers
@@ -173,7 +171,7 @@ pub(super) fn resolve_checkout_loader_repo(answers: &Answers) -> Option<String> 
 
 fn load_open_pull_request_options(answers: &Answers) -> Result<Vec<SelectOption>> {
     let cwd = env::current_dir().context("reading the current directory")?;
-    let target_repo = resolve_checkout_loader_repo(answers);
+    let target_repo = get_checkout_repo_from_answers(answers);
     let summaries = GhForge::new(cwd, target_repo)
         .open_pull_requests(DEFAULT_PR_LIST_LIMIT)
         .context("loading open pull requests")?;

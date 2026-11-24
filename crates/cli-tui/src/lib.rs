@@ -16,7 +16,7 @@ pub use runner::{
 };
 pub use schema::{
     Answers, CommandSpec, DefaultProvider, OptionLoader, SelectOption, StepKind, StepSpec,
-    ValueValidator, WhenPredicate, prune_inactive_answers, resolve_active_steps,
+    ValueValidator, WhenPredicate, get_active_steps_from_command, prune_inactive_answers,
     validate_command_specs,
 };
 pub use state::{KeyAction, PaletteAction, PaletteState, WizardOutcome, WizardState};

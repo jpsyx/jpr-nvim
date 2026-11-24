@@ -199,14 +199,20 @@ fn initial_prepass_write_answers(
     Some(("prepass-write", answers))
 }
 
-const fn has_resolved_target(flags: TargetFlags<'_>, env: TargetEnv<'_>) -> bool {
+fn parse_positive_env_pr(raw: &str) -> Option<u64> {
+    crate::commands::parse_pr_number(raw)
+        .ok()
+        .filter(|&number| number > 0)
+}
+
+fn has_resolved_target(flags: TargetFlags<'_>, env: TargetEnv<'_>) -> bool {
     if flags.socket.is_some() || flags.pr.is_some() {
         return true;
     }
     if flags.repo.is_some() {
         return false;
     }
-    env.socket.is_some() || env.pr.is_some()
+    env.socket.is_some() || env.pr.and_then(parse_positive_env_pr).is_some()
 }
 
 fn prefill_target_answers(answers: &mut Answers, flags: TargetFlags<'_>, env: TargetEnv<'_>) {
@@ -226,9 +232,9 @@ fn prefill_target_answers(answers: &mut Answers, flags: TargetFlags<'_>, env: Ta
     } else if let Some(socket_value) = env.socket {
         answers.insert("target_mode".to_owned(), "socket".to_owned());
         answers.insert("socket".to_owned(), socket_value.to_owned());
-    } else if let Some(pr_value) = env.pr {
+    } else if let Some(pr_number) = env.pr.and_then(parse_positive_env_pr) {
         answers.insert("target_mode".to_owned(), "pr".to_owned());
-        answers.insert("pr".to_owned(), pr_value.to_owned());
+        answers.insert("pr".to_owned(), pr_number.to_string());
         answers.insert("repo".to_owned(), String::new());
     }
 }

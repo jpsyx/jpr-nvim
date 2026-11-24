@@ -28,7 +28,8 @@ use crate::cli::{Cli, Command};
 use crate::prompt::{self, Question};
 use crate::theme::Theme;
 
-/// Runs a single resolved subcommand.
+/// Dispatches a single already-resolved [`Command`], called by [`run`] and by
+/// the binary after interactive palette or wizard completion.
 pub fn run_command(command: &Command, theme: Theme) -> Result<()> {
     match command {
         Command::Checkout {

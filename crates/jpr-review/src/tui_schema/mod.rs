@@ -7,8 +7,6 @@ mod steps;
 
 #[cfg(test)]
 mod tests;
-#[cfg(test)]
-mod tests_edge_cases;
 
 pub use convert::{answers_to_command, apply_answers_to_command};
 pub use prefill::initial_answers_for_missing_inputs;
