@@ -1,4 +1,4 @@
--- Declarative schema for all 14 `:Jpr` subcommands, driving the floating
+-- Declarative schema for all 15 `:Jpr` subcommands, driving the floating
 -- command palette, interactive steppers, and subcommand argument completion.
 local M = {}
 
@@ -258,7 +258,19 @@ local function create_session_action_spec(id, label, help, session_method)
     }
 end
 
---- Builds the ordered list of declarative specs for all 14 `:Jpr` subcommands.
+local function create_keys_command_spec()
+    return {
+        id = "keys",
+        label = "Keyboard Shortcuts",
+        help = "Show all keyboard shortcuts for navigating reviews, comments, panels, and menus.",
+        requires_session = false,
+        execute = function()
+            require("jpr.views.cheatsheet").open()
+        end,
+    }
+end
+
+--- Builds the ordered list of declarative specs for all 15 `:Jpr` subcommands.
 --- @return table[]
 function M.create_command_specs()
     return {
@@ -276,6 +288,7 @@ function M.create_command_specs()
         create_session_action_spec("send", "Send Local Threads to Agent", "Prompt the coding agent to address pending local review threads in this worktree.", "send_current"),
         create_session_action_spec("prepass", "Run Agent Pre-Pass", "Ask the coding agent to scan the pull request diff and post local pre-pass findings.", "prepass_current"),
         create_session_action_spec("close", "Close Review Session", "Close the current tab's pull request review session and stop its background engine.", "close_current"),
+        create_keys_command_spec(),
     }
 end
 
@@ -291,7 +304,7 @@ function M.find_command_spec(id)
     return nil
 end
 
---- Returns the ordered list of all 14 `:Jpr` subcommand IDs.
+--- Returns the ordered list of all 15 `:Jpr` subcommand IDs.
 --- @return string[]
 function M.list_command_ids()
     local ids = {}

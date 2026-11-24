@@ -112,6 +112,9 @@ function M.attach(stream_mod, find_stream_window)
         map("[f", function(current_session) stream_mod.jump(current_session, "files", -1) end, "Previous file")
         map("]h", function(current_session) stream_mod.jump(current_session, "hunks", 1) end, "Next hunk")
         map("[h", function(current_session) stream_mod.jump(current_session, "hunks", -1) end, "Previous hunk")
+        vim.keymap.set("n", "?", function()
+            require("jpr.views.cheatsheet").open()
+        end, { buffer = buf, nowait = true, silent = true, desc = "Show Jpr keyboard shortcuts" })
         require("jpr").bind_buffer_keys(buf)
     end
 end

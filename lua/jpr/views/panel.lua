@@ -47,6 +47,9 @@ function M.open(session)
     vim.keymap.set("n", "v", function()
         M.toggle_viewed_under_cursor(session)
     end, { buffer = buf, desc = "Toggle viewed for the file under the cursor" })
+    vim.keymap.set("n", "?", function()
+        require("jpr.views.cheatsheet").open()
+    end, { buffer = buf, nowait = true, silent = true, desc = "Show Jpr keyboard shortcuts" })
     M.render(session, session.view or {})
 end
 

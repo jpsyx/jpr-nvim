@@ -11,8 +11,13 @@ return function(context)
         local specs = commands_schema.create_command_specs()
         local is_valid, validation_error = tui_schema.validate_command_specs(specs)
         assert(is_valid == true, "command specs valid: " .. tostring(validation_error))
-        assert(#specs == 14, "expected 14 command specs, got " .. tostring(#specs))
+        assert(#specs == 15, "expected 15 command specs, got " .. tostring(#specs))
         assert(vim.deep_equal(commands_schema.list_command_ids(), jpr.subcommands), "list_command_ids matches jpr.subcommands")
+
+        local keys_spec = commands_schema.find_command_spec("keys")
+        assert(keys_spec ~= nil, "keys command spec is registered")
+        assert(keys_spec.label == "Keyboard Shortcuts", "keys command has human-readable label")
+        assert(keys_spec.requires_session == false, "keys command does not require a session")
 
         for _, spec in ipairs(specs) do
             assert(spec.label ~= spec.id, "label must be human-readable and distinct from id: " .. spec.id)

@@ -25,10 +25,11 @@ assert(
 assert(
     vim.deep_equal(
         jpr.complete("", "Jpr "),
-        { "open", "sync", "toggle", "stream", "comment", "suggest", "expand", "conversation", "submit", "push", "agent", "send", "prepass", "close" }
+        { "open", "sync", "toggle", "stream", "comment", "suggest", "expand", "conversation", "submit", "push", "agent", "send", "prepass", "close", "keys" }
     ),
     "all subcommands"
 )
+assert(vim.deep_equal(jpr.complete("k", "Jpr k"), { "keys" }), "filtered k subcommand")
 assert(vim.deep_equal(jpr.complete("s", "Jpr s"), { "sync", "stream", "suggest", "submit", "send" }), "filtered s subcommands")
 assert(vim.deep_equal(jpr.complete("p", "Jpr p"), { "push", "prepass" }), "filtered p subcommands")
 assert(vim.deep_equal(jpr.complete("c", "Jpr c"), { "comment", "conversation", "close" }), "filtered c subcommands")

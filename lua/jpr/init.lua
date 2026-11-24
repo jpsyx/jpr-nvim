@@ -257,6 +257,12 @@ local ZERO_ARG_SESSION_METHODS = {
 
 local function dispatch_direct_subcommand(session, args, cmd_opts, context)
     local subcommand = args[1]
+    if subcommand == "keys" then
+        if #args > 1 then
+            return M.error(":Jpr keys does not accept arguments")
+        end
+        return require("jpr.views.cheatsheet").open()
+    end
     if OPTIONAL_ARG_SUBCOMMANDS[subcommand] then
         if #args > 2 then
             return M.error(("too many arguments for :Jpr %s"):format(subcommand))
