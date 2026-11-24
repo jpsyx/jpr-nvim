@@ -264,9 +264,121 @@ local function assert_end_to_end_open_flow()
     session.close_current()
 end
 
+local function assert_spawn_failure_cleans_up_loading_tab_and_allows_retry()
+    jpr.setup({ binary = fake_engine })
+    local original_system, original_notify = vim.system, vim.notify
+    local notifications, spawn_attempts = {}, 0
+    vim.notify = function(message, level)
+        notifications[#notifications + 1] = { message = message, level = level }
+    end
+    vim.system = function()
+        spawn_attempts = spawn_attempts + 1
+        if spawn_attempts == 1 then
+            error("ENOENT: failed to spawn")
+        end
+        return { kill = function() end }
+    end
+
+    local tabs_before = #vim.api.nvim_list_tabpages()
+    local is_ok = pcall(session.open, 88)
+    assert(is_ok, "vim.system throw must be caught by session.open")
+    assert(#vim.api.nvim_list_tabpages() == tabs_before, "spawn failure closes loading tab")
+    assert(vim.fn.bufnr("jpr://loading/88") == -1, "spawn failure wipes loading buffer")
+    assert(#notifications == 1 and notifications[1].level == vim.log.levels.ERROR, "spawn failure notifies ERROR")
+    assert(notifications[1].message:find("ENOENT: failed to spawn", 1, true) ~= nil, "reports spawn error: " .. notifications[1].message)
+
+    session.open(88)
+    assert(spawn_attempts == 2, "pending state cleared so retry launches a new checkout")
+    session.close_current()
+    vim.system, vim.notify = original_system, original_notify
+end
+
+local function assert_manual_tabclose_kills_pending_checkout_process()
+    jpr.setup({ binary = fake_engine })
+    local original_system, original_notify = vim.system, vim.notify
+    local killed_signals, spawn_count = {}, 0
+    vim.notify = function() end
+    vim.system = function()
+        spawn_count = spawn_count + 1
+        return {
+            kill = function(_, signal)
+                killed_signals[#killed_signals + 1] = signal
+            end,
+        }
+    end
+
+    session.open(89)
+    assert(spawn_count == 1, "initial checkout spawned")
+    vim.cmd("tabclose")
+    assert(#killed_signals == 1, "manual :tabclose immediately kills in-flight checkout subprocess")
+    assert(vim.fn.bufnr("jpr://loading/89") == -1, "manual :tabclose wipes loading buffer")
+
+    session.open(89)
+    assert(spawn_count == 2, "manual :tabclose cleared pending state so reopen launches checkout")
+    session.close_current()
+    vim.system, vim.notify = original_system, original_notify
+end
+
+local function assert_tcd_failure_cleans_up_loading_tab()
+    jpr.setup({ binary = fake_engine })
+    local calls, notifications, restore = stub_system_and_notify()
+    local tabs_before = #vim.api.nvim_list_tabpages()
+    session.open(90)
+    local bad_json = vim.json.encode({
+        worktree = vim.fn.tempname() .. "/missing-worktree-dir",
+        repo = "octo/widgets",
+        number = 90,
+        title = "Broken worktree",
+    })
+    calls[1].on_exit({ code = 0, stdout = bad_json .. "\n", stderr = "" })
+    assert(vim.wait(1000, function()
+        return #notifications >= 1
+    end), "tcd failure notifies error")
+    assert(notifications[1].level == vim.log.levels.ERROR, "tcd failure level is ERROR")
+    assert(#vim.api.nvim_list_tabpages() == tabs_before, "tcd failure closes loading tab")
+    assert(vim.fn.bufnr("jpr://loading/90") == -1, "tcd failure wipes loading buffer")
+    assert(next(session.by_tab) == nil, "tcd failure does not leave a registered session")
+    restore()
+end
+
+local function assert_user_file_in_pending_tab_is_preserved()
+    jpr.setup({ binary = fake_engine })
+    local calls, _, restore = stub_system_and_notify()
+    local worktree = vim.fn.tempname()
+    vim.fn.mkdir(worktree, "p")
+    vim.fn.writefile({ "hello", "new" }, worktree .. "/README.md")
+    vim.fn.writefile({ "keep my notes" }, worktree .. "/notes.txt")
+
+    session.open(91)
+    local pr_tab = vim.api.nvim_get_current_tabpage()
+    vim.cmd.edit(vim.fn.fnameescape(worktree .. "/notes.txt"))
+    local user_buf = vim.api.nvim_get_current_buf()
+    local ok_json = vim.json.encode({
+        worktree = worktree,
+        repo = "octo/widgets",
+        number = 91,
+        title = "User file test",
+    })
+    calls[1].on_exit({ code = 0, stdout = ok_json .. "\n", stderr = "" })
+    assert(vim.wait(3000, function()
+        local active = session.by_tab[pr_tab]
+        return active ~= nil and active.stream ~= nil and active.stream.layout ~= nil
+    end), "session started and synced after user opened file in pending tab")
+
+    local main_win = require("jpr.views.main_window").find(session.by_tab[pr_tab])
+    assert(vim.api.nvim_win_get_buf(main_win) == user_buf, "user-opened file in pending tab is preserved across stage 2 and stream")
+    assert(vim.fn.bufnr("jpr://loading/91") == -1, "loading buffer was not reopened over user file")
+    restore()
+    session.close_current()
+end
+
 assert_stage_1_and_2_layout()
 assert_stage_3_and_4_layout()
 assert_loading_buffer_and_timer_lifecycle()
 assert_end_to_end_open_flow()
+assert_spawn_failure_cleans_up_loading_tab_and_allows_retry()
+assert_manual_tabclose_kills_pending_checkout_process()
+assert_tcd_failure_cleans_up_loading_tab()
+assert_user_file_in_pending_tab_is_preserved()
 
 print("loading_view_spec: ok")

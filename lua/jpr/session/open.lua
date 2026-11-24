@@ -92,6 +92,38 @@ local function wipe_initial_empty_buffer(buf)
     end
 end
 
+local function cancel_pending_checkout(pending)
+    if not pending then
+        return
+    end
+    if pending_by_number[pending.number] == pending then
+        pending_by_number[pending.number] = nil
+    end
+    pending.is_canceled = true
+    local proc = pending.process
+    pending.process = nil
+    if type(proc) == "table" and type(proc.kill) == "function" then
+        pcall(proc.kill, proc, 15)
+    end
+    require("jpr.views.loading").close(pending)
+end
+
+local function cancel_closed_pending_tabs()
+    for _, pending in pairs(pending_by_number) do
+        if not vim.api.nvim_tabpage_is_valid(pending.tab) then
+            cancel_pending_checkout(pending)
+        end
+    end
+end
+
+local function register_pending_tab_close_autocmd()
+    local augroup = vim.api.nvim_create_augroup("jpr-pending-open", { clear = true })
+    vim.api.nvim_create_autocmd("TabClosed", {
+        group = augroup,
+        callback = cancel_closed_pending_tabs,
+    })
+end
+
 local function find_existing_tab(session_mod, number, repo)
     for tab, existing in pairs(session_mod.by_tab) do
         local is_same_repo = not repo or existing.repo:lower() == repo:lower()
@@ -102,8 +134,7 @@ local function find_existing_tab(session_mod, number, repo)
     local pending = pending_by_number[number]
     if pending then
         if not vim.api.nvim_tabpage_is_valid(pending.tab) then
-            require("jpr.views.loading").close(pending)
-            pending_by_number[number] = nil
+            cancel_pending_checkout(pending)
         else
             local is_same_repo = not repo or not pending.repo or pending.repo:lower() == repo:lower()
             if is_same_repo then
@@ -115,15 +146,9 @@ local function find_existing_tab(session_mod, number, repo)
 end
 
 local function close_pending_tab(tab)
-    for number, pending in pairs(pending_by_number) do
+    for _, pending in pairs(pending_by_number) do
         if pending.tab == tab then
-            pending_by_number[number] = nil
-            local proc = pending.process
-            pending.process = nil
-            if type(proc) == "table" and type(proc.kill) == "function" then
-                pcall(proc.kill, proc, 15)
-            end
-            require("jpr.views.loading").close(pending)
+            cancel_pending_checkout(pending)
             close_tab_if_not_last(tab)
             return true
         end
@@ -167,7 +192,7 @@ local function handle_checkout_exit(session_mod, number, pending_session, stderr
         pending_by_number[number] = nil
     end
     pending_session.process = nil
-    if not was_active or not vim.api.nvim_tabpage_is_valid(pending_session.tab) then
+    if pending_session.is_canceled or not was_active or not vim.api.nvim_tabpage_is_valid(pending_session.tab) then
         return loading.close(pending_session)
     end
     if result.code ~= 0 then
@@ -197,6 +222,7 @@ local function open_pull_request(session_mod, number, repo)
         return jpr().error(("jpr-review binary not found at %s; run :Lazy build jpr-nvim"):format(clean_binary_path))
     end
     jpr().define_highlights()
+    register_pending_tab_close_autocmd()
     vim.cmd("tabnew")
     local tab = vim.api.nvim_get_current_tabpage()
     local initial_buf = vim.api.nvim_get_current_buf()
@@ -209,13 +235,21 @@ local function open_pull_request(session_mod, number, repo)
     })
     wipe_initial_empty_buffer(initial_buf)
     local stderr_chunks, on_stderr = create_stderr_collector(number, pending_session)
-    pending_session.process = vim.system(
+    local is_started, process_or_error = pcall(
+        vim.system,
         session_mod.checkout_args(number, repo),
         { cwd = vim.fn.getcwd(), text = true, stderr = on_stderr },
         vim.schedule_wrap(function(result)
             handle_checkout_exit(session_mod, number, pending_session, stderr_chunks, result)
         end)
     )
+    if not is_started then
+        cancel_pending_checkout(pending_session)
+        close_tab_if_not_last(tab)
+        local clean_error = crash.build_clean_text_from_raw(process_or_error)
+        return jpr().error(clean_error ~= "" and clean_error or "failed to start checkout")
+    end
+    pending_session.process = process_or_error
 end
 
 --- Attaches PR listing, checkout argument building/parsing, and `:Jpr open`
@@ -230,6 +264,11 @@ function M.attach(session_mod)
     --- Cancels and closes an in-flight loading checkout tab if `tab` is one.
     function session_mod.close_pending_tab(tab)
         return close_pending_tab(tab)
+    end
+
+    --- Cancels any in-flight checkouts whose loading tabs have been closed.
+    function session_mod.cancel_closed_pending_tabs()
+        return cancel_closed_pending_tabs()
     end
 
     --- Runs `jpr-review prs` asynchronously in the current working directory and

@@ -63,17 +63,15 @@ function M.request(session, method, params, on_result, on_error)
     end)
 end
 
+local function is_clean_unnamed_buffer(buf)
+    return buf and vim.api.nvim_buf_is_valid(buf) and vim.api.nvim_buf_get_name(buf) == "" and not vim.bo[buf].modified
+end
+
 --- Wipes the empty buffer `tabnew` made for `session`, unless it was named,
 --- edited or is still on screen.
 local function wipe_placeholder(session)
     local buf = session.placeholder_buf
-    if
-        buf
-        and vim.api.nvim_buf_is_valid(buf)
-        and vim.api.nvim_buf_get_name(buf) == ""
-        and not vim.bo[buf].modified
-        and #vim.fn.win_findbuf(buf) == 0
-    then
+    if is_clean_unnamed_buffer(buf) and #vim.fn.win_findbuf(buf) == 0 then
         vim.api.nvim_buf_delete(buf, { force = true })
     end
 end
@@ -118,6 +116,7 @@ end
 
 --- Forgets the sessions whose tab was closed, e.g. by `:tabclose`.
 function M.forget_closed_tabs()
+    M.cancel_closed_pending_tabs()
     for tab, session in pairs(M.by_tab) do
         if not vim.api.nvim_tabpage_is_valid(tab) then
             forget(session)
@@ -253,46 +252,47 @@ local function setup_session_autocmds()
     })
 end
 
-local function create_initial_view_from_info(info)
-    if type(info.title) == "string" and info.title ~= "" then
-        return { pr = { number = info.number, title = info.title } }
-    end
-    return {}
+local function is_empty_unnamed_buffer(buf)
+    return is_clean_unnamed_buffer(buf)
+        and vim.api.nvim_buf_line_count(buf) == 1
+        and vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1] == ""
 end
 
 local function prepare_session_tab(info, pending_session)
     local loading = require("jpr.views.loading")
-    local initial_view = create_initial_view_from_info(info)
-    if pending_session and vim.api.nvim_tabpage_is_valid(pending_session.tab) then
-        vim.api.nvim_set_current_tabpage(pending_session.tab)
-        -- Escaped: Ex commands expand `%` and `#` in a path.
-        vim.cmd.tcd(vim.fn.fnameescape(info.worktree))
-        pending_session.number = info.number
-        pending_session.repo = info.repo
-        pending_session.worktree = info.worktree
-        pending_session.view = initial_view
-        pending_session.process = nil
-        if pending_session.loading then
-            loading.update(pending_session, { number = info.number, title = info.title, stage = 2, detail = "" })
-        else
-            loading.open(pending_session, { number = info.number, title = info.title, stage = 2 })
+    local initial_view = (type(info.title) == "string" and info.title ~= "")
+        and { pr = { number = info.number, title = info.title } }
+        or {}
+    local is_reusing = pending_session ~= nil and vim.api.nvim_tabpage_is_valid(pending_session.tab)
+    local session = is_reusing and pending_session or {}
+    if is_reusing then
+        local is_switched, switch_error = pcall(vim.api.nvim_set_current_tabpage, session.tab)
+        if not is_switched then
+            forget(session)
+            jpr().error("could not switch to loading tab: " .. crash.build_clean_text_from_raw(switch_error))
+            return nil
         end
-        return pending_session
+    else
+        vim.cmd("tabnew")
+        session.tab = vim.api.nvim_get_current_tabpage()
+        session.placeholder_buf = vim.api.nvim_get_current_buf()
     end
-    vim.cmd("tabnew")
+    session.number, session.repo, session.worktree = info.number, info.repo, info.worktree
+    session.view, session.process = initial_view, nil
     -- Escaped: Ex commands expand `%` and `#` in a path.
-    vim.cmd.tcd(vim.fn.fnameescape(info.worktree))
-    local tab = vim.api.nvim_get_current_tabpage()
-    local session = {
-        number = info.number,
-        repo = info.repo,
-        worktree = info.worktree,
-        tab = tab,
-        view = initial_view,
-        placeholder_buf = vim.api.nvim_get_current_buf(),
-    }
-    loading.open(session, { number = info.number, title = info.title, stage = 2 })
-    wipe_placeholder(session)
+    local is_tcd_ok, tcd_error = pcall(vim.cmd.tcd, vim.fn.fnameescape(info.worktree))
+    if not is_tcd_ok then
+        forget(session)
+        jpr().error("could not enter worktree: " .. crash.build_clean_text_from_raw(tcd_error))
+        return nil
+    end
+    if session.loading then
+        loading.update(session, { number = info.number, title = info.title, stage = 2, detail = "" })
+    elseif not is_reusing or is_empty_unnamed_buffer(vim.api.nvim_get_current_buf()) then
+        session.placeholder_buf = session.placeholder_buf or vim.api.nvim_get_current_buf()
+        loading.open(session, { number = info.number, title = info.title, stage = 2 })
+        wipe_placeholder(session)
+    end
     return session
 end
 
@@ -303,6 +303,9 @@ function M.start(info, pending_session)
     jpr().define_highlights()
     setup_session_autocmds()
     local session = prepare_session_tab(info, pending_session)
+    if not session then
+        return
+    end
     require("jpr.views.diff").attach(session)
     -- Registered only once the panel and the engine are up, so a failure here
     -- never leaves a half-built session for `:Jpr open` to refocus.
