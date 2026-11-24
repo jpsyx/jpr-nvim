@@ -1,6 +1,6 @@
 //! Tests for local worktree file merging, viewed lifecycle, origin-split comments, and rename migration.
 
-use review_model::{Anchor, Origin, PrepassFinding, StreamRow, ViewMode, ViewedState};
+use review_model::{Anchor, Event, Origin, PrepassFinding, StreamRow, ViewMode, ViewedState};
 
 use super::super::PathRename;
 use super::super::test_support::{Fakes, create_snapshot};
@@ -229,5 +229,81 @@ fn refresh_worktree_migrates_local_threads_and_local_viewed_with_prefix_boundary
             .unwrap()
             .viewed,
         ViewedState::Viewed
+    );
+}
+
+#[test]
+fn first_poll_worktree_files_announces_preexisting_local_only_files() {
+    let fakes = Fakes::new(100);
+    fakes.workspace.put_base("src/a.rs", "one\n");
+    fakes.workspace.put_disk("src/a.rs", "one\n");
+    fakes
+        .workspace
+        .put_disk("src/preexisting.rs", "fn pre() {}\n");
+    let mut session = fakes.open_synced();
+    let events = session.subscribe();
+
+    let changed = session.poll_worktree_files().unwrap();
+    assert_eq!(changed, Some(vec!["src/preexisting.rs".to_owned()]));
+    let event = events.try_recv().expect("FilesChanged should be published");
+    match event {
+        Event::FilesChanged { paths, view } => {
+            assert_eq!(paths, vec!["src/preexisting.rs".to_owned()]);
+            let row = view
+                .files
+                .iter()
+                .find(|file| file.path == "src/preexisting.rs")
+                .expect("preexisting local file should be in view");
+            assert!(row.is_local_only);
+        }
+        other => panic!("expected FilesChanged, got {other:?}"),
+    }
+}
+
+#[test]
+fn refresh_worktree_dismisses_in_place_edited_local_viewed_without_dismissing_renamed_file() {
+    let fakes = Fakes::new(100);
+    fakes.workspace.put_disk("src/edited.rs", "let a = 1;\n");
+    fakes.workspace.put_disk("src/old.rs", "let b = 2;\n");
+    let mut session = fakes.open_synced();
+    session.refresh_worktree(&[]).unwrap();
+
+    session.set_viewed("src/edited.rs", true).unwrap();
+    session.set_viewed("src/old.rs", true).unwrap();
+
+    fakes.workspace.put_disk("src/edited.rs", "let a = 99;\n");
+    fakes.workspace.remove_disk("src/old.rs");
+    fakes.workspace.put_disk("src/moved.rs", "let b = 2;\n");
+
+    let view = session
+        .refresh_worktree(&[PathRename {
+            old_path: "src/old.rs".into(),
+            new_path: "src/moved.rs".into(),
+        }])
+        .unwrap();
+
+    assert_eq!(
+        view.files
+            .iter()
+            .find(|row| row.path == "src/edited.rs")
+            .unwrap()
+            .viewed,
+        ViewedState::Dismissed
+    );
+    assert_eq!(
+        fakes.store.saved().local.local_viewed.get("src/edited.rs"),
+        Some(&ViewedState::Dismissed)
+    );
+    assert_eq!(
+        view.files
+            .iter()
+            .find(|row| row.path == "src/moved.rs")
+            .unwrap()
+            .viewed,
+        ViewedState::Viewed
+    );
+    assert_eq!(
+        fakes.store.saved().local.local_viewed.get("src/moved.rs"),
+        Some(&ViewedState::Viewed)
     );
 }

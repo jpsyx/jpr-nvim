@@ -58,8 +58,8 @@ impl ReviewSession {
             if self.saved.session.pr.is_some() || !current_digests.is_empty() {
                 self.disk_digests = Some(current_digests);
             }
-            if !self.base_cache.merge_base.is_empty() {
-                self.refresh_local_files();
+            if let Some(paths) = self.announce_initial_local_files() {
+                return Ok(Some(paths));
             }
             self.poll_worktree_status_change();
             return Ok(None);
@@ -104,6 +104,23 @@ impl ReviewSession {
             return Err(error);
         }
         Ok(did_reanchor)
+    }
+
+    fn announce_initial_local_files(&mut self) -> Option<Vec<String>> {
+        if self.base_cache.merge_base.is_empty() || !self.refresh_local_files() {
+            return None;
+        }
+        let paths: Vec<String> = self
+            .local_files
+            .iter()
+            .map(|file| file.path.clone())
+            .collect();
+        let view = self.view();
+        self.publish(&Event::FilesChanged {
+            paths: paths.clone(),
+            view: Box::new(view),
+        });
+        Some(paths)
     }
 
     fn poll_worktree_status_change(&mut self) {

@@ -135,10 +135,11 @@ impl ReviewSession {
         self.local_file_counts.clear();
         let did_local_files_change = self.refresh_local_files();
         let current_digests = self.collect_worktree_digests();
-        let changed_paths = self.disk_digests.as_ref().map_or_else(
-            || collect_rename_paths(renames),
-            |previous| collect_changed_digest_paths(previous, &current_digests),
-        );
+        let (changed_paths, edited_paths) =
+            collect_refresh_changed_paths(self.disk_digests.as_ref(), &current_digests, renames);
+        if !edited_paths.is_empty() && self.dismiss_edited_local_viewed(&edited_paths)? {
+            self.refresh_local_files();
+        }
         self.disk_digests = Some(current_digests);
         let did_reanchor = if changed_paths.is_empty() {
             false
@@ -321,6 +322,23 @@ impl ReviewSession {
             self.last_worktree_status = Some(status.clone());
         }
     }
+}
+
+fn collect_refresh_changed_paths(
+    previous_digests: Option<&BTreeMap<String, u64>>,
+    current_digests: &BTreeMap<String, u64>,
+    renames: &[PathRename],
+) -> (Vec<String>, Vec<String>) {
+    let Some(previous) = previous_digests else {
+        return (collect_rename_paths(renames), Vec::new());
+    };
+    let changed = collect_changed_digest_paths(previous, current_digests);
+    let edited = changed
+        .iter()
+        .filter(|path| previous.contains_key(*path))
+        .cloned()
+        .collect();
+    (changed, edited)
 }
 
 fn collect_rename_paths(renames: &[PathRename]) -> Vec<String> {
