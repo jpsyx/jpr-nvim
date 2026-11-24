@@ -48,17 +48,37 @@ impl ReviewSession {
     /// `mode`. A file that cannot be read gets a note rather than failing
     /// the whole stream.
     pub fn stream(&mut self, mode: ViewMode) -> Result<StreamView> {
+        self.stream_with_progress(mode, |_, _, _| {})
+    }
+
+    /// Every changed file's hunks, in the forge's order, laid out for
+    /// `mode`, invoking `on_progress(completed, total, path)` before reading
+    /// files (when non-empty) and after each file completes. A file that
+    /// cannot be read gets a note rather than failing the whole stream.
+    pub fn stream_with_progress<F>(
+        &mut self,
+        mode: ViewMode,
+        mut on_progress: F,
+    ) -> Result<StreamView>
+    where
+        F: FnMut(usize, usize, &str),
+    {
         self.prepare_base()?;
         let files = self.saved.files.clone();
-        let mut inputs = Vec::with_capacity(files.len());
-        for file in files {
+        let total = files.len();
+        if total > 0 {
+            on_progress(0, total, "");
+        }
+        let mut inputs = Vec::with_capacity(total);
+        for (index, file) in files.into_iter().enumerate() {
+            let path = file.path.clone();
             let content = self
-                .file_texts_after_prepare(&file.path)
+                .file_texts_after_prepare(&path)
                 .map_err(|error| format!("{error:#}"));
             let threads = self
                 .threads
                 .iter()
-                .filter(|thread| thread.anchor.file.as_deref() == Some(file.path.as_str()))
+                .filter(|thread| thread.anchor.file.as_deref() == Some(path.as_str()))
                 .cloned()
                 .collect();
             inputs.push(StreamInput {
@@ -66,6 +86,7 @@ impl ReviewSession {
                 content,
                 threads,
             });
+            on_progress(index + 1, total, &path);
         }
         Ok(create_stream_view_from_inputs(&inputs, mode))
     }
@@ -333,5 +354,26 @@ mod tests {
         assert_eq!(notes[0].0, "src/a.rs");
         assert!(notes[0].1.contains("too large to show"), "{notes:?}");
         assert_eq!(notes[1], ("src/b.rs", "no changes against the base"));
+    }
+
+    #[test]
+    fn stream_with_progress_reports_zero_and_each_file_in_order() {
+        let fakes = create_fakes();
+        let mut session = fakes.open_synced();
+        let mut reported = Vec::new();
+        let stream = session
+            .stream_with_progress(ViewMode::Unified, |completed, total, path| {
+                reported.push((completed, total, path.to_owned()));
+            })
+            .unwrap();
+        assert_eq!(stream.mode, ViewMode::Unified);
+        assert_eq!(
+            reported,
+            vec![
+                (0, 2, String::new()),
+                (1, 2, "src/a.rs".to_owned()),
+                (2, 2, "src/b.rs".to_owned()),
+            ]
+        );
     }
 }

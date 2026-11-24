@@ -169,6 +169,66 @@ fn stop_socket_server(server: Option<SocketServer>) {
 #[cfg(not(unix))]
 fn stop_socket_server(_server: Option<()>) {}
 
+/// Handles a `stream` request while emitting `streamProgress` notifications
+/// immediately as each file completes.
+fn handle_stream_with_progress<W: Write>(
+    session: &Mutex<ReviewSession>,
+    params: &Value,
+    writer: &Mutex<W>,
+) -> Result<Result<Value, RpcError>> {
+    let mode = match get_mode_from_params(params) {
+        Ok(mode) => mode,
+        Err(error) => return Ok(Err(error)),
+    };
+    let mut guard = match lock(session) {
+        Ok(guard) => guard,
+        Err(error) => return Ok(Err(error)),
+    };
+    let mut write_error: Option<anyhow::Error> = None;
+    let stream_result = guard.stream_with_progress(mode, |completed, total, path| {
+        if write_error.is_some() {
+            return;
+        }
+        let progress = notification(
+            "streamProgress",
+            json!({ "completed": completed, "total": total, "path": path }),
+        );
+        if let Err(error) = write_line(writer, &progress) {
+            write_error = Some(error);
+        }
+    });
+    drop(guard);
+    if let Some(error) = write_error {
+        return Err(error);
+    }
+    Ok(engine_result_to_rpc(stream_result).and_then(|stream| to_value(&stream)))
+}
+
+/// Parses and executes one request line, returning its JSON-RPC reply and
+/// whether the request was `shutdown`.
+fn answer_single_request<W: Write>(
+    line: &str,
+    writer: &Mutex<W>,
+    session: &Mutex<ReviewSession>,
+    server_version: &str,
+) -> Result<(Value, bool)> {
+    match parse_request(line) {
+        Ok(request) => {
+            let result = if request.method == "stream" {
+                handle_stream_with_progress(session, &request.params, writer)?
+            } else {
+                handle(session, &request, server_version)
+            };
+            let reply = match result {
+                Ok(value) => success(&request.id, value),
+                Err(error) => failure(&request.id, &error),
+            };
+            Ok((reply, request.method == "shutdown"))
+        }
+        Err((id, error)) => Ok((failure(&id, &error), false)),
+    }
+}
+
 /// Answers requests until `reader` ends or a `shutdown` request arrives,
 /// returning the `shutdown` response unwritten so events can go first.
 fn answer_requests<R: BufRead, W: Write>(
@@ -183,17 +243,9 @@ fn answer_requests<R: BufRead, W: Write>(
         if line.trim().is_empty() {
             continue;
         }
-        let (reply, done) = match parse_request(&line) {
-            Ok(request) => {
-                let reply = match handle(session, &request, &options.server_version) {
-                    Ok(result) => success(&request.id, result),
-                    Err(error) => failure(&request.id, &error),
-                };
-                (reply, request.method == "shutdown")
-            }
-            Err((id, error)) => (failure(&id, &error), false),
-        };
-        if done {
+        let (reply, is_shutdown) =
+            answer_single_request(&line, writer, session, &options.server_version)?;
+        if is_shutdown {
             return Ok(Some(reply));
         }
         write_events(events, writer)?;

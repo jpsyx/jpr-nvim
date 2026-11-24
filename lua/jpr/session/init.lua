@@ -105,6 +105,7 @@ local function forget(session, close_tab)
     close_optional_view("jpr.comments.compose", session)
     close_optional_view("jpr.views.submit", session)
     close_optional_view("jpr.agent", session)
+    close_optional_view("jpr.views.loading", session)
     require("jpr.views.stream").close(session)
     require("jpr.views.diff").detach(session)
     panel.close(session)
@@ -182,6 +183,9 @@ local function handshake(session, client)
             return fail_handshake(session, client, handshake_error)
         end
         session.ready = true
+        if session.loading then
+            require("jpr.views.loading").update(session, { stage = 3 })
+        end
         client:request("snapshot", nil, function(_, view)
             if session.closing or session.client ~= client then
                 return
@@ -230,10 +234,7 @@ local function spawn_engine(session)
     return true
 end
 
---- Opens a tab for a checked-out PR and starts its engine.
---- info: { worktree, repo = "owner/name", number }.
-function M.start(info)
-    jpr().define_highlights()
+local function setup_session_autocmds()
     local augroup = vim.api.nvim_create_augroup("jpr-session", { clear = true })
     vim.api.nvim_create_autocmd("TabClosed", {
         group = augroup,
@@ -250,12 +251,58 @@ function M.start(info)
             end
         end,
     })
+end
+
+local function create_initial_view_from_info(info)
+    if type(info.title) == "string" and info.title ~= "" then
+        return { pr = { number = info.number, title = info.title } }
+    end
+    return {}
+end
+
+local function prepare_session_tab(info, pending_session)
+    local loading = require("jpr.views.loading")
+    local initial_view = create_initial_view_from_info(info)
+    if pending_session and vim.api.nvim_tabpage_is_valid(pending_session.tab) then
+        vim.api.nvim_set_current_tabpage(pending_session.tab)
+        -- Escaped: Ex commands expand `%` and `#` in a path.
+        vim.cmd.tcd(vim.fn.fnameescape(info.worktree))
+        pending_session.number = info.number
+        pending_session.repo = info.repo
+        pending_session.worktree = info.worktree
+        pending_session.view = initial_view
+        pending_session.process = nil
+        if pending_session.loading then
+            loading.update(pending_session, { number = info.number, title = info.title, stage = 2, detail = "" })
+        else
+            loading.open(pending_session, { number = info.number, title = info.title, stage = 2 })
+        end
+        return pending_session
+    end
     vim.cmd("tabnew")
     -- Escaped: Ex commands expand `%` and `#` in a path.
     vim.cmd.tcd(vim.fn.fnameescape(info.worktree))
     local tab = vim.api.nvim_get_current_tabpage()
-    local session = { number = info.number, repo = info.repo, worktree = info.worktree, tab = tab, view = {} }
-    session.placeholder_buf = vim.api.nvim_get_current_buf()
+    local session = {
+        number = info.number,
+        repo = info.repo,
+        worktree = info.worktree,
+        tab = tab,
+        view = initial_view,
+        placeholder_buf = vim.api.nvim_get_current_buf(),
+    }
+    loading.open(session, { number = info.number, title = info.title, stage = 2 })
+    wipe_placeholder(session)
+    return session
+end
+
+--- Opens a tab for a checked-out PR and starts its engine, reusing an existing
+--- `pending_session` loading tab when provided.
+--- info: { worktree, repo = "owner/name", number, title? }.
+function M.start(info, pending_session)
+    jpr().define_highlights()
+    setup_session_autocmds()
+    local session = prepare_session_tab(info, pending_session)
     require("jpr.views.diff").attach(session)
     -- Registered only once the panel and the engine are up, so a failure here
     -- never leaves a half-built session for `:Jpr open` to refocus.
@@ -274,6 +321,9 @@ function M.have_commits_changed(previous_view, view)
     if not previous_pr or not current_pr then
         return false
     end
+    if previous_pr.headSha == nil and previous_pr.baseSha == nil then
+        return false
+    end
     return previous_pr.headSha ~= current_pr.headSha or previous_pr.baseSha ~= current_pr.baseSha
 end
 
@@ -285,9 +335,19 @@ function M.show(session, view)
         view.isReadOnly = true
     end
     local previous_view = session.view
+    local has_synced_pr = type(view.pr) == "table"
+    if
+        not has_synced_pr
+        and previous_view
+        and type(previous_view.pr) == "table"
+        and previous_view.pr.headSha == nil
+        and previous_view.pr.baseSha == nil
+    then
+        view = vim.tbl_extend("force", view, { pr = previous_view.pr })
+    end
     session.view = view
     panel.render(session, view)
-    if not view.pr or session.is_read_only then
+    if not has_synced_pr or session.is_read_only then
         return
     end
     local stream = require("jpr.views.stream")

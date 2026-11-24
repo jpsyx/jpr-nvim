@@ -138,7 +138,7 @@ local function assert_version_mismatch_stops_engine_and_forgets_session()
     local error_entry = notifications[1]
     assert(error_entry.level == vim.log.levels.ERROR, "version mismatch notifies ERROR")
     assert(error_entry.message:find("%c") == nil, "version mismatch sanitizes control bytes: " .. error_entry.message)
-    assert(error_entry.message:find("0.5.1", 1, true) ~= nil, "names plugin version 0.5.1: " .. error_entry.message)
+    assert(error_entry.message:find("0.5.2", 1, true) ~= nil, "names plugin version 0.5.2: " .. error_entry.message)
     assert(error_entry.message:find("0.1.0", 1, true) ~= nil, "names binary version 0.1.0: " .. error_entry.message)
     assert(error_entry.message:find(":Lazy build jpr-nvim", 1, true) ~= nil, "names :Lazy build jpr-nvim: " .. error_entry.message)
     assert(error_entry.message:find("./install.sh", 1, true) == nil, "does not mention ./install.sh: " .. error_entry.message)

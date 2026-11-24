@@ -27,6 +27,9 @@ local function sync_session(session_mod, session)
     end
     session.client:request("sync", nil, function(sync_error, view)
         if sync_error then
+            if session.loading then
+                require("jpr.views.loading").close(session)
+            end
             return jpr().error("sync failed: " .. crash.build_clean_text_from_raw(sync_error.message))
         end
         session_mod.show(session, view)
@@ -85,6 +88,10 @@ local function attach_view_commands(session_mod, forget)
     --- `:Jpr close`: stops the current tab's engine, closes the tab (unless it is
     --- the last one) and forgets the session.
     function session_mod.close_current()
+        local current_tab = vim.api.nvim_get_current_tabpage()
+        if not session_mod.current() and session_mod.close_pending_tab and session_mod.close_pending_tab(current_tab) then
+            return
+        end
         return run_with_current(session_mod, function(session)
             forget(session, true)
         end)

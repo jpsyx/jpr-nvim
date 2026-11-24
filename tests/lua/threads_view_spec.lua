@@ -42,8 +42,8 @@ end), "the review syncs")
 
 local diff_view = require("jpr.views.diff")
 local win = main_window.find(review)
-vim.api.nvim_set_option_value("signcolumn", "no", { win = win, scope = "local" })
 main_window.edit(review, win, "README.md", 1)
+vim.api.nvim_set_option_value("signcolumn", "no", { win = win, scope = "local" })
 local buf = vim.api.nvim_win_get_buf(win)
 
 -- 1. Unified diff draws thread sign + EOL preview on line 2 and binds buffer keys.

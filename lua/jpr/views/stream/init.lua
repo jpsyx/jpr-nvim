@@ -126,6 +126,9 @@ function M.show(session, opts)
     local request_id = state.request_id
     local mode = view_mode.get()
     local key = build_stream_key(session, mode)
+    if session.loading then
+        require("jpr.views.loading").update(session, { stage = 4 })
+    end
     session_module().request(session, "stream", { mode = mode }, function(stream)
         local after_draw = take_after_draw(session, request_id)
         if session.stream and session.stream.request_id == request_id then
@@ -136,6 +139,9 @@ function M.show(session, opts)
         end
     end, function()
         take_after_draw(session, request_id)
+        if session.loading then
+            require("jpr.views.loading").close(session)
+        end
     end)
 end
 
@@ -190,11 +196,14 @@ function M.fill(buf, column)
 end
 
 --- Whether `win` shows nothing the reviewer chose: an empty unnamed buffer
---- (a new tab's) or the stream itself.
+--- (a new tab's), the loading buffer, or the stream itself.
 local function is_free(session, win)
     local buf = vim.api.nvim_win_get_buf(win)
     local buffers = session.stream.buffers
     if buf == buffers.main or buf == buffers.left then
+        return true
+    end
+    if require("jpr.views.loading").is_loading_buffer(session, buf) then
         return true
     end
     return vim.api.nvim_buf_get_name(buf) == "" and not vim.bo[buf].modified
@@ -220,9 +229,15 @@ function M.draw(session, stream, opts)
     end
     release_left_window(session)
     if opts.only_if_free and not is_free(session, find_stream_window(session)) then
+        if session.loading then
+            require("jpr.views.loading").close(session)
+        end
         return
     end
     local wins = M.place(session, buffers)
+    if session.loading then
+        require("jpr.views.loading").close(session)
+    end
     for _, win in ipairs(wins) do
         M.set_folds(win, layout.folds)
     end

@@ -145,13 +145,42 @@ local function handle_event_notification(session, params, show_session)
     elseif params.type == "syncFailed" then
         session.view.sync = { state = "failed", at = os.time(), message = params.message }
         panel.render(session, session.view)
+        if session.loading then
+            require("jpr.views.loading").close(session)
+        end
     end
+end
+
+local function handle_stream_progress(session, params)
+    if type(params) ~= "table" then
+        return
+    end
+    local total = math.max(0, math.floor(tonumber(params.total) or 0))
+    local completed = math.max(0, math.min(math.floor(tonumber(params.completed) or 0), total))
+    local path = type(params.path) == "string" and params.path or ""
+    if session.loading then
+        require("jpr.views.loading").update(session, {
+            stage = 4,
+            progress = { completed = completed, total = total, path = path },
+        })
+        return
+    end
+    if total <= 0 then
+        return
+    end
+    local percent = math.floor((completed * 100) / total + 0.5)
+    local clean_path = crash.build_clean_text_from_raw(path)
+    local suffix = clean_path ~= "" and (" " .. clean_path) or ""
+    local message = ("jpr: Computing diffs %d/%d (%d%%)%s"):format(completed, total, percent, suffix)
+    vim.api.nvim_echo({ { message, "JprMuted" } }, false, {})
 end
 
 --- Updates `session`'s views and error reporting in response to engine notifications.
 function M.on_notification(session, method, params, show_session)
     if method == "event" and params then
         handle_event_notification(session, params, show_session)
+    elseif method == "streamProgress" then
+        handle_stream_progress(session, params)
     elseif method == "protocolError" then
         jpr().error(crash.build_clean_text_from_raw(params and params.message))
     end

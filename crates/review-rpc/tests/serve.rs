@@ -20,7 +20,7 @@ use support::{
 fn initialize_reports_the_protocol_and_server_versions() {
     let written = run(&request(1, "initialize"), &forge());
     let result = &response(&written, 1)["result"];
-    assert_eq!(result["protocolVersion"], 5);
+    assert_eq!(result["protocolVersion"], 6);
     assert_eq!(result["version"], "9.9.9");
 }
 
@@ -152,7 +152,42 @@ fn missing_or_mistyped_params_are_errors_and_serving_goes_on() {
             "{error}"
         );
     }
-    assert_eq!(response(&written, 5)["result"]["protocolVersion"], 5);
+    assert_eq!(response(&written, 5)["result"]["protocolVersion"], 6);
+}
+
+#[test]
+fn stream_emits_stream_progress_notifications_in_order_before_the_response() {
+    let forge = forge();
+    forge.set_snapshot(changed_snapshot());
+    let input =
+        request(1, "sync") + &build_request_with_params(2, "stream", r#"{"mode":"unified"}"#);
+    let written = run(&input, &forge);
+    let response_index = written
+        .iter()
+        .position(|message| message["id"] == 2)
+        .expect("a stream response");
+    let progress_entries: Vec<(usize, Value)> = written
+        .iter()
+        .enumerate()
+        .filter(|(_, message)| message["method"] == "streamProgress")
+        .map(|(index, message)| (index, message["params"].clone()))
+        .collect();
+    assert_eq!(progress_entries.len(), 3, "{written:?}");
+    for (index, _) in &progress_entries {
+        assert!(
+            *index < response_index,
+            "streamProgress at {index} must arrive before stream response at {response_index}"
+        );
+    }
+    let payloads: Vec<Value> = progress_entries.into_iter().map(|(_, p)| p).collect();
+    assert_eq!(
+        payloads,
+        vec![
+            serde_json::json!({ "completed": 0, "total": 2, "path": "" }),
+            serde_json::json!({ "completed": 1, "total": 2, "path": "src/a.rs" }),
+            serde_json::json!({ "completed": 2, "total": 2, "path": "src/b.rs" }),
+        ]
+    );
 }
 
 #[test]
