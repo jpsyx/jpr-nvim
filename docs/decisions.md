@@ -756,3 +756,52 @@ pipes, CI jobs, and coding agents never hit interactive prompts.
 **Revisit when.** A standalone terminal review UI needs richer shared TUI
 widgets beyond palettes and linear discriminant-first steppers, or when
 multiple Rust binaries reuse `crates/cli-tui` as a published crate.
+
+## Blended background-only diff tints, stream Treesitter syntax, and direct `streamProgress` notifications
+
+**Decision.** Diff readability and live loading feedback rely on two targeted
+mechanisms:
+
+1. **Background-only diff tints + per-file stream Treesitter highlighting.**
+   `lua/jpr/highlights.lua` computes `JprDiffAdd`, `JprDiffAddText`,
+   `JprDiffDelete`, and `JprDiffDeleteText` with a soft `bg` blended onto the
+   active colorscheme's `Normal.bg` (explicitly no `fg`, with dark/light
+   fallbacks when `Normal.bg` is nil) and refreshes managed groups on
+   `ColorScheme` without overwriting explicit user overrides. Split diff
+   windows map `DiffAdd`/`DiffChange`/`DiffDelete`/`DiffText` to `JprDiff*`
+   through window-local `winhighlight` (`lua/jpr/views/diff/init.lua`) instead
+   of mutating global Neovim diff highlight groups. In stream buffers,
+   `lua/jpr/views/stream/syntax.lua` parses each file's rendered code rows via
+   `vim.treesitter.get_string_parser` and applies `@<capture>` extmarks at
+   priority 90 beneath the background-only diff line (100) and word (110)
+   extmarks.
+2. **Direct `streamProgress` JSON-RPC notifications via a pure Rust callback.**
+   `ReviewSession::stream_with_progress` (`crates/review-core/src/session/diffs.rs`)
+   accepts a pure Rust callback `FnMut(usize, usize, &str)` invoked before
+   reading files and after each file finishes. `crates/review-rpc/src/server.rs`
+   handles `stream` requests with `stream_with_progress` and writes
+   `streamProgress` JSON-RPC notifications (`{ "completed", "total", "path" }`)
+   straight to stdio as each file finishes, before the `stream` response
+   arrives, feeding the 4-stage loading view (`lua/jpr/views/loading.lua`).
+
+**Why.** Linking `JprDiff*` directly to `DiffAdd`/`DiffDelete` or setting
+foreground colors washes out syntax highlighting on high-contrast themes and
+varies wildly across colorschemes, while mutating global `DiffAdd` would affect
+the user's non-jpr diff windows. Stream buffers hold multiple languages in one
+`jpr-stream` buffer, so per-file string parsing restores authentic Treesitter
+syntax colors without breaking diff gutter alignment. On the engine side,
+taking a callback in `review-core` and writing `streamProgress` directly in
+`review-rpc` keeps `crates/review-*` strictly UI-free and avoids polluting
+`review_model::Event` (which carries persisted session state transitions) with
+transient per-file progress ticks.
+
+**Consequences.** Both file diffs and stream buffers retain native syntax
+contrast across dark and light colorschemes, and `:Jpr open` shows immediate
+stage and file-percentage feedback on large pull requests without waiting for
+the entire `stream` response. Files without an installed Treesitter parser (or
+over 5,000 stream rows) render cleanly without syntax highlighting, and
+`streamProgress` is only emitted for `stream` calls on stdio.
+
+**Revisit when.** Large multi-hundred-file streams need incremental chunked
+rendering before `stream` finishes, or a second frontend needs `streamProgress`
+exposed on a shared event bus rather than per-request callbacks.

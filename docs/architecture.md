@@ -49,7 +49,7 @@ read models the engine returns.
 | `review-store-fs` | The `ReviewStore` adapter: one directory per PR, four versioned JSON files written atomically (`session.json`, `viewed.json`, `github.json`, `local.json`) plus `rounds.jsonl` and `local.lock` (see "State on disk"). |
 | `review-forge-github` | The `Forge` adapter: `gh pr view`, `gh api graphql` (queries and mutations for viewed marks, pending reviews, review threads, PR comments, edits, deletions, resolution, reactions, and review submission), and `gh api` REST immediate thread replies with pending-review GraphQL fallback, with a 30 second timeout per call. Adapted from dif. |
 | `review-workspace-git` | Checks a PR out into a worktree: the default (`git worktree add` plus `gh pr checkout`) or a custom command that prints the path. `GitWorkspace` is the `Workspace` adapter, opened at the worktree's root (`git rev-parse --show-toplevel`) so paths stay root-relative even when `serve` starts in a subdirectory: the merge base, `HEAD` and unlocked worktree dirty/ahead/behind status, a file at a commit (`git cat-file --batch`), a file on disk, renames (`git diff-index`), changed worktree files since base/commit, branch-safe `HEAD:refs/heads/<head_ref>` push, and auto-stash `--ff-only` fast-forward. Missing commits and pushes run unattended with a 90 second deadline. |
-| `review-rpc` | The JSON-RPC protocol (`PROTOCOL_VERSION = 5`), stdio server, allowlisted Unix domain socket listener, and background poller that syncs, retries refused viewed marks and queued comment ops, and watches worktree files and git status for re-anchoring and live refresh. |
+| `review-rpc` | The JSON-RPC protocol (`PROTOCOL_VERSION = 6`), stdio server (including `streamProgress` notifications during `stream`), allowlisted Unix domain socket listener, and background poller that syncs, retries refused viewed marks and queued comment ops, and watches worktree files and git status for re-anchoring and live refresh. |
 
 ### Inside the crates
 
@@ -72,7 +72,7 @@ The modules worth knowing before changing a crate. Test fixtures
 | `review-core` `session/mod.rs` | `ReviewSession`: opening on `Ports`, the state the use cases share (`pushed_head`, `last_worktree_status`, `pending_head_move_from`), and the event channel |
 | `review-core` `session/sync.rs` | `sync`: resend queued viewed marks, pull, reconcile concurrent edits and unflushed threads, replay queued comment ops, save, fast-forward and re-anchor non-conflicted local threads when `pr.head_sha` moves (`HeadMoved` before `Synced`, retaining `pending_head_move_from` to self-heal failed fast-forwards or saves on the next sync), and announce |
 | `review-core` `session/push.rs` | `push`: ahead/behind/dirty guards, pushing `HEAD` to `head_ref`, `PushedHead` tracking so GitHub `headRefOid` propagation lag or post-push sync failure does not report spurious `ahead` commits, and returning `PushResult` |
-| `review-core` `session/diffs.rs` | `file_diff` and `stream`: the two sides of each diff, `BaseCache` keyed on `(base_sha, head_sha)` (merge base, renames, and base texts invalidated whenever `base_sha` or checked-out `HEAD` moves), and the 4 MiB size limit |
+| `review-core` `session/diffs.rs` | `file_diff`, `stream`, and `stream_with_progress` (invoking a pure Rust `(completed, total, path)` callback per file so `review-core` stays UI-free): the two sides of each diff, `BaseCache` keyed on `(base_sha, head_sha)` (merge base, renames, and base texts invalidated whenever `base_sha` or checked-out `HEAD` moves), and the 4 MiB size limit |
 | `review-core` `session/viewed.rs` | `set_viewed` and `flush_queued`: a mark changes at once, queued marks and comment ops are flushed between syncs |
 | `review-core` `session/comments.rs` (with `session/comments/` `helpers.rs`, `queue/mod.rs`, `queue/prune.rs`, `reconcile.rs`, `replay.rs`) | GitHub comment creation, replies, edits, deletions, resolution, reactions, `retry_message`, optimistic `tmp-*` IDs, FIFO queue replay, ID remapping (`id_map`), and `threadsChanged` announcements |
 | `review-core` `session/local.rs` | Local-only threads (`loc-*`): creation (`origin = local`), local replies, edits, deletions, resolution, reactions, `agent_reply` (marks thread `answered` and enforces non-local refusal), and `promote_thread` (creates GitHub comment with snapshot stripped and links `promotedTo`) |
@@ -98,10 +98,10 @@ The modules worth knowing before changing a crate. Test fixtures
 | `review-workspace-git` `git_output.rs` | Pure guards for what reaches git (commit ids, batch requests) and readers of its output (`cat-file --batch`, renames, NUL-delimited porcelain/diff paths) |
 | `review-workspace-git` `process.rs` | Running git (`run`, unlocked `run_bytes_unlocked`), gh and custom commands, optionally with input on stdin, with git's repository variables cleared |
 | `review-workspace-git` `unattended.rs` | Running a command nobody watches (base/head fetches and `git push`): no prompts, a deadline, a process group when there is a terminal, and a bounded wait for its output |
-| `review-rpc` `protocol.rs` | The wire format and the protocol version (`PROTOCOL_VERSION = 5`) |
+| `review-rpc` `protocol.rs` | The wire format and the protocol version (`PROTOCOL_VERSION = 6`) |
 | `review-rpc` `params.rs` | Reading request params (`path`, `paths`, `viewed`, `mode`, `anchor`, `origin`, `content`, `agent`, `kind`, `round`, `findings`, `updates`, etc.); a missing or mistyped one is an invalid-params error |
 | `review-rpc` `socket.rs`, `socket/io.rs` | Unix domain socket listener with `0600` permissions, 64-client cap, bounded 1 MiB framing, and method allowlist (`snapshot`, `threads`, `agentReply`, `prepassWrite`) |
-| `review-rpc` `server.rs`, `server/comments.rs`, `server/agent.rs`, `server/ticker.rs` | Routing requests to the session (including `push`, comment, suggestion, review submission, agent launch/dispatch, pre-pass, conflict resolution, and anchor update methods), writing events immediately to stdio, and the poller (`get_poll_step_from_elapsed` + 2 second worktree file and git status watch) |
+| `review-rpc` `server.rs`, `server/comments.rs`, `server/agent.rs`, `server/ticker.rs` | Routing requests to the session (including `push`, comment, suggestion, review submission, agent launch/dispatch, pre-pass, conflict resolution, and anchor update methods), handling `stream` via `ReviewSession::stream_with_progress` to write `streamProgress` JSON-RPC notifications directly to stdio per file before the `stream` response arrives, writing events immediately to stdio, and the poller (`get_poll_step_from_elapsed` + 2 second worktree file and git status watch) |
 
 ## Patterns
 
@@ -125,15 +125,19 @@ The modules worth knowing before changing a crate. Test fixtures
 
 ## Process model
 
-`:Jpr open <n>` runs `jpr-review checkout --pr <n>` in Neovim's current
-directory, which prints the worktree as JSON. A pull request URL adds
-`--repo <owner/name>`: `checkout` resolves the number in the current
-directory's repository, so it refuses, before creating any worktree, a pull
-request from a different repository than the URL names. The plugin then opens a tab whose
-directory is the worktree, opens the panel, and starts
-`jpr-review serve --pr <n> --repo <owner/name>` there. After the `initialize`
-handshake (which checks both `protocolVersion` and release `version`) it asks
-for a `snapshot` (what was saved last) and then a `sync`.
+`:Jpr open <n>` immediately opens a PR tab showing the 4-stage loading view
+(`jpr.views.loading`) and runs `jpr-review checkout --pr <n>` in Neovim's
+current directory, streaming checkout stderr into stage 1 while `checkout`
+prints the worktree as JSON on stdout (closing the tab mid-checkout cancels the
+pending process). A pull request URL adds `--repo <owner/name>`: `checkout`
+resolves the number in the current directory's repository, so it refuses, before
+creating any worktree, a pull request from a different repository than the URL
+names. Once checkout finishes, the plugin sets the tab's directory to the
+worktree, opens the panel, starts `jpr-review serve --pr <n> --repo <owner/name>`
+(stage 2), runs the `initialize` handshake (which checks both `protocolVersion`
+and release `version`), asks for a `snapshot` (what was saved last) and a `sync`
+(stage 3), and streams per-file `streamProgress` percentages (stage 4) until the
+first stream draws and replaces the loading buffer.
 
 The server reads requests on stdin, writes responses and notifications on
 stdout, binds an allowlisted Unix domain socket (recorded in `session.json`),
@@ -303,31 +307,35 @@ and exit code `1`. Its subcommands are `checkout`, `prs`, `serve`,
 | --- | --- |
 | `build.lua` | Root `lazy.nvim` build hook: prepends the checkout's `lua/` search path, clears cached `jpr.build` and `jpr.binary` entries in `package.loaded` on `:Lazy update`, and delegates to `jpr.build` without changing Neovim's global working directory |
 | `plugin/jpr.lua` | Defines `:Jpr` (with range support) and the `<Plug>(jpr-*)` mappings |
-| `jpr` | Release `VERSION`, config (including optional `binary` override, `agent`, `claude_cmd`, `codex_cmd`, `agent_width`, and `keys`), `binary_path()`, highlight groups (`JprModified` -> `Special`, `JprThreadLocal` -> `DiagnosticHint`), lazy `require("jpr").statusline()` (`""` without loading `jpr.session` until a review opens), argument parsing, schema-derived subcommand and direct-argument completion (`toggle`, `comment`, `agent`), bare `:Jpr` Command Palette and `:Jpr open` PR picker dispatch, buffer keybinding (`bind_buffer_keys`), and `<Plug>(jpr-*)` action dispatch |
-| `jpr.commands.schema` (`lua/jpr/commands/schema.lua`) | Declarative schema for all 14 `:Jpr` subcommands (human-readable labels paired with `[<id>]`, concise helper text, smart defaults, discriminant-first steps including the async open-PR picker backed by `jpr-review prs`, and single-step argument completion) |
+| `jpr` | Release `VERSION`, config (including optional `binary` override, `agent`, `claude_cmd`, `codex_cmd`, `agent_width`, and `keys`), `binary_path()`, highlight registration via `jpr.highlights`, lazy `require("jpr").statusline()` (`""` without loading `jpr.session` until a review opens), argument parsing, schema-derived subcommand and direct-argument completion (`toggle`, `comment`, `agent`), bare `:Jpr` Command Palette, `:Jpr keys`, and `:Jpr open` PR picker dispatch, buffer keybinding (`bind_buffer_keys`), and `<Plug>(jpr-*)` action dispatch |
+| `jpr.highlights` (`lua/jpr/highlights.lua`) | Defines semantic `Jpr*` highlight links (`default = true`) and computes soft background-only diff tints (`JprDiffAdd`, `JprDiffAddText`, `JprDiffDelete`, `JprDiffDeleteText`) blended from `Normal.bg` (with dark/light presets when `Normal.bg` is nil), automatically refreshed on `ColorScheme` without overwriting user overrides |
+| `jpr.commands.schema` (`lua/jpr/commands/schema.lua`) | Declarative schema for all 15 `:Jpr` subcommands (including `keys`; human-readable labels paired with `[<id>]`, concise helper text, smart defaults, discriminant-first steps including the async open-PR picker backed by `jpr-review prs`, and single-step argument completion) |
 | `jpr.tui.schema` (`lua/jpr/tui/schema.lua`) | Pure declarative command/step schema validation (`select`, `async_select`, `toggle`, `text`), `when` predicate resolution (`get_active_steps_from_command`), default resolution, and abandoned-branch pruning |
 | `jpr.tui.render` (`lua/jpr/tui/render.lua`) | Pure layout builder for the floating Command Palette and steppers: draws human-readable labels, `[<id>]` badges, indented dim hover-only helper text underneath the selected row, step progress headers, and footer key hints |
 | `jpr.tui.wizard` (`lua/jpr/tui/wizard/`: `init.lua`, `window.lua`, `palette.lua`, `step_menu.lua`, `step_text.lua`) | Floating Command Palette and multi-step wizard modal controller implementing centered rounded floating windows, viewport geometry clamping, extmark painting, Neovim-conventional Normal-mode (`j`/`k`/`h`/`l`/`gg`/`G`/`<Tab>`/`<S-Tab>`/`<CR>`/`q`/`<Esc>`) and Insert-mode text-step controls, async option loading, and step-back/return-to-palette navigation |
 | `jpr.binary` (`lua/jpr/binary.lua`) | Resolves the plugin checkout root, the bundled `target/release/jpr-review` binary path (`.exe` on Windows), `config.binary` overrides, and `:Jpr agent` terminal `PATH` prepending (`create_agent_env_from_session`) |
 | `jpr.build` (`lua/jpr/build.lua`) | Finds `cargo` across `PATH`, `$CARGO_HOME/bin`, and `~/.cargo/bin`, yields build progress only inside `lazy.nvim`'s `lazy.async` coroutine, compiles `target/release/jpr-review` in the plugin root via `vim.system`, and verifies the resulting executable |
 | `jpr.health` (`lua/jpr/health.lua`) | `:checkhealth jpr` diagnostics checking Neovim `>= 0.11`, the bundled or configured `jpr-review` binary and version lockstep against `jpr.VERSION`, `git`, `gh` (including `gh auth status`), and `cargo` |
-| `jpr.rpc` | JSON-RPC client over `jobstart` (`M.PROTOCOL_VERSION = 5`) |
-| `jpr.session` (`lua/jpr/session/init.lua`, `open.lua`, `commands.lua`, `comments.lua`, `events.lua`, `crash.lua`) | One review per tab: open-PR listing via `jpr-review prs`, checkout, engine process, protocol + release version handshake check, requests, redraws of the panel, the stream, the diffs, and the PR conversation view, `:Jpr toggle`, `:Jpr stream`, `:Jpr comment`, `:Jpr suggest`, `:Jpr expand`, `:Jpr conversation`, `:Jpr submit`, `:Jpr push`, `:Jpr agent`, `:Jpr send`, `:Jpr prepass`, `threadsChanged`/`filesChanged`/`agentRound`/`worktreeStatusChanged`/`headMoved` handling (including the `Resolve myself` vs `Ask agent to resolve` restore-conflict prompt), and the one teardown path |
+| `jpr.rpc` | JSON-RPC client over `jobstart` (`M.PROTOCOL_VERSION = 6`) |
+| `jpr.session` (`lua/jpr/session/init.lua`, `open.lua`, `commands.lua`, `comments.lua`, `events.lua`, `crash.lua`) | One review per tab: open-PR listing via `jpr-review prs`, immediate loading tab with cancelable checkout and streamed stderr (`open.lua`), engine process, protocol + release version handshake check, requests, redraws of the panel, the stream, the diffs, and the PR conversation view, `:Jpr toggle`, `:Jpr stream`, `:Jpr comment`, `:Jpr suggest`, `:Jpr expand`, `:Jpr conversation`, `:Jpr submit`, `:Jpr push`, `:Jpr agent`, `:Jpr send`, `:Jpr prepass`, `streamProgress` and `threadsChanged`/`filesChanged`/`agentRound`/`worktreeStatusChanged`/`headMoved` handling (including the `Resolve myself` vs `Ask agent to resolve` restore-conflict prompt), and the one teardown path |
 | `jpr.session.crash` (`lua/jpr/session/crash.lua`) | Mid-review crash recovery: single automatic engine restart, `0600` timestamped crash log at `stdpath("state")/jpr/engine-pr-<n>.log` (inside a `0700` state directory), `[read-only]` fallback on a second crash or failed restart handshake, and control-character sanitization for error messages |
 | `jpr.agent` | Right-hand interactive coding-agent terminal split (`claude` or `codex` with `JPR_SOCKET`, `JPR_PR`, and the bundled binary directory prepended to `PATH` in its environment), session resume detection, bracketed-paste prompt dispatch (`confirmSend` after `submitDelayMs` for `send`, `prepass`, and `resolve_conflicts`), and hide/show toggling without killing the live process |
 | `jpr.view_mode` | The global view mode (unified or split): the one remembered in `stdpath("state")/jpr/view-mode`, else `setup({ view = ... })`'s |
-| `jpr.render.panel` | Pure: `SessionView` to lines, highlights, `paths`, and `conversation_line`. Draws `[read-only]` and `dirty · ↑N ↓M` worktree status prefixes, the engine's `tree` (directories muted with a trailing `/`, files indented under them with `✎` on locally modified files and `[G]`, `[NL]`, or `[G · NL]` thread badges, e.g. `[2 · 1L]`), the Conversation row with count, and `drafts N`, `local unsent N`, and `N waiting for GitHub` on the counts line |
+| `jpr.render.panel` | Pure: `SessionView` to lines, highlights, `paths`, and `conversation_line`. Draws `[read-only]` and `dirty · ↑N ↓M` worktree status prefixes, the visual reviewed-files progress bar (`build_progress_bar_from_counts`: `█`/`░` + `X/Y (Z%)`) above `Conversation`, the engine's `tree` (directories muted with a trailing `/`, files indented under them with `✎` on locally modified files and `[G]`, `[NL]`, or `[G · NL]` thread badges, e.g. `[2 · 1L]`), the Conversation row with count, and `drafts N`, `local unsent N`, and `N waiting for GitHub` on the counts line |
 | `jpr.render.statusline` (`lua/jpr/render/statusline.lua`) | Pure O(1) in-memory formatter backing `require("jpr").statusline()`: formats `PR #N`, `[read-only]`, `dirty ↑A ↓B` (with `dirty`, `↑A`, and `↓B` each included only when active/non-zero), `V/F viewed`, `D drafts`, `L local`, and `sync!` without spawning processes or making RPC calls |
 | `jpr.render.overlay` | Pure: `FileDiffView` to extmark specs (added lines and their changed words highlighted, removed lines as virtual lines with their tabs expanded), and a base text to buffer lines |
-| `jpr.render.stream` | Pure: `StreamView` to one column (unified) or two aligned columns (split), with each line's target, file/hunk/thread navigation lines, inline thread EOL badges or expanded thread lines, commentable row anchors, folds of viewed files, and the key that says when the stream must be fetched again |
+| `jpr.render.stream` | Pure: `StreamView` to one column (unified) or two aligned columns (split), with each line's target, `code_rows` metadata for per-file Treesitter highlighting, file/hunk/thread navigation lines, inline thread EOL badges or expanded thread lines, commentable row anchors, folds of viewed files, and the key that says when the stream must be fetched again |
 | `jpr.render.threads` | Pure: `ThreadPreview` lists to sign + EOL extmarks (`!` failed, `✎` draft, `◆` local via `JprThreadLocal`, `💬` open published, `✓` resolved), local status/promotion badges (`[local · unsent]`, `[local · sent #N]`, `[local · answered]`, `[promoted]`), expanded virtual lines (`:Jpr expand`), reaction pills, and floating popup message layouts |
 | `jpr.render.submit` | Pure: `SubmitPreview`, selected `ReviewEvent`, and summary body to lines, highlights, and cursor-to-draft anchors for `:Jpr submit` |
-| `jpr.views.panel` | The panel window, with its options local to it so windows split from it do not inherit them. `<CR>` opens the PR conversation view on the Conversation row or a file through `jpr.views.main_window`; `v` toggles viewed for the file under the cursor |
+| `jpr.views.panel` | The panel window, with its options local to it so windows split from it do not inherit them. `<CR>` or `o` opens the PR conversation view on the Conversation row or a file through `jpr.views.main_window`; `v` toggles viewed for the file under the cursor; `?` opens the keyboard shortcuts cheatsheet |
 | `jpr.views.main_window` | The window beside the panel where files open; side windows (`vim.w.jpr_side`) never count. Only a plain path inside the worktree opens: `..`, `.`, an absolute path or any symlink that resolves elsewhere (dangling and looping ones included) is refused, so a save never writes outside it |
-| `jpr.views.diff` | Every window in the review's tab that shows a changed file gets its `fileDiff`: extmark overlays plus thread signs/previews (unified) or a read-only `jpr://base/...` window with `diffthis` and side-split thread markers (split). Manages window `signcolumn` when threads exist, redraws threads on `threadsChanged`, and collects moved local anchor extmarks on `BufWritePost` (`updateLocalAnchors`). A window that moves to another buffer is cleared (the overlay stays while another window shows the buffer); a toggle or a moved head redraws all, a save redraws that buffer. A failed `fileDiff` is asked for again only after a toggle or moved commits |
-| `jpr.views.stream` | `jpr://stream/<n>` in the main window: opened once the pull request first syncs (never over a file the reviewer opened), fetched again when its key (the view and the mode) changes, after a save, on `threadsChanged` / `filesChanged`, and on a toggle; a toggle while a request is in flight fetches it again in the new mode. Split adds a scroll- and cursor-bound `jpr://stream/<n>/base` window on the left, wiped with its window; once the reviewer opens their own buffer there, that window is theirs (no longer a side window, never reused as the left half) and the next draw opens a new left half. Only the answer to the latest `stream` request is drawn, recorded as the view it was asked for. `<CR>` opens a file only through `jpr.views.main_window` (on a viewed file's closed fold, at the file's top; a refused path leaves the stream as it was), `v` toggles viewed and moves on only when the redraw it caused arrives, `]f` `[f` `]h` `[h` `]t` `[t` move between files, hunks, and threads (skipping hunks and threads in closed folds), and buffer comment keys (`gc`, `gC`, `gf`, `gt`) resolve anchors/threads per active side. An answer that arrives after the review closed is dropped |
+| `jpr.views.diff` | Every window in the review's tab that shows a changed file gets its `fileDiff`: extmark overlays plus thread signs/previews (unified) or a read-only `jpr://base/...` window with `diffthis`, window-local `winhighlight` mapping `DiffAdd`/`DiffChange`/`DiffDelete`/`DiffText` to the softer `JprDiff*` background-only tints, and side-split thread markers (split). Manages window `signcolumn` when threads exist, redraws threads on `threadsChanged`, and collects moved local anchor extmarks on `BufWritePost` (`updateLocalAnchors`). A window that moves to another buffer is cleared (the overlay stays while another window shows the buffer); a toggle or a moved head redraws all, a save redraws that buffer. A failed `fileDiff` is asked for again only after a toggle or moved commits |
+| `jpr.views.stream` | `jpr://stream/<n>` in the main window: opened once the pull request first syncs (replacing the loading buffer, never over a file the reviewer opened), fetched again when its key (the view and the mode) changes, after a save, on `threadsChanged` / `filesChanged`, and on a toggle; a toggle while a request is in flight fetches it again in the new mode. Applies per-file Treesitter highlighting via `jpr.views.stream.syntax` underneath background-only line/word diff extmarks. Split adds a scroll- and cursor-bound `jpr://stream/<n>/base` window on the left, wiped with its window; once the reviewer opens their own buffer there, that window is theirs (no longer a side window, never reused as the left half) and the next draw opens a new left half. Only the answer to the latest `stream` request is drawn, recorded as the view it was asked for. `<CR>` opens a file only through `jpr.views.main_window` (on a viewed file's closed fold, at the file's top; a refused path leaves the stream as it was), `v` toggles viewed and moves on only when the redraw it caused arrives, `]f` `[f` `]h` `[h` `]t` `[t` move between files, hunks, and threads (skipping hunks and threads in closed folds), `?` opens the keyboard shortcuts cheatsheet, and buffer comment keys (`gc`, `gC`, `gf`, `gt`) resolve anchors/threads per active side. An answer that arrives after the review closed is dropped |
+| `jpr.views.stream.syntax` (`lua/jpr/views/stream/syntax.lua`) | Per-file Treesitter highlighting over rendered diff stream buffers (`jpr-stream-syntax` namespace at priority 90 beneath background-only diff tints): groups `code_rows` by file path, resolves filetype and Treesitter language, walks `@<capture>.<lang>` down to `@<capture>`, and skips gracefully when no parser is installed or a file exceeds 5,000 rows |
+| `jpr.views.cheatsheet` (`lua/jpr/views/cheatsheet.lua`) | Centered scrollable rounded floating keyboard shortcuts modal (`:Jpr keys` and `?` in read-only Jpr UI buffers), reflecting live `jpr.config.keys` overrides and disabled keys (`q`/`<Esc>`/`?` close) |
+| `jpr.views.loading` (`lua/jpr/views/loading.lua`) | Live 4-stage PR open loading view (`jpr://loading/<n>`) with a 100 ms `uv` spinner showing checkout stderr, engine startup, GitHub sync, and `streamProgress` per-file percentage progress bar until the first stream draws |
 | `jpr.views.threads` | Places thread signs, EOL previews, and expanded blocks on diff buffers (`LEFT` threads on the base buffer in split mode, `RIGHT` and `file` threads on the file buffer), maintains live `jpr-local-anchors` extmarks for `RIGHT` local `line`/`range` threads, and handles `gt`, `]t` / `[t`, and `:Jpr expand` |
-| `jpr.views.conversation` | `jpr://conversation/<n>` in the main window beside the panel: lists top-level PR comments (`anchor.kind == "pr"`) with `c` (new comment), `r` (reply to local PR thread), `e` (edit), `d` (delete), `p` (promote local thread to GitHub), `s` (send local thread to agent), `+` (react), `X` (retry), and `q` (close), refreshing on `threadsChanged` |
+| `jpr.views.conversation` | `jpr://conversation/<n>` in the main window beside the panel: lists top-level PR comments (`anchor.kind == "pr"`) with `c` (new comment), `r` (reply to local PR thread), `e` (edit), `d` (delete), `p` (promote local thread to GitHub), `s` (send local thread to agent), `+` (react), `X` (retry), `?` (keyboard shortcuts), and `q` (close), refreshing on `threadsChanged` |
 | `jpr.views.submit` | Centered floating `:Jpr submit` modal (`1`/`2`/`3` review event, `e` summary sub-editor, `<CR>` jump to draft or submit, `<C-s>` submit, `q`/`<Esc>` cancel) |
 | `jpr.comments.popup` | Floating thread inspector at the cursor (`r` reply, `e` edit, `d` delete, `R` resolve/unresolve, `p` promote local thread to GitHub, `s` send local thread to agent, `+` reaction picker, `X` retry, `q`/`<Esc>` close) |
 | `jpr.comments.compose` | Floating markdown compose buffer for new comments, replies, edits, local-thread promotion (`open_promote`), `<C-g>` target switching (`github` vs `local`), `<M-s>` alternate-target submit, and `<C-g>s` suggestion fences (`<C-s>` submits, `q`/`<Esc>` cancels) |
@@ -355,29 +363,34 @@ own, so a callback that raises cannot swallow the messages after it.
 
 - `cargo test --workspace --all-features`: the engine against fakes, the
   adapters, the protocol and Unix socket server over in-memory streams and
-  sockets, `cli-tui` pure schema/state/render unit tests, CLI schema
+  sockets (including ordered `streamProgress` notifications before `stream`
+  responses), `cli-tui` pure schema/state/render unit tests, CLI schema
   completeness and answer conversions (`crates/jpr-review/src/tui_schema/tests/`),
   CLI socket/fallback flows (`crates/jpr-review/tests/agent_cli.rs`), and the
   dependency rule (`crates/jpr-review/tests/dependency_rule.rs`).
 - `./scripts/test-lua.sh`: headless Neovim specs against
   `tests/lua/fixtures/fake_engine.sh` (and `crashing_engine.sh`, an engine
-  that dies at startup). The fake engine speaks protocol 5, answers plugin-issued
-  v5 requests (`push`, `fileDiff`, `stream`, `setViewed`, `threads`, `mentions`,
-  `comment`, `reply`, `editMessage`, `deleteMessage`, `setResolved`,
-  `toggleReaction`, `retryMessage`, `anchoredLines`, `suggestFromEdit`,
-  `submitPreview`, `submitReview`, `promoteThread`, `prepareAgentLaunch`,
-  `prepareSend`, `confirmSend`, `preparePrepass`, `prepareConflictResolution`,
+  that dies at startup). The fake engine speaks protocol 6, emits
+  `streamProgress` during `stream`, answers plugin-issued v6 requests (`push`,
+  `fileDiff`, `stream`, `setViewed`, `threads`, `mentions`, `comment`, `reply`,
+  `editMessage`, `deleteMessage`, `setResolved`, `toggleReaction`,
+  `retryMessage`, `anchoredLines`, `suggestFromEdit`, `submitPreview`,
+  `submitReview`, `promoteThread`, `prepareAgentLaunch`, `prepareSend`,
+  `confirmSend`, `preparePrepass`, `prepareConflictResolution`,
   `updateLocalAnchors`; `agentReply` and `prepassWrite` are driven by
   `jpr-review` over the Unix socket and covered in `review-rpc` / `jpr-review`
   Rust tests), and logs the requests it gets (`tests/lua/tui_schema_spec.lua`,
   `tests/lua/tui_render_spec.lua`, `tests/lua/tui_wizard_spec.lua`,
-  `tests/lua/palette_and_open_picker_spec.lua`, `tests/lua/agent_spec.lua`,
+  `tests/lua/palette_and_open_picker_spec.lua`, `tests/lua/highlights_spec.lua`,
+  `tests/lua/stream_syntax_spec.lua`, `tests/lua/cheatsheet_spec.lua`,
+  `tests/lua/loading_view_spec.lua`, `tests/lua/agent_spec.lua`,
   `tests/lua/build_and_binary_spec.lua`, `tests/lua/push_and_head_moved_spec.lua`,
   `tests/lua/session_lifecycle_spec.lua`, and `tests/lua/statusline_spec.lua`
   cover the declarative TUI engine, Command Palette, `:Jpr open` PR picker,
-  agent dispatch, bundled binary discovery/`build.lua`/`:checkhealth jpr`,
-  push, head-move conflict prompts, crash auto-restart/read-only fallback, and
-  `statusline()`).
+  blended diff highlights, stream Treesitter syntax, `:Jpr keys` cheatsheet,
+  live 4-stage loading view, agent dispatch, bundled binary
+  discovery/`build.lua`/`:checkhealth jpr`, push, head-move conflict prompts,
+  crash auto-restart/read-only fallback, and `statusline()`).
   The script points `XDG_STATE_HOME` at a temporary directory, so specs never
   touch the real remembered view mode or crash logs.
 - `just check` runs both plus formatting and clippy.

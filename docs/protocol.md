@@ -1,4 +1,4 @@
-# Engine protocol (version 5)
+# Engine protocol (version 6)
 
 `jpr-review serve` speaks JSON-RPC 2.0, one JSON message per line, UTF-8.
 Requests from the primary frontend arrive on stdin. Responses and notifications
@@ -45,12 +45,12 @@ with `:Lazy build jpr-nvim`.
 
 | Method | Params | Result |
 | --- | --- | --- |
-| `initialize` | `{ "protocolVersion": 5, "client": "..." }` (the server reads neither) | `{ "protocolVersion": 5, "version": "0.5.1" }` |
+| `initialize` | `{ "protocolVersion": 6, "client": "..." }` (the server reads neither) | `{ "protocolVersion": 6, "version": "0.5.2" }` |
 | `snapshot` | none | `SessionView` |
 | `sync` | none | `SessionView`; error `-32000` when GitHub fails, after a `syncFailed` event (announces `headMoved` before `synced` when `pr.headSha` changes) |
 | `push` | none | `PushResult`; pushes `HEAD` to `refs/heads/<headRef>` (stdio-only; refused over `JPR_SOCKET` with `-32600`); error `-32000` before the first sync, when local `HEAD` is behind or already at the remote head, when a cross-repository (`pr.isCrossRepository`) pull request lacks explicit fork tracking or targets the base repository, or when `git push` fails |
 | `fileDiff` | `{ "path": "src/a.rs" }` | `FileDiffView`; error `-32000` for a file the pull request does not change, a side over 4 MiB, or before the first sync |
-| `stream` | `{ "mode": "unified" \| "split" }` | `StreamView`; error `-32000` before the first sync |
+| `stream` | `{ "mode": "unified" \| "split" }` | `StreamView` (emits `streamProgress` notifications per file while running); error `-32000` before the first sync |
 | `setViewed` | `{ "path": "src/a.rs", "viewed": true }` | `SessionView`, after a `viewedChanged` event |
 | `threads` | none | `{ "threads": Thread[] }` |
 | `mentions` | none | `{ "candidates": MentionCandidate[] }` |
@@ -147,6 +147,20 @@ after it got a queued mark through announces `viewedChanged` before
 `syncFailed`; a sync that succeeds announces the shorter queue in `synced`. An
 event is written before the response to the request that caused it, and every
 event is written before the `shutdown` response.
+
+`streamProgress`, emitted directly (outside the `event` envelope) while a
+`stream` request executes on stdio, before the `stream` response arrives:
+
+```json
+{ "completed": 1, "total": 20, "path": "src/a.rs" }
+```
+
+- When the pull request has at least one changed file, the server emits an
+  initial `{ "completed": 0, "total": N, "path": "" }` notification before
+  reading files, followed by one notification per file as it completes
+  (`completed` from `1` to `total`, with that file's repository-relative
+  `path`).
+- Pull requests with zero changed files emit no `streamProgress` notifications.
 
 ## Types
 
@@ -519,3 +533,6 @@ result or an event changes shape, and update this document in the same commit.
   `SessionView`, `isModified` and `localThreads` on `FileRow`, the
   `worktreeStatusChanged` and `headMoved` (`HeadMoveOutcome`) events, and the
   `PushResult` type.
+- **Version 6** added the `streamProgress` JSON-RPC notification
+  (`{ "completed", "total", "path" }`) emitted per file while a `stream`
+  request executes, before the `stream` response arrives.

@@ -68,7 +68,8 @@ binary manually.
 | Command | What it does |
 | --- | --- |
 | `:Jpr` | Open the interactive Command Palette with human-readable labels, hover helper text, and multi-step steppers for every command (`j`/`k` move, `l`/`<CR>` forward, `h`/`<S-Tab>` back, `q`/`<Esc>` cancel) |
-| `:Jpr open [n \| #n \| URL]` | Omit the argument to open the interactive open-PR picker (backed by `jpr-review prs`; press `h` to step back and enter a PR number or URL manually), or pass a number, `#number`, or repository PR URL directly |
+| `:Jpr open [n \| #n \| URL]` | Omit the argument to open the interactive open-PR picker (backed by `jpr-review prs`; press `h` to step back and enter a PR number or URL manually), or pass a number, `#number`, or repository PR URL directly. Opens a review tab immediately with a live 4-stage loading view (worktree checkout stderr, engine startup, GitHub sync, and per-file diff percentage progress) until the stream renders |
+| `:Jpr keys` | Show the scrollable floating keyboard shortcuts cheatsheet (reflecting your `keys` config; also bound to `?` inside panel, stream, and PR conversation buffers) |
 | `:Jpr sync` | Sync with GitHub now (it also syncs every minute) |
 | `:Jpr push` | Push committed `HEAD` to the pull request's remote branch and resync (never auto-commits dirty files) |
 | `:Jpr toggle [unified \| split]` | Flip every diff between unified and split, or jump directly to `unified` or `split`; the choice is remembered |
@@ -83,14 +84,16 @@ binary manually.
 | `:Jpr prepass` | Dispatch a pre-pass review prompt asking the agent to write local findings via `jpr-review prepass-write` |
 | `:Jpr close` | Stop the engine and close the tab |
 
-In the panel, `<CR>` opens the PR conversation view on the `Conversation` row
-or opens the file under the cursor from the worktree, and `v` toggles it viewed.
-The panel header prefixes review counts with `dirty · ↑N ↓M` when the worktree
-has uncommitted changes, `↑N ↓M` when ahead or behind the pull request's remote
-head, or `[read-only]` after engine recovery fallback. Changed file rows show
-`✎` (`JprModified`, linked to `Special`) before locally modified files and
-suffix thread counts as `[G]` (GitHub), `[NL]` (local, e.g. `[2L]`), or
-`[G · NL]` (both, e.g. `[2 · 1L]`).
+In the panel, `<CR>` or `o` opens the PR conversation view on the
+`Conversation` row or opens the file under the cursor from the worktree, `v`
+toggles it viewed, and `?` opens the keyboard shortcuts cheatsheet. The top of
+the panel shows a reviewed-files progress bar (`█`/`░` with `X/Y (Z%)`) above
+`Conversation`, and prefixes review counts with `dirty · ↑N ↓M` when the
+worktree has uncommitted changes, `↑N ↓M` when ahead or behind the pull
+request's remote head, or `[read-only]` after engine recovery fallback. Changed
+file rows show `✎` (`JprModified`, linked to `Special`) before locally modified
+files and suffix thread counts as `[G]` (GitHub), `[NL]` (local, e.g. `[2L]`),
+or `[G · NL]` (both, e.g. `[2 · 1L]`).
 
 In the stream:
 
@@ -100,6 +103,7 @@ In the stream:
 | `v` | Toggle viewed and move to the next unviewed file |
 | `]f` / `[f` | Next / previous file |
 | `]h` / `[h` | Next / previous hunk |
+| `?` | Show the keyboard shortcuts cheatsheet |
 
 Viewed files are folded (`zo` opens one). `setup({ view = "split" })` picks
 the view until you first toggle it.
@@ -133,16 +137,20 @@ Inside the comment and review windows:
 - **PR conversation (`:Jpr conversation`)**: `c` new PR comment, `r` reply to
   local PR thread, `e` edit own comment, `d` delete own comment, `p` promote
   local PR thread to GitHub, `s` send local PR thread to agent, `+` toggle
-  reaction, `X` retry failed comment, `q` close.
+  reaction, `X` retry failed comment, `?` keyboard shortcuts, `q` close.
 - **Submit modal (`:Jpr submit`)**: `1` Comment, `2` Approve, `3` Request
   changes, `e` edit review summary (`<C-s>` save, `q`/`<Esc>` cancel), `<CR>`
   jump to draft under cursor or submit, `<C-s>` submit review, `q` or `<Esc>`
   close.
 
-All highlight groups link to standard Neovim groups with `default = true` so
-your colorscheme can override them. Local threads use `JprThreadLocal` (linked
-to `DiagnosticHint`), and locally modified panel entries use `JprModified`
-(linked to `Special`).
+Semantic highlight groups link to standard Neovim groups with `default = true`
+so your colorscheme can override them (`JprThreadLocal` -> `DiagnosticHint`,
+`JprModified` -> `Special`). Diff highlight groups (`JprDiffAdd`,
+`JprDiffAddText`, `JprDiffDelete`, `JprDiffDeleteText`) compute soft
+background-only tints blended from your colorscheme's `Normal` background
+(refreshed automatically on `ColorScheme`, while preserving explicit user
+overrides) so native Treesitter syntax highlighting remains legible in both file
+diffs and the stream.
 
 ## Statusline
 
