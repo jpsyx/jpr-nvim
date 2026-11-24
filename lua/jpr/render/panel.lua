@@ -106,8 +106,8 @@ function M.create_flat_tree_from_files(files)
 end
 
 --- Adds one file's line to `content`: indent, viewed mark, modified mark, name,
---- counts and threads, with their highlights.
-local function add_file_line(content, file, name, indent)
+--- counts, threads, and optional local-only badge, with their highlights.
+local function add_file_line(content, file, name, indent, depth, parent_dir)
     local mark = VIEWED_MARK[file.viewed] or " "
     local is_modified = file.isModified == true
     local modified_icon = "✎"
@@ -116,10 +116,15 @@ local function add_file_line(content, file, name, indent)
     local stats = ("%s -%d"):format(plus, file.deletions)
     local threads_badge = M.build_threads_badge_from_file(file)
     local threads_suffix = threads_badge and (" " .. threads_badge) or ""
+    local local_badge = file.isLocalOnly == true and "[local]" or nil
+    local local_suffix = local_badge and (" " .. local_badge) or ""
     local shown_name = M.one_line(name)
-    content.add_line(("%s%s %s%s  %s%s"):format(indent, mark, modified_prefix, shown_name, stats, threads_suffix))
-    local line = #content.lines - 1
-    content.paths[#content.lines] = file.path
+    content.add_line(("%s%s %s%s  %s%s%s"):format(indent, mark, modified_prefix, shown_name, stats, threads_suffix, local_suffix))
+    local line_1based = #content.lines
+    local line = line_1based - 1
+    content.paths[line_1based] = file.path
+    content.rows[line_1based] = { kind = "file", path = file.path, depth = depth, parent_dir = parent_dir }
+    content.selectable_lines[#content.selectable_lines + 1] = line_1based
     local mark_group = (file.viewed == "VIEWED" and "JprViewed") or (file.viewed == "DISMISSED" and "JprDismissed") or nil
     if mark_group then
         content.highlights[#content.highlights + 1] = { line = line, col_start = #indent, col_end = #indent + #mark, group = mark_group }
@@ -133,6 +138,76 @@ local function add_file_line(content, file, name, indent)
     content.highlights[#content.highlights + 1] = { line = line, col_start = stats_start, col_end = stats_start + #plus, group = "JprAdded" }
     content.highlights[#content.highlights + 1] =
         { line = line, col_start = stats_start + #plus + 1, col_end = stats_start + #stats, group = "JprRemoved" }
+    if local_badge then
+        local local_start = stats_start + #stats + #threads_suffix + 1
+        content.highlights[#content.highlights + 1] =
+            { line = line, col_start = local_start, col_end = local_start + #local_badge, group = "JprThreadLocal" }
+    end
+end
+
+local function count_descendant_files(tree, dir_index, dir_depth, files)
+    local count = 0
+    for index = dir_index + 1, #tree do
+        local descendant = tree[index]
+        if descendant.depth <= dir_depth then
+            break
+        end
+        if descendant.file ~= nil and files[descendant.file + 1] ~= nil then
+            count = count + 1
+        end
+    end
+    return count
+end
+
+local function add_directory_line(content, row, dir_path, parent_dir, is_collapsed, descendant_count)
+    local indent = ("  "):rep(row.depth)
+    local indicator = is_collapsed and "▸ " or "▾ "
+    local count_suffix = is_collapsed and (" (%d)"):format(descendant_count) or ""
+    content.add_line(indent .. indicator .. M.one_line(row.name) .. "/" .. count_suffix, "JprMuted")
+    local line_1based = #content.lines
+    content.rows[line_1based] = {
+        kind = "dir",
+        path = dir_path,
+        depth = row.depth,
+        parent_dir = parent_dir,
+        is_collapsed = is_collapsed,
+    }
+    content.selectable_lines[#content.selectable_lines + 1] = line_1based
+end
+
+local function render_tree_rows(content, view, collapsed_dirs)
+    local files = view.files or {}
+    local tree = view.tree or M.create_flat_tree_from_files(files)
+    local dir_stack = {}
+    local skip_depth = nil
+    for index, row in ipairs(tree) do
+        if skip_depth ~= nil then
+            if row.depth > skip_depth then
+                goto continue
+            end
+            skip_depth = nil
+        end
+        while #dir_stack > 0 and dir_stack[#dir_stack].depth >= row.depth do
+            dir_stack[#dir_stack] = nil
+        end
+        local parent_dir = #dir_stack > 0 and dir_stack[#dir_stack].path or nil
+        local file = row.file and files[row.file + 1]
+        if file then
+            add_file_line(content, file, row.name, ("  "):rep(row.depth), row.depth, parent_dir)
+        else
+            local segment = tostring(row.name):gsub("/+$", "")
+            local dir_path = parent_dir and (parent_dir .. "/" .. segment) or segment
+            local is_collapsed = collapsed_dirs[dir_path] == true
+            local descendant_count = is_collapsed and count_descendant_files(tree, index, row.depth, files) or 0
+            add_directory_line(content, row, dir_path, parent_dir, is_collapsed, descendant_count)
+            if is_collapsed then
+                skip_depth = row.depth
+            else
+                dir_stack[#dir_stack + 1] = { depth = row.depth, path = dir_path }
+            end
+        end
+        ::continue::
+    end
 end
 
 local DEFAULT_PROGRESS_BAR_WIDTH = 16
@@ -211,12 +286,13 @@ local function add_progress_bar_line(content, view)
 end
 
 --- The panel's contents for `view` at time `now` (Unix seconds): its lines,
---- their highlights, and which file each line shows, for the panel window to
---- draw and to open files from.
---- @return table { lines: string[], highlights: { line, col_start, col_end, group }[], paths: table<integer, string>, conversation_line: integer }
---- `line` is 0-based and columns are byte offsets; `paths` is keyed by 1-based line number.
-function M.build(view, now)
-    local content = { lines = {}, highlights = {}, paths = {} }
+--- their highlights, row metadata, selectable lines, and which file each line
+--- shows, for the panel window to draw and navigate.
+--- @return table { lines: string[], highlights: table[], paths: table<integer, string>, rows: table<integer, table>, selectable_lines: integer[], conversation_line: integer }
+--- `line` is 0-based and columns are byte offsets; `paths` and `rows` are keyed by 1-based line number.
+function M.build(view, now, opts)
+    local collapsed_dirs = type(opts) == "table" and type(opts.collapsed_dirs) == "table" and opts.collapsed_dirs or {}
+    local content = { lines = {}, highlights = {}, paths = {}, rows = {}, selectable_lines = {} }
     function content.add_line(text, group)
         content.lines[#content.lines + 1] = text
         if group then
@@ -233,17 +309,17 @@ function M.build(view, now)
     local conversation_suffix = conversation_count > 0 and (" [%d]"):format(conversation_count) or ""
     content.add_line("  💬 Conversation" .. conversation_suffix, "JprTitle")
     local conversation_line = #content.lines
-    local files = view.files or {}
-    for _, row in ipairs(view.tree or M.create_flat_tree_from_files(files)) do
-        local indent = ("  "):rep(row.depth)
-        local file = row.file and files[row.file + 1]
-        if file then
-            add_file_line(content, file, row.name, indent)
-        else
-            content.add_line(indent .. M.one_line(row.name) .. "/", "JprMuted")
-        end
-    end
-    return { lines = content.lines, highlights = content.highlights, paths = content.paths, conversation_line = conversation_line }
+    content.rows[conversation_line] = { kind = "conversation" }
+    content.selectable_lines[#content.selectable_lines + 1] = conversation_line
+    render_tree_rows(content, view, collapsed_dirs)
+    return {
+        lines = content.lines,
+        highlights = content.highlights,
+        paths = content.paths,
+        rows = content.rows,
+        selectable_lines = content.selectable_lines,
+        conversation_line = conversation_line,
+    }
 end
 
 return M

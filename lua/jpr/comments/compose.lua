@@ -88,7 +88,23 @@ local function build_title_from_anchor(anchor, origin)
     return badge .. " " .. location
 end
 
-local function build_footer(allow_destination_toggle)
+local function is_local_only_anchor(session, anchor)
+    if type(anchor) ~= "table" or type(anchor.file) ~= "string" or anchor.file == "" then
+        return false
+    end
+    local files = session and session.view and session.view.files or {}
+    for _, file in ipairs(files) do
+        if file.path == anchor.file then
+            return file.isLocalOnly == true
+        end
+    end
+    return false
+end
+
+local function build_footer(allow_destination_toggle, is_local_only)
+    if is_local_only then
+        return " <C-s> save · local only (unpushed file) · q cancel "
+    end
     if allow_destination_toggle then
         return " <C-s> save · <C-g> flip dest · <M-s> other dest · <C-g>s suggest · q cancel "
     end
@@ -135,8 +151,7 @@ local function bind_compose_keys(session, compose, opts)
         M.close(session)
     end
     vim.keymap.set({ "n", "i" }, "<C-s>", function()
-        local origin = opts.allow_destination_toggle and compose.origin or nil
-        submit_compose(session, buf, opts.on_submit, origin)
+        submit_compose(session, buf, opts.on_submit, compose.origin)
     end, { buffer = buf, silent = true, desc = "Save comment" })
     if opts.allow_destination_toggle then
         vim.keymap.set({ "n", "i" }, "<M-s>", function()
@@ -179,7 +194,7 @@ local function open_editor(session, opts)
         border = "rounded",
         title = " " .. opts.title .. " ",
         title_pos = "center",
-        footer = build_footer(opts.allow_destination_toggle),
+        footer = build_footer(opts.allow_destination_toggle, opts.is_local_only),
         footer_pos = "center",
     })
     vim.api.nvim_set_option_value("wrap", true, { win = win, scope = "local" })
@@ -209,14 +224,16 @@ function M.open_new(session, anchor, opts)
         return require("jpr.session").report_read_only(session)
     end
     local open_opts = opts or {}
+    local is_local_only = is_local_only_anchor(session, anchor)
     local open_with_body = function(initial_text)
-        local origin = open_opts.initial_origin or session.compose_destination or "github"
+        local origin = is_local_only and "local" or (open_opts.initial_origin or session.compose_destination or "github")
         open_editor(session, {
             title = build_title_from_anchor(anchor, origin),
             initial_text = initial_text,
             anchor = anchor,
             origin = origin,
-            allow_destination_toggle = true,
+            allow_destination_toggle = not is_local_only,
+            is_local_only = is_local_only,
             on_submit = function(body, submit_origin)
                 require("jpr.session").request(session, "comment", {
                     anchor = anchor,

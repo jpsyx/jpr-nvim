@@ -169,5 +169,104 @@ assert(not vim.api.nvim_win_is_valid(left_win) or vim.api.nvim_win_get_buf(left_
 vim.wait(300)
 assert(#vim.api.nvim_tabpage_list_wins(review.tab) <= 3, "no window was added: " .. #vim.api.nvim_tabpage_list_wins(review.tab))
 
+-- Menu-style vertical-only navigation, cursor clamping, collapsible directories, and cursor preservation.
+local function run_panel_key(lhs)
+    vim.api.nvim_set_current_win(panel_win)
+    local keys = vim.api.nvim_replace_termcodes(lhs, true, false, true)
+    vim.api.nvim_feedkeys(keys, "xt", false)
+end
+
+local tree_view = {
+    pr = review.view.pr,
+    files = {
+        { path = "README.md", additions = 2, deletions = 1, viewed = "UNVIEWED", threads = 1 },
+        { path = "src/a.rs", additions = 3, deletions = 0, viewed = "UNVIEWED", threads = 0 },
+        { path = "src/b.rs", additions = 1, deletions = 0, viewed = "UNVIEWED", threads = 0 },
+    },
+    tree = {
+        { depth = 0, name = "src" },
+        { depth = 1, name = "a.rs", file = 1 },
+        { depth = 1, name = "b.rs", file = 2 },
+        { depth = 0, name = "README.md", file = 0 },
+    },
+    viewedCount = 0,
+    threadCount = 1,
+    draftCount = 0,
+    conversationCount = 1,
+    sync = { state = "synced", at = 1 },
+}
+vim.fn.mkdir(worktree .. "/src", "p")
+vim.fn.writefile({ "fn a() {}" }, worktree .. "/src/a.rs")
+vim.fn.writefile({ "fn b() {}" }, worktree .. "/src/b.rs")
+review.view = tree_view
+panel_view.render(review, tree_view)
+
+-- Cursor clamps to column 0 and snaps off header lines onto Conversation.
+vim.api.nvim_set_current_win(panel_win)
+vim.api.nvim_win_set_cursor(panel_win, { 1, 3 })
+vim.api.nvim_exec_autocmds("CursorMoved", { buffer = review.panel.buf })
+local snapped_cursor = vim.api.nvim_win_get_cursor(panel_win)
+assert(snapped_cursor[1] == 6 and snapped_cursor[2] == 0, "header snaps to Conversation col 0: " .. vim.inspect(snapped_cursor))
+local row_info = panel_view.get_row_under_cursor(review)
+assert(row_info and row_info.line == 6 and row_info.row.kind == "conversation", vim.inspect(row_info))
+
+-- Horizontal keys (w, $, 0) are no-ops; j/k/gg/G move strictly across selectable_lines.
+run_panel_key("w")
+run_panel_key("$")
+run_panel_key("0")
+assert(vim.api.nvim_win_get_cursor(panel_win)[2] == 0, "horizontal keys stay at col 0")
+assert(vim.wo[panel_win].sidescrolloff == 0, "sidescrolloff is 0 on panel window")
+
+run_panel_key("j")
+assert(vim.api.nvim_win_get_cursor(panel_win)[1] == 7, "j moves to src/ dir")
+run_panel_key("G")
+assert(vim.api.nvim_win_get_cursor(panel_win)[1] == 10, "G jumps to last selectable item")
+run_panel_key("k")
+assert(vim.api.nvim_win_get_cursor(panel_win)[1] == 9, "k moves up to src/b.rs")
+run_panel_key("gg")
+assert(vim.api.nvim_win_get_cursor(panel_win)[1] == 6, "gg jumps to Conversation")
+
+-- h on child file jumps to parent_dir; h on expanded dir collapses it.
+vim.api.nvim_win_set_cursor(panel_win, { 9, 0 })
+run_panel_key("h")
+assert(vim.api.nvim_win_get_cursor(panel_win)[1] == 7, "h on child file jumps to parent src/ dir")
+run_panel_key("h")
+assert(review.panel.collapsed_dirs["src"] == true, "h on expanded dir collapses it")
+assert(vim.api.nvim_buf_get_lines(review.panel.buf, 6, 7, false)[1] == "▸ src/ (2)", "collapsed src/ renders count")
+assert(vim.api.nvim_win_get_cursor(panel_win)[1] == 7, "cursor stays on collapsed dir")
+
+-- o expands a collapsed dir, does nothing on an already-expanded dir.
+run_panel_key("o")
+assert(review.panel.collapsed_dirs["src"] == nil, "o expands collapsed dir")
+assert(vim.api.nvim_win_get_cursor(panel_win)[1] == 7, "cursor stays on expanded dir after o")
+run_panel_key("o")
+assert(review.panel.collapsed_dirs["src"] == nil, "o on already-expanded dir does nothing")
+assert(vim.api.nvim_win_get_cursor(panel_win)[1] == 7, "o on already-expanded dir does not move cursor")
+
+-- <CR> toggles directories.
+run_panel_key("<CR>")
+assert(review.panel.collapsed_dirs["src"] == true, "<CR> collapses expanded dir")
+run_panel_key("<CR>")
+assert(review.panel.collapsed_dirs["src"] == nil, "<CR> expands collapsed dir")
+
+-- l expands a collapsed dir, steps into first child on an expanded dir, and opens a file.
+run_panel_key("h")
+assert(review.panel.collapsed_dirs["src"] == true, "re-collapsed src/")
+run_panel_key("l")
+assert(review.panel.collapsed_dirs["src"] == nil, "l expands collapsed dir")
+assert(vim.api.nvim_win_get_cursor(panel_win)[1] == 7, "l expanding dir keeps cursor on dir")
+run_panel_key("l")
+assert(vim.api.nvim_win_get_cursor(panel_win)[1] == 8, "l on expanded dir steps into first child")
+run_panel_key("l")
+assert(vim.api.nvim_get_current_win() ~= panel_win, "l on file opens it in main window")
+assert(vim.fn.resolve(vim.api.nvim_buf_get_name(0)) == vim.fn.resolve(worktree .. "/src/a.rs"), "l opens src/a.rs")
+
+-- Cursor stays on the same file path across M.render redraws.
+vim.api.nvim_set_current_win(panel_win)
+vim.api.nvim_win_set_cursor(panel_win, { 9, 0 })
+panel_view.render(review, tree_view)
+local preserved = vim.api.nvim_win_get_cursor(panel_win)
+assert(preserved[1] == 9 and preserved[2] == 0, "cursor stays on src/b.rs across redraw: " .. vim.inspect(preserved))
+
 session.close_current()
 print("panel_view_spec: ok")

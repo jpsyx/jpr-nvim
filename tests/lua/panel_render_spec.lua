@@ -34,15 +34,25 @@ assert(vim.deep_equal(built.lines, {
     "synced 12s ago",
     "",
     "  💬 Conversation [2]",
-    "docs/",
+    "▾ docs/",
     "    x.md  +4 -4",
-    "src/",
+    "▾ src/",
     "  ✓ a.rs  +12 -3 [2]",
     "  ● b.rs  +1 -0",
 }), vim.inspect(built.lines))
 assert(built.conversation_line == 6, tostring(built.conversation_line))
 assert(built.paths[8] == "docs/x.md" and built.paths[10] == "src/a.rs" and built.paths[11] == "src/b.rs", vim.inspect(built.paths))
 assert(built.paths[6] == nil and built.paths[7] == nil and built.paths[9] == nil, "conversation and directories open nothing")
+assert(vim.deep_equal(built.selectable_lines, { 6, 7, 8, 9, 10, 11 }), vim.inspect(built.selectable_lines))
+assert(vim.deep_equal(built.rows[6], { kind = "conversation" }), vim.inspect(built.rows[6]))
+assert(
+    vim.deep_equal(built.rows[9], { kind = "dir", path = "src", depth = 0, parent_dir = nil, is_collapsed = false }),
+    vim.inspect(built.rows[9])
+)
+assert(
+    vim.deep_equal(built.rows[10], { kind = "file", path = "src/a.rs", depth = 1, parent_dir = "src" }),
+    vim.inspect(built.rows[10])
+)
 
 local function highlighted(result, group)
     local texts = {}
@@ -64,7 +74,7 @@ assert(
 assert(
     vim.deep_equal(
         highlighted(built, "JprMuted"),
-        { "░░░░░░░░░░░", "viewed 1/3 · threads 2 · drafts 1", "synced 12s ago", "docs/", "src/" }
+        { "░░░░░░░░░░░", "viewed 1/3 · threads 2 · drafts 1", "synced 12s ago", "▾ docs/", "▾ src/" }
     ),
     vim.inspect(highlighted(built, "JprMuted"))
 )
@@ -258,6 +268,63 @@ assert(#modified_spans == 1, "one JprModified span")
 assert(
     modified_spans[1].line == 7 and modified_spans[1].col_start == 6 and modified_spans[1].col_end == 9,
     vim.inspect(modified_spans[1])
+)
+
+-- Collapsible directories: collapsed dir shows count and omits descendants.
+local collapsed = panel.build(view, 112, { collapsed_dirs = { src = true } })
+assert(vim.deep_equal(collapsed.lines, {
+    "#7 Fix the widget",
+    "█████░░░░░░░░░░░  1/3 (33%)",
+    "viewed 1/3 · threads 2 · drafts 1",
+    "synced 12s ago",
+    "",
+    "  💬 Conversation [2]",
+    "▾ docs/",
+    "    x.md  +4 -4",
+    "▸ src/ (2)",
+}), vim.inspect(collapsed.lines))
+assert(collapsed.paths[9] == nil and collapsed.paths[10] == nil and collapsed.paths[11] == nil, vim.inspect(collapsed.paths))
+assert(collapsed.rows[10] == nil and collapsed.rows[11] == nil, "collapsed descendants omitted from rows")
+assert(
+    vim.deep_equal(collapsed.rows[9], { kind = "dir", path = "src", depth = 0, parent_dir = nil, is_collapsed = true }),
+    vim.inspect(collapsed.rows[9])
+)
+assert(vim.deep_equal(collapsed.selectable_lines, { 6, 7, 8, 9 }), vim.inspect(collapsed.selectable_lines))
+
+-- Lone-child joined directories carry canonical path and parent_dir, and isLocalOnly renders [local] in JprThreadLocal.
+local joined_and_local = panel.build({
+    pr = { number = 7, title = "Fix the widget" },
+    files = {
+        { path = "docs/x/a.md", additions = 2, deletions = 0, viewed = "UNVIEWED", threads = 0, isLocalOnly = true },
+        { path = "docs/x/sub/b.md", additions = 1, deletions = 0, viewed = "UNVIEWED", threads = 1, localThreads = 1, isLocalOnly = true },
+    },
+    tree = {
+        { depth = 0, name = "docs/x" },
+        { depth = 1, name = "a.md", file = 0 },
+        { depth = 1, name = "sub" },
+        { depth = 2, name = "b.md", file = 1 },
+    },
+    sync = { state = "synced", at = 100 },
+}, 110)
+assert(joined_and_local.lines[7] == "▾ docs/x/", joined_and_local.lines[7])
+assert(joined_and_local.lines[8] == "    a.md  +2 -0 [local]", joined_and_local.lines[8])
+assert(joined_and_local.lines[9] == "  ▾ sub/", joined_and_local.lines[9])
+assert(joined_and_local.lines[10] == "      b.md  +1 -0 [1L] [local]", joined_and_local.lines[10])
+assert(
+    vim.deep_equal(joined_and_local.rows[7], { kind = "dir", path = "docs/x", depth = 0, parent_dir = nil, is_collapsed = false }),
+    vim.inspect(joined_and_local.rows[7])
+)
+assert(
+    vim.deep_equal(joined_and_local.rows[9], { kind = "dir", path = "docs/x/sub", depth = 1, parent_dir = "docs/x", is_collapsed = false }),
+    vim.inspect(joined_and_local.rows[9])
+)
+assert(
+    vim.deep_equal(joined_and_local.rows[10], { kind = "file", path = "docs/x/sub/b.md", depth = 2, parent_dir = "docs/x/sub" }),
+    vim.inspect(joined_and_local.rows[10])
+)
+assert(
+    vim.deep_equal(highlighted(joined_and_local, "JprThreadLocal"), { "[local]", "[local]" }),
+    vim.inspect(highlighted(joined_and_local, "JprThreadLocal"))
 )
 
 print("panel_render_spec: ok")

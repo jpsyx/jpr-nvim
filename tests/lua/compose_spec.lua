@@ -340,6 +340,39 @@ local local_nil_edit_win = helpers.find_floating_win("Edit local comment")
 assert(local_nil_edit_win ~= nil and helpers.win_title(local_nil_edit_win):find("[Edit local comment]", 1, true) ~= nil)
 compose.close(review)
 
+-- 6e. Local-only files lock compose to origin="local", disable <C-g>/<M-s> flip, and show footer hint.
+local saved_files = review.view.files
+review.view.files = {
+    { path = "README.md", additions = 2, deletions = 1, viewed = "UNVIEWED", threads = 1 },
+    { path = "unpushed.lua", additions = 3, deletions = 0, viewed = "UNVIEWED", threads = 0, isLocalOnly = true },
+}
+review.compose_destination = "github"
+local local_only_anchor = { file = "unpushed.lua", kind = "line", side = "RIGHT", start = 1, ["end"] = 1 }
+compose.open_new(review, local_only_anchor, { suggest = false })
+local locked_win = helpers.find_floating_win("Local")
+assert(locked_win ~= nil and vim.api.nvim_win_is_valid(locked_win), "local-only compose opens in local mode")
+assert(helpers.win_title(locked_win):find("[Local → agent] unpushed.lua:1", 1, true) ~= nil, helpers.win_title(locked_win))
+local locked_config = vim.api.nvim_win_get_config(locked_win)
+local footer_text = type(locked_config.footer) == "string" and locked_config.footer
+    or table.concat(vim.tbl_map(function(chunk)
+        return type(chunk) == "table" and chunk[1] or tostring(chunk)
+    end, locked_config.footer or {}), "")
+assert(footer_text:find("local only (unpushed file)", 1, true) ~= nil, "footer notes local only: " .. footer_text)
+helpers.press_key("<C-g>")
+assert(helpers.win_title(locked_win):find("[Local → agent] unpushed.lua:1", 1, true) ~= nil, "<C-g> cannot flip local-only compose")
+local locked_before = #helpers.read_requests(log, "comment")
+vim.api.nvim_buf_set_lines(vim.api.nvim_win_get_buf(locked_win), 0, -1, false, { "Local note on unpushed file" })
+helpers.press_key("<M-s>")
+assert(vim.api.nvim_win_is_valid(locked_win), "<M-s> does not submit to github for local-only file")
+assert(#helpers.read_requests(log, "comment") == locked_before, "<M-s> sends no RPC for local-only file")
+helpers.press_key("<C-s>")
+assert(vim.wait(3000, function()
+    return #helpers.read_requests(log, "comment") == locked_before + 1
+end), "<C-s> submits local comment on local-only file")
+assert(helpers.read_requests(log, "comment")[locked_before + 1].params.origin == "local", "submitted origin is local")
+review.view.files = saved_files
+review.compose_destination = nil
+
 -- 7. session.comment_current end-to-end anchor resolution via real compose window and comment RPCs.
 local function comment_and_submit(opts)
     local before = #helpers.read_requests(log, "comment")

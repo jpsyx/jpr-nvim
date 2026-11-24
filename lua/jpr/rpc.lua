@@ -3,7 +3,7 @@ local M = {}
 
 --- The protocol version this client speaks. `initialize` must report the same
 --- one, or the session refuses the engine.
-M.PROTOCOL_VERSION = 6
+M.PROTOCOL_VERSION = 7
 
 --- Splits job output into complete lines. `data` follows jobstart's on_stdout
 --- contract: the first item continues the pending partial line, and the last
