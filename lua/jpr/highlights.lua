@@ -68,8 +68,9 @@ local function clamp_channel(channel_value)
     return math.max(0, math.min(255, channel_value))
 end
 
---- Blends 24-bit `base_rgb` toward `tint_rgb` by `alpha`, rounding each channel
---- and clamping the result to `[0, 255]`.
+--- Blends 24-bit `base_rgb` toward `tint_rgb` by `alpha`, returning a 24-bit RGB
+--- integer with each channel rounded and clamped to `[0, 255]`. Used to compute
+--- subtle diff background tints against the active colorscheme.
 function M.blend_rgb(base_rgb, tint_rgb, alpha)
     local base_red, base_green, base_blue = rgb_to_channels(base_rgb)
     local tint_red, tint_green, tint_blue = rgb_to_channels(tint_rgb)
@@ -80,20 +81,22 @@ function M.blend_rgb(base_rgb, tint_rgb, alpha)
     return red * 0x10000 + green * 0x100 + blue
 end
 
---- Returns whether the active background should be treated as dark, using the
---- relative luminance of `normal_bg` when available or `bg_option` otherwise.
-function M.is_dark_background(normal_bg, bg_option)
+--- Returns whether the active background should be treated as dark so diff
+--- tints pick dark- or light-theme palettes, using `normal_bg` luminance when
+--- available and falling back to `background_option` (`vim.o.background`).
+function M.is_dark_background(normal_bg, background_option)
     if type(normal_bg) == "number" then
         local red, green, blue = rgb_to_channels(normal_bg)
         return (0.2126 * red + 0.7152 * green + 0.0722 * blue) < 128
     end
-    return bg_option ~= "light"
+    return background_option ~= "light"
 end
 
---- Builds background-only diff highlight specs (with no `fg`) blended onto
---- `normal_bg`, falling back to dark or light presets when `normal_bg` is nil.
-function M.create_diff_highlights(normal_bg, bg_option)
-    local is_dark = M.is_dark_background(normal_bg, bg_option)
+--- Creates background-only diff highlight specs (with no `fg`) blended onto
+--- `normal_bg`, falling back to dark or light presets when `normal_bg` is nil
+--- so syntax foreground colors remain legible across colorschemes.
+function M.create_diff_highlights(normal_bg, background_option)
+    local is_dark = M.is_dark_background(normal_bg, background_option)
     if type(normal_bg) ~= "number" then
         return vim.deepcopy(is_dark and DARK_FALLBACK_DIFF_HIGHLIGHTS or LIGHT_FALLBACK_DIFF_HIGHLIGHTS)
     end

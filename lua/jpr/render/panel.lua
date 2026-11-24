@@ -139,12 +139,14 @@ local DEFAULT_PROGRESS_BAR_WIDTH = 16
 local PROGRESS_FILLED_CELL = "█"
 local PROGRESS_UNFILLED_CELL = "░"
 
---- Builds the reviewed-files visual progress bar text and byte-range metadata.
+--- Creates visual progress bar text and byte-range metadata for reviewed or
+--- processed counts, used by the PR sidebar panel and the live loading view.
 --- @param viewed_count integer|nil
 --- @param total_count integer|nil
 --- @param bar_width integer|nil
+--- @param unit_label string|nil Optional unit noun placed after the ratio (for example `"files"`).
 --- @return table { text: string, filled_bytes: integer, unfilled_bytes: integer, counter_start: integer, is_complete: boolean }
-function M.build_progress_bar_from_counts(viewed_count, total_count, bar_width)
+function M.create_progress_bar_from_counts(viewed_count, total_count, bar_width, unit_label)
     local width = math.max(1, math.floor(tonumber(bar_width) or DEFAULT_PROGRESS_BAR_WIDTH))
     local safe_total = math.max(0, math.floor(tonumber(total_count) or 0))
     local clamped_viewed = math.max(0, math.min(math.floor(tonumber(viewed_count) or 0), safe_total))
@@ -159,7 +161,10 @@ function M.build_progress_bar_from_counts(viewed_count, total_count, bar_width)
     end
     local filled = PROGRESS_FILLED_CELL:rep(filled_cells)
     local unfilled = PROGRESS_UNFILLED_CELL:rep(width - filled_cells)
-    local counter = ("%d/%d (%d%%)"):format(clamped_viewed, safe_total, percent)
+    local has_unit_label = type(unit_label) == "string" and unit_label ~= ""
+    local counter = has_unit_label
+            and ("%d/%d %s (%d%%)"):format(clamped_viewed, safe_total, unit_label, percent)
+        or ("%d/%d (%d%%)"):format(clamped_viewed, safe_total, percent)
     local text = filled .. unfilled .. "  " .. counter
     return {
         text = text,
@@ -170,33 +175,39 @@ function M.build_progress_bar_from_counts(viewed_count, total_count, bar_width)
     }
 end
 
-local function add_progress_bar_line(content, view)
-    local files = view.files or {}
-    local progress = M.build_progress_bar_from_counts(view.viewedCount or 0, #files)
-    content.add_line(progress.text)
-    local line = #content.lines - 1
-    if progress.filled_bytes > 0 then
-        content.highlights[#content.highlights + 1] = {
+--- Appends the filled, unfilled, and counter highlight spans for `progress_bar`
+--- on 0-based `line` starting at `col_offset`. Shared by the panel and loading
+--- renderers so both color progress bars identically.
+function M.append_progress_bar_highlights(highlights, line, col_offset, progress_bar)
+    if progress_bar.filled_bytes > 0 then
+        highlights[#highlights + 1] = {
             line = line,
-            col_start = 0,
-            col_end = progress.filled_bytes,
+            col_start = col_offset,
+            col_end = col_offset + progress_bar.filled_bytes,
             group = "JprViewed",
         }
     end
-    if progress.unfilled_bytes > 0 then
-        content.highlights[#content.highlights + 1] = {
+    if progress_bar.unfilled_bytes > 0 then
+        highlights[#highlights + 1] = {
             line = line,
-            col_start = progress.filled_bytes,
-            col_end = progress.filled_bytes + progress.unfilled_bytes,
+            col_start = col_offset + progress_bar.filled_bytes,
+            col_end = col_offset + progress_bar.filled_bytes + progress_bar.unfilled_bytes,
             group = "JprMuted",
         }
     end
-    content.highlights[#content.highlights + 1] = {
+    highlights[#highlights + 1] = {
         line = line,
-        col_start = progress.counter_start,
-        col_end = #progress.text,
-        group = progress.is_complete and "JprViewed" or "JprTitle",
+        col_start = col_offset + progress_bar.counter_start,
+        col_end = col_offset + #progress_bar.text,
+        group = progress_bar.is_complete and "JprViewed" or "JprTitle",
     }
+end
+
+local function add_progress_bar_line(content, view)
+    local files = view.files or {}
+    local progress_bar = M.create_progress_bar_from_counts(view.viewedCount or 0, #files)
+    content.add_line(progress_bar.text)
+    M.append_progress_bar_highlights(content.highlights, #content.lines - 1, 0, progress_bar)
 end
 
 --- The panel's contents for `view` at time `now` (Unix seconds): its lines,

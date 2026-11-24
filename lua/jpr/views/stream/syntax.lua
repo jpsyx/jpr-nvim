@@ -10,16 +10,17 @@ local function default_highlight_exists(group_name)
     return vim.fn.hlexists(group_name) == 1
 end
 
---- Resolves a Treesitter `capture_name` for `lang` to the most specific
---- existing highlight group, checking `@<capture>.<lang>` first and then
---- walking dot-separated prefixes (`@a.b.c` -> `@a.b` -> `@a`).
-function M.resolve_hl_group(capture_name, lang, exists_fn)
+--- Looks up the most specific existing highlight group for a Treesitter
+--- `capture_name` and optional `language`, checking `@<capture>.<language>`
+--- first and walking dot-separated prefixes (`@a.b.c` -> `@a.b` -> `@a`).
+--- Used when painting stream syntax extmarks across colorschemes.
+function M.get_highlight_group_from_capture(capture_name, language, has_highlight_group)
     if type(capture_name) ~= "string" or capture_name == "" or capture_name:sub(1, 1) == "_" then
         return nil
     end
-    local check_exists = exists_fn or default_highlight_exists
-    if type(lang) == "string" and lang ~= "" then
-        local language_group = ("@%s.%s"):format(capture_name, lang)
+    local check_exists = has_highlight_group or default_highlight_exists
+    if type(language) == "string" and language ~= "" then
+        local language_group = ("@%s.%s"):format(capture_name, language)
         if check_exists(language_group) then
             return language_group
         end
@@ -35,9 +36,10 @@ function M.resolve_hl_group(capture_name, lang, exists_fn)
     return nil
 end
 
---- Resolves a Treesitter language name from a repository file `path`, or nil
---- when Neovim does not recognize the filetype.
-function M.resolve_lang_from_path(path)
+--- Looks up the Treesitter language name for a repository file `path`, or nil
+--- when Neovim does not recognize the filetype. Used to pick a parser per file
+--- section in the diff stream.
+function M.get_language_from_path(path)
     if type(path) ~= "string" or path == "" then
         return nil
     end
@@ -45,8 +47,8 @@ function M.resolve_lang_from_path(path)
     if not has_filetype or type(filetype) ~= "string" or filetype == "" then
         return nil
     end
-    local has_lang, language = pcall(vim.treesitter.language.get_lang, filetype)
-    if has_lang and type(language) == "string" and language ~= "" then
+    local has_language, language = pcall(vim.treesitter.language.get_lang, filetype)
+    if has_language and type(language) == "string" and language ~= "" then
         return language
     end
     return filetype
@@ -73,8 +75,8 @@ local function apply_capture_to_rows(buf, rows, highlight_group, start_row, star
             local col_start = row_index == start_row and math.max(0, math.min(start_col, line_length)) or 0
             local col_end = row_index == end_row and math.max(0, math.min(end_col, line_length)) or line_length
             if col_end > col_start then
-                vim.api.nvim_buf_set_extmark(buf, syntax_namespace, entry.line, entry.gutter_len + col_start, {
-                    end_col = entry.gutter_len + col_end,
+                vim.api.nvim_buf_set_extmark(buf, syntax_namespace, entry.line, entry.gutter_length + col_start, {
+                    end_col = entry.gutter_length + col_end,
                     hl_group = highlight_group,
                     priority = SYNTAX_PRIORITY,
                     strict = false,
@@ -84,13 +86,13 @@ local function apply_capture_to_rows(buf, rows, highlight_group, start_row, star
     end
 end
 
-local function parse_file_root(rows, lang)
+local function parse_file_root(rows, language)
     local source_lines = {}
     for index, entry in ipairs(rows) do
         source_lines[index] = entry.text
     end
     local source = table.concat(source_lines, "\n")
-    local has_parser, parser = pcall(vim.treesitter.get_string_parser, source, lang)
+    local has_parser, parser = pcall(vim.treesitter.get_string_parser, source, language)
     if not has_parser or not parser then
         return nil, nil
     end
@@ -106,37 +108,38 @@ local function highlight_file_group(buf, file_group)
     if #file_group.rows == 0 or #file_group.rows > MAX_FILE_ROWS then
         return
     end
-    local lang = M.resolve_lang_from_path(file_group.path)
-    if not lang then
+    local language = M.get_language_from_path(file_group.path)
+    if not language then
         return
     end
-    local has_query, query = pcall(vim.treesitter.query.get, lang, "highlights")
+    local has_query, query = pcall(vim.treesitter.query.get, language, "highlights")
     if not has_query or not query then
         return
     end
-    local root, source = parse_file_root(file_group.rows, lang)
+    local root, source = parse_file_root(file_group.rows, language)
     if not root then
         return
     end
-    local resolved_groups_by_capture = {}
+    local highlight_groups_by_capture = {}
     for capture_id, node in query:iter_captures(root, source, 0, -1) do
         local capture_name = query.captures[capture_id]
         if capture_name and not IGNORED_CAPTURES[capture_name] and capture_name:sub(1, 1) ~= "_" then
-            local resolved_group = resolved_groups_by_capture[capture_name]
-            if resolved_group == nil then
-                resolved_group = M.resolve_hl_group(capture_name, lang) or false
-                resolved_groups_by_capture[capture_name] = resolved_group
+            local highlight_group = highlight_groups_by_capture[capture_name]
+            if highlight_group == nil then
+                highlight_group = M.get_highlight_group_from_capture(capture_name, language) or false
+                highlight_groups_by_capture[capture_name] = highlight_group
             end
-            if resolved_group then
+            if highlight_group then
                 local start_row, start_col, end_row, end_col = node:range()
-                apply_capture_to_rows(buf, file_group.rows, resolved_group, start_row, start_col, end_row, end_col)
+                apply_capture_to_rows(buf, file_group.rows, highlight_group, start_row, start_col, end_row, end_col)
             end
         end
     end
 end
 
 --- Applies per-file Treesitter syntax extmarks onto `buf` for all code rows in
---- `column`, clearing any previous syntax extmarks first.
+--- `column`, clearing any previous syntax extmarks first. Called by
+--- `jpr.views.stream` whenever a stream buffer is filled.
 function M.apply(buf, column)
     vim.api.nvim_buf_clear_namespace(buf, syntax_namespace, 0, -1)
     local code_rows = column and column.code_rows or {}

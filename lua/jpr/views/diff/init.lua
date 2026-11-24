@@ -117,7 +117,7 @@ end
 local SPLIT_DIFF_WINHIGHLIGHT = "DiffAdd:JprDiffAdd,DiffChange:JprDiffAdd,DiffDelete:JprDiffDelete,DiffText:JprDiffAddText"
 local SPLIT_DIFF_GROUPS = { DiffAdd = true, DiffChange = true, DiffDelete = true, DiffText = true }
 
-local function build_split_winhighlight(existing)
+local function build_split_winhighlight_from_existing(existing)
     if type(existing) ~= "string" or existing == "" then
         return SPLIT_DIFF_WINHIGHLIGHT
     end
@@ -155,7 +155,7 @@ function M.open_base(session, win, buf, diff)
     }
     for _, diff_win in ipairs({ base_win, win }) do
         local current_winhighlight = vim.api.nvim_get_option_value("winhighlight", { win = diff_win, scope = "local" })
-        vim.api.nvim_set_option_value("winhighlight", build_split_winhighlight(current_winhighlight), {
+        vim.api.nvim_set_option_value("winhighlight", build_split_winhighlight_from_existing(current_winhighlight), {
             win = diff_win,
             scope = "local",
         })

@@ -179,7 +179,10 @@ fn stream_emits_stream_progress_notifications_in_order_before_the_response() {
             "streamProgress at {index} must arrive before stream response at {response_index}"
         );
     }
-    let payloads: Vec<Value> = progress_entries.into_iter().map(|(_, p)| p).collect();
+    let payloads: Vec<Value> = progress_entries
+        .into_iter()
+        .map(|(_, payload)| payload)
+        .collect();
     assert_eq!(
         payloads,
         vec![

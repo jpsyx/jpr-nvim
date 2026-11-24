@@ -8,39 +8,57 @@ local syntax = require("jpr.views.stream.syntax")
 
 jpr.define_highlights()
 
--- resolve_hl_group walks @capture.lang -> @a.b.c -> @a.b -> @a.
-local function make_exists(known)
+-- get_highlight_group_from_capture walks @capture.language -> @a.b.c -> @a.b -> @a.
+local function create_highlight_checker(known_groups)
     return function(group_name)
-        return known[group_name] == true
+        return known_groups[group_name] == true
     end
 end
 
 assert(
-    syntax.resolve_hl_group("keyword.function", "lua", make_exists({ ["@keyword.function.lua"] = true, ["@keyword"] = true }))
-        == "@keyword.function.lua",
+    syntax.get_highlight_group_from_capture(
+        "keyword.function",
+        "lua",
+        create_highlight_checker({ ["@keyword.function.lua"] = true, ["@keyword"] = true })
+    ) == "@keyword.function.lua",
     "prefers language-qualified capture"
 )
 assert(
-    syntax.resolve_hl_group("keyword.function", "lua", make_exists({ ["@keyword.function"] = true, ["@keyword"] = true }))
-        == "@keyword.function",
+    syntax.get_highlight_group_from_capture(
+        "keyword.function",
+        "lua",
+        create_highlight_checker({ ["@keyword.function"] = true, ["@keyword"] = true })
+    ) == "@keyword.function",
     "falls back to unqualified full capture"
 )
 assert(
-    syntax.resolve_hl_group("keyword.function.builtin", "lua", make_exists({ ["@keyword"] = true })) == "@keyword",
+    syntax.get_highlight_group_from_capture(
+        "keyword.function.builtin",
+        "lua",
+        create_highlight_checker({ ["@keyword"] = true })
+    ) == "@keyword",
     "walks dot-separated prefixes to root capture"
 )
 assert(
-    syntax.resolve_hl_group("nonexistent.capture", "lua", make_exists({ ["@keyword"] = true })) == nil,
+    syntax.get_highlight_group_from_capture(
+        "nonexistent.capture",
+        "lua",
+        create_highlight_checker({ ["@keyword"] = true })
+    ) == nil,
     "returns nil when no prefix exists"
 )
 assert(
-    syntax.resolve_hl_group("_internal", "lua", make_exists({ ["@_internal.lua"] = true, ["@_internal"] = true })) == nil,
+    syntax.get_highlight_group_from_capture(
+        "_internal",
+        "lua",
+        create_highlight_checker({ ["@_internal.lua"] = true, ["@_internal"] = true })
+    ) == nil,
     "ignores underscore-prefixed internal captures"
 )
 
--- resolve_lang_from_path resolves known extensions and returns nil for unknown ones.
-assert(syntax.resolve_lang_from_path("lua/jpr/init.lua") == "lua", "resolves lua files")
-assert(syntax.resolve_lang_from_path("notes.unknownext") == nil, "returns nil for unknown extensions")
+-- get_language_from_path returns known extensions and nil for unknown ones.
+assert(syntax.get_language_from_path("lua/jpr/init.lua") == "lua", "detects lua files")
+assert(syntax.get_language_from_path("notes.unknownext") == nil, "returns nil for unknown extensions")
 
 -- Stream buffer receives Treesitter syntax extmarks at exact post-gutter offsets
 -- alongside JprDiffAdd line extmarks (priority 100) and word marks (priority 110).
@@ -90,8 +108,8 @@ stream_view.fill(buf, column)
 
 local stream_namespace = vim.api.nvim_create_namespace("jpr-stream")
 local syntax_namespace = vim.api.nvim_create_namespace("jpr-stream-syntax")
-local gutter_len = column.code_rows[1].gutter_len
-assert(gutter_len == 14, "unified gutter is 14 bytes: " .. tostring(gutter_len))
+local gutter_length = column.code_rows[1].gutter_length
+assert(gutter_length == 14, "unified gutter is 14 bytes: " .. tostring(gutter_length))
 
 local stream_marks = vim.api.nvim_buf_get_extmarks(buf, stream_namespace, 0, -1, { details = true })
 local has_line_priority, has_word_priority = false, false
@@ -116,17 +134,17 @@ local has_multiline_second_row = false
 local has_unknown_ext_mark = false
 for _, mark in ipairs(syntax_marks) do
     local row, col_start, details = mark[2], mark[3], mark[4]
-    if row == 2 and col_start == gutter_len and details.end_col == gutter_len + 5 and details.priority == 90 then
+    if row == 2 and col_start == gutter_length and details.end_col == gutter_length + 5 and details.priority == 90 then
         if type(details.hl_group) == "string" and vim.startswith(details.hl_group, "@keyword") then
             has_local_keyword = true
         end
     end
-    if row == 2 and col_start == gutter_len + 15 and details.end_col == gutter_len + 17 then
+    if row == 2 and col_start == gutter_length + 15 and details.end_col == gutter_length + 17 then
         if type(details.hl_group) == "string" and vim.startswith(details.hl_group, "@number") then
             has_number_literal = true
         end
     end
-    if row == 4 and col_start == gutter_len and details.end_col == gutter_len + 8 then
+    if row == 4 and col_start == gutter_length and details.end_col == gutter_length + 8 then
         if type(details.hl_group) == "string" and vim.startswith(details.hl_group, "@string") then
             has_multiline_second_row = true
         end
@@ -148,7 +166,7 @@ for index = 1, 5001 do
     huge_code_rows[index] = {
         line = index - 1,
         path = "lua/huge.lua",
-        gutter_len = 14,
+        gutter_length = 14,
         text = "local x = 1",
     }
 end

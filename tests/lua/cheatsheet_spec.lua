@@ -11,20 +11,25 @@ local stream_view = require("jpr.views.stream")
 local conversation_view = require("jpr.views.conversation")
 local view_mode = require("jpr.view_mode")
 
-local function layout_text(layout)
+local function join_layout_lines(layout)
     return table.concat(layout.lines, "\n")
 end
 
 local function find_highlight(layout, line_index, needle, expected_group)
     local line = layout.lines[line_index + 1] or ""
-    local start_idx = line:find(needle, 1, true)
-    if not start_idx then
+    local match_start = line:find(needle, 1, true)
+    if not match_start then
         return false
     end
-    local col_start = start_idx - 1
+    local col_start = match_start - 1
     local col_end = col_start + #needle
-    for _, hl in ipairs(layout.highlights) do
-        if hl.line == line_index and hl.col_start == col_start and hl.col_end == col_end and hl.group == expected_group then
+    for _, highlight in ipairs(layout.highlights) do
+        if
+            highlight.line == line_index
+            and highlight.col_start == col_start
+            and highlight.col_end == col_end
+            and highlight.group == expected_group
+        then
             return true
         end
     end
@@ -41,14 +46,14 @@ local function find_line_index(lines, needle)
 end
 
 local function count_cheatsheet_windows()
-    local count = 0
+    local window_count = 0
     for _, win in ipairs(vim.api.nvim_list_wins()) do
         local buf = vim.api.nvim_win_get_buf(win)
         if vim.bo[buf].filetype == "jpr-cheatsheet" then
-            count = count + 1
+            window_count = window_count + 1
         end
     end
-    return count
+    return window_count
 end
 
 local function press_normal_key(lhs)
@@ -100,7 +105,7 @@ local function test_default_layout_contains_all_sections_and_real_keybindings()
     assert(type(layout) == "table" and type(layout.lines) == "table" and type(layout.highlights) == "table", "returns layout table")
     assert(type(layout.width) == "number" and layout.width > 0, "returns positive width")
 
-    local text = layout_text(layout)
+    local text = join_layout_lines(layout)
     assert(not text:find("\226\128\148", 1, true), "cheatsheet must not contain em dashes")
     for _, expected in ipairs(EXPECTED_DEFAULT_ITEMS) do
         assert(text:find(expected, 1, true) ~= nil, "default layout missing: " .. expected)
@@ -125,7 +130,7 @@ local function test_custom_and_disabled_keys_render_dynamically()
         },
     }
     local layout = cheatsheet.create_layout_from_config(custom_config)
-    local text = layout_text(layout)
+    local text = join_layout_lines(layout)
 
     assert(text:find("<leader>c", 1, true) ~= nil, "custom comment key rendered")
     assert(text:find("gS", 1, true) ~= nil, "custom suggest_comment key rendered")
@@ -200,7 +205,7 @@ local function test_palette_launches_keyboard_shortcuts_command()
     cheatsheet.close()
 end
 
-local function test_jpr_keys_command_works_without_session_and_rejects_extra_args()
+local function test_jpr_keys_command_opens_cheatsheet_without_session_and_rejects_extra_args()
     assert(session.current() == nil, "no active session before :Jpr keys")
     jpr.command({ "keys" })
     assert(cheatsheet.is_open() == true, ":Jpr keys opens cheatsheet without an active session")
@@ -267,7 +272,7 @@ test_default_layout_contains_all_sections_and_real_keybindings()
 test_custom_and_disabled_keys_render_dynamically()
 test_open_idempotency_window_properties_and_close_keys()
 test_palette_launches_keyboard_shortcuts_command()
-test_jpr_keys_command_works_without_session_and_rejects_extra_args()
+test_jpr_keys_command_opens_cheatsheet_without_session_and_rejects_extra_args()
 test_question_mark_opens_cheatsheet_in_ui_buffers_only()
 
 print("cheatsheet_spec: ok")

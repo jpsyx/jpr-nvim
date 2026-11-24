@@ -69,36 +69,40 @@ assert(
     vim.inspect(highlighted(built, "JprMuted"))
 )
 
--- Progress bar helper: 0 files, 0%, partial, 100%, clamping, and custom width.
-local bar_zero_files = panel.build_progress_bar_from_counts(0, 0)
+-- Progress bar helper: 0 files, 0%, partial, 100%, clamping, custom width, and unit label.
+local bar_zero_files = panel.create_progress_bar_from_counts(0, 0)
 assert(bar_zero_files.text == "░░░░░░░░░░░░░░░░  0/0 (0%)", vim.inspect(bar_zero_files))
 assert(bar_zero_files.filled_bytes == 0 and bar_zero_files.unfilled_bytes == 48, vim.inspect(bar_zero_files))
 assert(bar_zero_files.counter_start == 50 and bar_zero_files.is_complete == false, vim.inspect(bar_zero_files))
 
-local bar_zero_viewed = panel.build_progress_bar_from_counts(0, 5)
+local bar_zero_viewed = panel.create_progress_bar_from_counts(0, 5)
 assert(bar_zero_viewed.text == "░░░░░░░░░░░░░░░░  0/5 (0%)", vim.inspect(bar_zero_viewed))
 assert(bar_zero_viewed.filled_bytes == 0 and bar_zero_viewed.unfilled_bytes == 48, vim.inspect(bar_zero_viewed))
 assert(bar_zero_viewed.is_complete == false, vim.inspect(bar_zero_viewed))
 
-local bar_partial = panel.build_progress_bar_from_counts(8, 20)
+local bar_partial = panel.create_progress_bar_from_counts(8, 20)
 assert(bar_partial.text == "██████░░░░░░░░░░  8/20 (40%)", vim.inspect(bar_partial))
 assert(bar_partial.filled_bytes == 18 and bar_partial.unfilled_bytes == 30, vim.inspect(bar_partial))
 assert(bar_partial.counter_start == 50 and bar_partial.is_complete == false, vim.inspect(bar_partial))
 
-local bar_complete = panel.build_progress_bar_from_counts(4, 4)
+local bar_complete = panel.create_progress_bar_from_counts(4, 4)
 assert(bar_complete.text == "████████████████  4/4 (100%)", vim.inspect(bar_complete))
 assert(bar_complete.filled_bytes == 48 and bar_complete.unfilled_bytes == 0, vim.inspect(bar_complete))
 assert(bar_complete.counter_start == 50 and bar_complete.is_complete == true, vim.inspect(bar_complete))
 
-local bar_clamped_high = panel.build_progress_bar_from_counts(9, 4)
+local bar_clamped_high = panel.create_progress_bar_from_counts(9, 4)
 assert(bar_clamped_high.text == "████████████████  4/4 (100%)" and bar_clamped_high.is_complete == true, vim.inspect(bar_clamped_high))
 
-local bar_clamped_low = panel.build_progress_bar_from_counts(-3, 4)
+local bar_clamped_low = panel.create_progress_bar_from_counts(-3, 4)
 assert(bar_clamped_low.text == "░░░░░░░░░░░░░░░░  0/4 (0%)" and bar_clamped_low.is_complete == false, vim.inspect(bar_clamped_low))
 
-local bar_custom_width = panel.build_progress_bar_from_counts(2, 4, 8)
+local bar_custom_width = panel.create_progress_bar_from_counts(2, 4, 8)
 assert(bar_custom_width.text == "████░░░░  2/4 (50%)", vim.inspect(bar_custom_width))
 assert(bar_custom_width.filled_bytes == 12 and bar_custom_width.unfilled_bytes == 12 and bar_custom_width.counter_start == 26)
+
+local bar_with_unit = panel.create_progress_bar_from_counts(8, 20, 20, "files")
+assert(bar_with_unit.text == "████████░░░░░░░░░░░░  8/20 files (40%)", vim.inspect(bar_with_unit))
+assert(bar_with_unit.counter_start == 62 and bar_with_unit.is_complete == false, vim.inspect(bar_with_unit))
 
 -- Completed panel highlights both the filled bar and the counter with JprViewed.
 local complete_view = vim.tbl_deep_extend("force", vim.deepcopy(view), { viewedCount = 3 })

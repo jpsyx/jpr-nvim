@@ -69,35 +69,15 @@ local function append_progress_lines(layout, progress)
     if total <= 0 then
         return
     end
-    local bar_data = panel_render.build_progress_bar_from_counts(progress.completed or 0, total, PROGRESS_BAR_WIDTH)
-    local bar_end = bar_data.filled_bytes + bar_data.unfilled_bytes
-    local bar_text = bar_data.text:sub(1, bar_end)
-    local counter_text = bar_data.text:sub(bar_data.counter_start + 1):gsub(" %(", " files (", 1)
-    local line_text = DETAIL_INDENT .. bar_text .. "  " .. counter_text
+    local progress_bar = panel_render.create_progress_bar_from_counts(
+        progress.completed or 0,
+        total,
+        PROGRESS_BAR_WIDTH,
+        "files"
+    )
     local line = #layout.lines
-    layout.lines[line + 1] = line_text
-    if bar_data.filled_bytes > 0 then
-        layout.highlights[#layout.highlights + 1] = {
-            line = line,
-            col_start = #DETAIL_INDENT,
-            col_end = #DETAIL_INDENT + bar_data.filled_bytes,
-            group = "JprViewed",
-        }
-    end
-    if bar_data.unfilled_bytes > 0 then
-        layout.highlights[#layout.highlights + 1] = {
-            line = line,
-            col_start = #DETAIL_INDENT + bar_data.filled_bytes,
-            col_end = #DETAIL_INDENT + bar_end,
-            group = "JprMuted",
-        }
-    end
-    layout.highlights[#layout.highlights + 1] = {
-        line = line,
-        col_start = #DETAIL_INDENT + bar_data.counter_start,
-        col_end = #line_text,
-        group = bar_data.is_complete and "JprViewed" or "JprTitle",
-    }
+    layout.lines[line + 1] = DETAIL_INDENT .. progress_bar.text
+    panel_render.append_progress_bar_highlights(layout.highlights, line, #DETAIL_INDENT, progress_bar)
     local clean_path = type(progress.path) == "string" and panel_render.one_line(progress.path) or ""
     if clean_path ~= "" then
         append_line(layout, DETAIL_INDENT .. clean_path, "JprMuted")
@@ -206,8 +186,9 @@ local function start_spinner_timer(session, record)
     )
 end
 
---- Opens the live loading buffer in the active window for `session` and starts
---- its 100ms spinner timer.
+--- Opens the live loading buffer in the active window for `session` and
+--- animates the active stage spinner until updated or closed. Returns the
+--- loading buffer handle.
 function M.open(session, initial_state)
     if session.loading then
         M.close(session)

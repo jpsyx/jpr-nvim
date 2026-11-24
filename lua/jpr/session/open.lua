@@ -100,10 +100,10 @@ local function cancel_pending_checkout(pending)
         pending_by_number[pending.number] = nil
     end
     pending.is_canceled = true
-    local proc = pending.process
+    local process = pending.process
     pending.process = nil
-    if type(proc) == "table" and type(proc.kill) == "function" then
-        pcall(proc.kill, proc, 15)
+    if type(process) == "table" and type(process.kill) == "function" then
+        pcall(process.kill, process, 15)
     end
     require("jpr.views.loading").close(pending)
 end
@@ -185,7 +185,7 @@ local function create_stderr_collector(number, pending_session)
     return stderr_chunks, on_stderr
 end
 
-local function handle_checkout_exit(session_mod, number, pending_session, stderr_chunks, result)
+local function on_checkout_exit(session_mod, number, pending_session, stderr_chunks, result)
     local loading = require("jpr.views.loading")
     local was_active = pending_by_number[number] == pending_session
     if was_active then
@@ -240,7 +240,7 @@ local function open_pull_request(session_mod, number, repo)
         session_mod.checkout_args(number, repo),
         { cwd = vim.fn.getcwd(), text = true, stderr = on_stderr },
         vim.schedule_wrap(function(result)
-            handle_checkout_exit(session_mod, number, pending_session, stderr_chunks, result)
+            on_checkout_exit(session_mod, number, pending_session, stderr_chunks, result)
         end)
     )
     if not is_started then

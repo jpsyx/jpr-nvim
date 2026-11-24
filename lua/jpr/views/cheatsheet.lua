@@ -8,7 +8,7 @@ local FOOTER_TEXT = " [j/k] scroll  [q/Esc/?] close "
 
 local active_state = nil
 
-local function resolve_key_entry(configured_key, description)
+local function create_key_entry_from_binding(configured_key, description)
     local is_enabled = type(configured_key) == "string" and configured_key ~= ""
     return {
         key = is_enabled and configured_key or DISABLED_LABEL,
@@ -22,12 +22,12 @@ local function create_diff_section_from_keys(keys)
     return {
         title = "Diff & Stream Views",
         entries = {
-            resolve_key_entry(configured.comment, "New draft comment (Normal / Visual)"),
-            resolve_key_entry(configured.suggest_comment, "New code suggestion comment (Normal / Visual)"),
-            resolve_key_entry(configured.file_comment, "New file-level comment"),
-            resolve_key_entry(configured.thread_popup, "Open review thread popup"),
-            resolve_key_entry(configured.next_thread, "Next review thread"),
-            resolve_key_entry(configured.prev_thread, "Previous review thread"),
+            create_key_entry_from_binding(configured.comment, "New draft comment (Normal / Visual)"),
+            create_key_entry_from_binding(configured.suggest_comment, "New code suggestion comment (Normal / Visual)"),
+            create_key_entry_from_binding(configured.file_comment, "New file-level comment"),
+            create_key_entry_from_binding(configured.thread_popup, "Open review thread popup"),
+            create_key_entry_from_binding(configured.next_thread, "Next review thread"),
+            create_key_entry_from_binding(configured.prev_thread, "Previous review thread"),
             { key = "<CR>", desc = "Open real file at cursor (stream)" },
             { key = "v", desc = "Toggle viewed and jump to next unviewed (stream)" },
             { key = "]f / [f", desc = "Next / previous file (stream)" },
@@ -125,7 +125,7 @@ local function append_line(layout, text, col_start, col_end, group)
     end
 end
 
-local function append_section(layout, section, key_col_width)
+local function append_section(layout, section, key_column_width)
     append_line(layout, section.title, 0, #section.title, "JprTitle")
     local has_subheadings = false
     for _, entry in ipairs(section.entries) do
@@ -136,27 +136,28 @@ local function append_section(layout, section, key_col_width)
         else
             local indent = has_subheadings and "    " or "  "
             local key_width = vim.fn.strdisplaywidth(entry.key)
-            local padding = string.rep(" ", math.max(0, key_col_width - key_width))
+            local padding = string.rep(" ", math.max(0, key_column_width - key_width))
             local row_text = indent .. entry.key .. padding .. "  " .. entry.desc
-            local hl_group = entry.is_disabled and "JprMuted" or "JprHunk"
-            append_line(layout, row_text, #indent, #indent + #entry.key, hl_group)
+            local highlight_group = entry.is_disabled and "JprMuted" or "JprHunk"
+            append_line(layout, row_text, #indent, #indent + #entry.key, highlight_group)
         end
     end
 end
 
---- Builds the pure cheatsheet layout lines, highlight spans, and content width
---- from `config` (reading dynamic shortcuts from `config.keys`).
+--- Creates the pure cheatsheet layout lines, highlight spans, and content width
+--- from `config` (reading dynamic shortcuts from `config.keys`) for `:Jpr keys`
+--- and `?`.
 --- @param config table|nil
 --- @return table { lines: string[], highlights: table[], width: integer }
 function M.create_layout_from_config(config)
     local sections = create_sections_from_config(config)
-    local key_col_width = measure_key_column_width(sections)
+    local key_column_width = measure_key_column_width(sections)
     local layout = { lines = {}, highlights = {}, width = 0 }
     for section_index, section in ipairs(sections) do
         if section_index > 1 then
             append_line(layout, "", 0, 0, nil)
         end
-        append_section(layout, section, key_col_width)
+        append_section(layout, section, key_column_width)
     end
     return layout
 end
@@ -258,7 +259,8 @@ function M.close()
 end
 
 --- Opens the centered floating keyboard shortcuts cheatsheet, or refreshes and
---- focuses the existing modal when already open.
+--- focuses the existing modal when already open. Invoked by `:Jpr keys`, the
+--- Command Palette, and `?` in read-only Jpr UI buffers.
 function M.open()
     local jpr = require("jpr")
     jpr.define_highlights()
@@ -278,16 +280,16 @@ function M.open()
     vim.bo[buf].filetype = "jpr-cheatsheet"
     apply_layout_to_buffer(buf, layout)
 
-    local is_ok, win_or_err = pcall(vim.api.nvim_open_win, buf, true, create_window_config(layout))
-    if not is_ok then
+    local is_opened, window_or_error = pcall(vim.api.nvim_open_win, buf, true, create_window_config(layout))
+    if not is_opened then
         if vim.api.nvim_buf_is_valid(buf) then
             pcall(vim.api.nvim_buf_delete, buf, { force = true })
         end
-        error(win_or_err)
+        error(window_or_error)
     end
 
-    vim.api.nvim_set_option_value("wrap", true, { win = win_or_err, scope = "local" })
-    local state = { buf = buf, win = win_or_err }
+    vim.api.nvim_set_option_value("wrap", true, { win = window_or_error, scope = "local" })
+    local state = { buf = buf, win = window_or_error }
     active_state = state
     register_cleanup_guards(state)
     bind_cheatsheet_keys(buf)

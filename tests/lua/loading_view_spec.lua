@@ -27,76 +27,87 @@ local function has_highlight(highlights, line_0based, group)
     return false
 end
 
-local function assert_stage_1_and_2_layout()
-    local stage1 = loading.create_layout_from_state({
+local function assert_stage_1_layout()
+    local stage_one_layout = loading.create_layout_from_state({
         number = 42,
         stage = 1,
         detail = "Looking up pull request #42...",
         spinner_index = 0,
     })
-    local header_idx = assert(find_line(stage1.lines, "Pull Request #42"), "stage 1 header fallback: " .. vim.inspect(stage1.lines))
-    assert(has_highlight(stage1.highlights, header_idx - 1, "JprTitle"), "header uses JprTitle")
-    local s1_idx, s1_line = assert(find_line(stage1.lines, "1/4  Checking out worktree..."), "stage 1 active label")
-    assert(not s1_line:find("✓", 1, true) and not s1_line:find("○", 1, true), "stage 1 uses spinner frame")
-    assert(has_highlight(stage1.highlights, s1_idx - 1, "JprTitle"), "active stage uses JprTitle")
-    local detail_idx = assert(find_line(stage1.lines, "Looking up pull request #42..."), "stage 1 shows detail")
-    assert(has_highlight(stage1.highlights, detail_idx - 1, "JprMuted"), "detail uses JprMuted")
-    local s2_idx = assert(find_line(stage1.lines, "○  2/4  Starting review engine"), "stage 2 pending")
-    assert(has_highlight(stage1.highlights, s2_idx - 1, "JprMuted"), "pending stage uses JprMuted")
-    local footer_idx = assert(find_line(stage1.lines, "Close this tab or run :Jpr close to cancel."), "footer hint")
-    assert(has_highlight(stage1.highlights, footer_idx - 1, "JprMuted"), "footer uses JprMuted")
+    local header_line_index = assert(
+        find_line(stage_one_layout.lines, "Pull Request #42"),
+        "stage 1 header fallback: " .. vim.inspect(stage_one_layout.lines)
+    )
+    assert(has_highlight(stage_one_layout.highlights, header_line_index - 1, "JprTitle"), "header uses JprTitle")
+    local stage_one_line_index, stage_one_line = assert(
+        find_line(stage_one_layout.lines, "1/4  Checking out worktree..."),
+        "stage 1 active label"
+    )
+    assert(not stage_one_line:find("✓", 1, true) and not stage_one_line:find("○", 1, true), "stage 1 uses spinner frame")
+    assert(has_highlight(stage_one_layout.highlights, stage_one_line_index - 1, "JprTitle"), "active stage uses JprTitle")
+    local detail_line_index = assert(find_line(stage_one_layout.lines, "Looking up pull request #42..."), "stage 1 shows detail")
+    assert(has_highlight(stage_one_layout.highlights, detail_line_index - 1, "JprMuted"), "detail uses JprMuted")
+    local stage_two_line_index = assert(find_line(stage_one_layout.lines, "○  2/4  Starting review engine"), "stage 2 pending")
+    assert(has_highlight(stage_one_layout.highlights, stage_two_line_index - 1, "JprMuted"), "pending stage uses JprMuted")
+    local footer_line_index = assert(find_line(stage_one_layout.lines, "Close this tab or run :Jpr close to cancel."), "footer hint")
+    assert(has_highlight(stage_one_layout.highlights, footer_line_index - 1, "JprMuted"), "footer uses JprMuted")
 
-    local stage1_next = loading.create_layout_from_state({
+    local next_spinner_layout = loading.create_layout_from_state({
         number = 42,
         stage = 1,
         detail = "Looking up pull request #42...",
         spinner_index = 1,
     })
-    assert(stage1_next.lines[s1_idx] ~= stage1.lines[s1_idx], "spinner_index advances spinner frame")
+    assert(
+        next_spinner_layout.lines[stage_one_line_index] ~= stage_one_layout.lines[stage_one_line_index],
+        "spinner_index advances spinner frame"
+    )
+end
 
-    local stage2 = loading.create_layout_from_state({
+local function assert_stage_2_layout()
+    local stage_two_layout = loading.create_layout_from_state({
         number = 42,
         title = "Fix the widget",
         stage = 2,
         detail = "old detail should hide",
         spinner_index = 2,
     })
-    assert(find_line(stage2.lines, "#42 Fix the widget"), "stage 2 header uses title")
-    local done1_idx = assert(find_line(stage2.lines, "✓  1/4  Checking out worktree"), "stage 1 done with check")
-    assert(has_highlight(stage2.highlights, done1_idx - 1, "JprViewed"), "check icon uses JprViewed")
-    assert(has_highlight(stage2.highlights, done1_idx - 1, "JprMuted"), "completed label uses JprMuted")
-    assert(find_line(stage2.lines, "old detail should hide") == nil, "checkout detail hidden after stage 1")
-    assert(find_line(stage2.lines, "2/4  Starting review engine..."), "stage 2 active")
+    assert(find_line(stage_two_layout.lines, "#42 Fix the widget"), "stage 2 header uses title")
+    local completed_stage_one_index = assert(find_line(stage_two_layout.lines, "✓  1/4  Checking out worktree"), "stage 1 done with check")
+    assert(has_highlight(stage_two_layout.highlights, completed_stage_one_index - 1, "JprViewed"), "check icon uses JprViewed")
+    assert(has_highlight(stage_two_layout.highlights, completed_stage_one_index - 1, "JprMuted"), "completed label uses JprMuted")
+    assert(find_line(stage_two_layout.lines, "old detail should hide") == nil, "checkout detail hidden after stage 1")
+    assert(find_line(stage_two_layout.lines, "2/4  Starting review engine..."), "stage 2 active")
 end
 
 local function assert_stage_3_and_4_layout()
-    local stage3 = loading.create_layout_from_state({
+    local stage_three_layout = loading.create_layout_from_state({
         number = 42,
         title = "Fix the widget",
         stage = 3,
         spinner_index = 3,
     })
-    assert(find_line(stage3.lines, "✓  2/4  Starting review engine"), "stage 2 completed")
-    assert(find_line(stage3.lines, "3/4  Syncing with GitHub..."), "stage 3 active")
+    assert(find_line(stage_three_layout.lines, "✓  2/4  Starting review engine"), "stage 2 completed")
+    assert(find_line(stage_three_layout.lines, "3/4  Syncing with GitHub..."), "stage 3 active")
 
-    local stage4 = loading.create_layout_from_state({
+    local stage_four_layout = loading.create_layout_from_state({
         number = 42,
         title = "Fix the widget",
         stage = 4,
         progress = { completed = 8, total = 20, path = "src/a.rs" },
         spinner_index = 4,
     })
-    assert(find_line(stage4.lines, "✓  3/4  Syncing with GitHub"), "stage 3 completed")
-    assert(find_line(stage4.lines, "4/4  Computing diffs..."), "stage 4 active")
-    local bar_idx = assert(
-        find_line(stage4.lines, "████████░░░░░░░░░░░░  8/20 files (40%)"),
-        "stage 4 renders progress bar with file count and percent: " .. vim.inspect(stage4.lines)
+    assert(find_line(stage_four_layout.lines, "✓  3/4  Syncing with GitHub"), "stage 3 completed")
+    assert(find_line(stage_four_layout.lines, "4/4  Computing diffs..."), "stage 4 active")
+    local bar_line_index = assert(
+        find_line(stage_four_layout.lines, "████████░░░░░░░░░░░░  8/20 files (40%)"),
+        "stage 4 renders progress bar with file count and percent: " .. vim.inspect(stage_four_layout.lines)
     )
-    assert(has_highlight(stage4.highlights, bar_idx - 1, "JprViewed"), "filled progress bar uses JprViewed")
-    assert(has_highlight(stage4.highlights, bar_idx - 1, "JprMuted"), "unfilled progress bar uses JprMuted")
-    assert(has_highlight(stage4.highlights, bar_idx - 1, "JprTitle"), "counter uses JprTitle")
-    local path_idx = assert(find_line(stage4.lines, "src/a.rs"), "stage 4 renders current file path")
-    assert(has_highlight(stage4.highlights, path_idx - 1, "JprMuted"), "current file path uses JprMuted")
+    assert(has_highlight(stage_four_layout.highlights, bar_line_index - 1, "JprViewed"), "filled progress bar uses JprViewed")
+    assert(has_highlight(stage_four_layout.highlights, bar_line_index - 1, "JprMuted"), "unfilled progress bar uses JprMuted")
+    assert(has_highlight(stage_four_layout.highlights, bar_line_index - 1, "JprTitle"), "counter uses JprTitle")
+    local path_line_index = assert(find_line(stage_four_layout.lines, "src/a.rs"), "stage 4 renders current file path")
+    assert(has_highlight(stage_four_layout.highlights, path_line_index - 1, "JprMuted"), "current file path uses JprMuted")
 end
 
 local function assert_loading_buffer_and_timer_lifecycle()
@@ -324,13 +335,13 @@ local function assert_tcd_failure_cleans_up_loading_tab()
     local calls, notifications, restore = stub_system_and_notify()
     local tabs_before = #vim.api.nvim_list_tabpages()
     session.open(90)
-    local bad_json = vim.json.encode({
+    local missing_worktree_json = vim.json.encode({
         worktree = vim.fn.tempname() .. "/missing-worktree-dir",
         repo = "octo/widgets",
         number = 90,
         title = "Broken worktree",
     })
-    calls[1].on_exit({ code = 0, stdout = bad_json .. "\n", stderr = "" })
+    calls[1].on_exit({ code = 0, stdout = missing_worktree_json .. "\n", stderr = "" })
     assert(vim.wait(1000, function()
         return #notifications >= 1
     end), "tcd failure notifies error")
@@ -353,13 +364,13 @@ local function assert_user_file_in_pending_tab_is_preserved()
     local pr_tab = vim.api.nvim_get_current_tabpage()
     vim.cmd.edit(vim.fn.fnameescape(worktree .. "/notes.txt"))
     local user_buf = vim.api.nvim_get_current_buf()
-    local ok_json = vim.json.encode({
+    local checkout_json = vim.json.encode({
         worktree = worktree,
         repo = "octo/widgets",
         number = 91,
         title = "User file test",
     })
-    calls[1].on_exit({ code = 0, stdout = ok_json .. "\n", stderr = "" })
+    calls[1].on_exit({ code = 0, stdout = checkout_json .. "\n", stderr = "" })
     assert(vim.wait(3000, function()
         local active = session.by_tab[pr_tab]
         return active ~= nil and active.stream ~= nil and active.stream.layout ~= nil
@@ -372,7 +383,8 @@ local function assert_user_file_in_pending_tab_is_preserved()
     session.close_current()
 end
 
-assert_stage_1_and_2_layout()
+assert_stage_1_layout()
+assert_stage_2_layout()
 assert_stage_3_and_4_layout()
 assert_loading_buffer_and_timer_lifecycle()
 assert_end_to_end_open_flow()

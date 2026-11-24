@@ -48,11 +48,11 @@ local function add_words(column, cell, gutter)
     end
 end
 
-local function record_code_row(column, path, gutter_len, text)
+local function record_code_row(column, path, gutter_length, text)
     column.code_rows[#column.code_rows + 1] = {
         line = #column.lines - 1,
         path = path,
-        gutter_len = gutter_len,
+        gutter_length = gutter_length,
         text = text,
     }
 end
