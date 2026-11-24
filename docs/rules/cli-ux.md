@@ -74,7 +74,7 @@ the same change.
   6. Full non-interactive flag and argument parity so scripts, pipes, CI, and
      coding agents never hit interactive prompts.
 - Schema completeness is enforced by automated unit tests in both Rust
-  (`crates/jpr-review/src/tui_schema/tests.rs`) and Lua
+  (`crates/jpr-review/src/tui_schema/tests/`) and Lua
   (`tests/lua/palette_and_open_picker_spec.lua`).
 
 ## Narrate by default, detail under `--verbose`

@@ -20,46 +20,6 @@ function M.current()
     return M.by_tab[vim.api.nvim_get_current_tabpage()]
 end
 
---- Returns a set `{ [number] = true }` of pull request numbers currently open
---- in valid tabs, used to mark `[open]` badges in the PR picker.
-function M.open_tab_numbers()
-    local open_numbers = {}
-    for tab, existing in pairs(M.by_tab) do
-        if vim.api.nvim_tabpage_is_valid(tab) and type(existing.number) == "number" then
-            open_numbers[existing.number] = true
-        end
-    end
-    return open_numbers
-end
-
---- Runs `jpr-review prs` asynchronously in the current working directory and
---- calls `on_result(prs)` with the decoded PR list or `on_error(message)`.
-function M.list_open_prs(on_result, on_error)
-    local binary_path = jpr().binary_path()
-    if vim.fn.executable(binary_path) ~= 1 then
-        return on_error("jpr-review binary is missing; run :Lazy build jpr-nvim")
-    end
-    local is_started, start_error = pcall(
-        vim.system,
-        { binary_path, "prs" },
-        { cwd = vim.fn.getcwd(), text = true },
-        vim.schedule_wrap(function(result)
-            if result.code ~= 0 then
-                local stderr = crash.build_clean_text_from_raw(result.stderr)
-                return on_error(stderr ~= "" and stderr or "failed to list open pull requests")
-            end
-            local is_decoded, prs = pcall(vim.json.decode, result.stdout or "")
-            if not is_decoded or not vim.islist(prs) then
-                return on_error("failed to parse open pull requests response")
-            end
-            on_result(prs)
-        end)
-    )
-    if not is_started then
-        on_error(crash.build_clean_text_from_raw(start_error))
-    end
-end
-
 --- Reports that `session` is in read-only mode after an engine crash.
 function M.report_read_only(session)
     return jpr().error(
@@ -101,66 +61,6 @@ function M.request(session, method, params, on_result, on_error)
         end
         on_result(result)
     end)
-end
-
---- The `jpr-review checkout` command for PR `number`. With `repo`
---- (owner/name), checkout refuses a PR from any other repository.
-function M.checkout_args(number, repo)
-    local config = jpr().config
-    local args = { jpr().binary_path(), "checkout", "--pr", tostring(number) }
-    if repo then
-        vim.list_extend(args, { "--repo", repo })
-    end
-    if config.worktree_cmd then
-        vim.list_extend(args, { "--worktree-cmd", config.worktree_cmd })
-    end
-    return args
-end
-
---- The JSON object on the last non-empty line of `checkout`'s stdout.
-function M.parse_checkout(stdout)
-    local last_line
-    for line in (stdout or ""):gmatch("[^\n]+") do
-        if vim.trim(line) ~= "" then
-            last_line = line
-        end
-    end
-    if not last_line then
-        return nil, "jpr-review checkout printed nothing"
-    end
-    local ok, info = pcall(vim.json.decode, last_line)
-    if not ok or type(info) ~= "table" or not info.worktree or not info.repo then
-        return nil, "unexpected checkout output: " .. last_line
-    end
-    return info
-end
-
---- `:Jpr open <number>`: reuse its tab, or check it out and start a session.
---- `repo` (owner/name, from a URL) must match too, when given.
-function M.open(number, repo)
-    for tab, existing in pairs(M.by_tab) do
-        local same_repo = not repo or existing.repo:lower() == repo:lower()
-        if existing.number == number and same_repo and vim.api.nvim_tabpage_is_valid(tab) then
-            return vim.api.nvim_set_current_tabpage(tab)
-        end
-    end
-    local binary_path = jpr().binary_path()
-    if vim.fn.executable(binary_path) ~= 1 then
-        local clean_binary_path = crash.build_clean_text_from_raw(binary_path)
-        return jpr().error(("jpr-review binary not found at %s; run :Lazy build jpr-nvim"):format(clean_binary_path))
-    end
-    jpr().info(("checking out PR #%d…"):format(number))
-    vim.system(M.checkout_args(number, repo), { cwd = vim.fn.getcwd(), text = true }, vim.schedule_wrap(function(result)
-        if result.code ~= 0 then
-            local stderr = vim.trim(result.stderr or "")
-            return jpr().error(stderr ~= "" and stderr or "checkout failed")
-        end
-        local info, err = M.parse_checkout(result.stdout)
-        if not info then
-            return jpr().error(err)
-        end
-        M.start(info)
-    end))
 end
 
 --- Wipes the empty buffer `tabnew` made for `session`, unless it was named,
@@ -427,6 +327,7 @@ function M.on_exit(session, code, stderr, exited_client)
     })
 end
 
+require("jpr.session.open").attach(M)
 require("jpr.session.commands").attach(M, forget)
 require("jpr.session.comments").attach(M)
 

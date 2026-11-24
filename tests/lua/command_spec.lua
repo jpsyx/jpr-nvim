@@ -16,7 +16,7 @@ assert(jpr.parse_pr_arg(nil) == nil, "missing")
 local cargo_toml = table.concat(vim.fn.readfile(root .. "/Cargo.toml"), "\n") .. "\n["
 local workspace_package = cargo_toml:match("%[workspace%.package%](.-)\n%[")
 local cargo_version = workspace_package and workspace_package:match('\nversion%s*=%s*"([^"]+)"')
-assert(jpr.VERSION == "0.5.1", "plugin version is 0.5.1")
+assert(cargo_version ~= nil and cargo_version:match("^%d+%.%d+%.%d+$"), "Cargo.toml defines a semver workspace version")
 assert(
     jpr.VERSION == cargo_version,
     ("jpr.VERSION (%s) must match Cargo.toml workspace version (%s)"):format(tostring(jpr.VERSION), tostring(cargo_version))

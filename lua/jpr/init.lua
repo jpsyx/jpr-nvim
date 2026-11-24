@@ -299,7 +299,7 @@ local function dispatch_direct_subcommand(session, args, cmd_opts, context)
     M.error(("unknown subcommand %q; expected one of: %s"):format(tostring(subcommand), table.concat(M.subcommands, ", ")))
 end
 
---- Runs `:Jpr [subcommand [arg]]` with optional command options `cmd_opts` (such as range).
+--- Dispatches `:Jpr [subcommand [arg]]` with optional command options `cmd_opts` (such as range), opening the interactive floating command palette when no subcommand is given.
 function M.command(fargs, cmd_opts)
     local args = fargs or {}
     local session = require("jpr.session")

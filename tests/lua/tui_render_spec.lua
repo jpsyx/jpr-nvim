@@ -38,7 +38,7 @@ assert(vim.deep_equal(cjk_split, { "中文", "测试" }), "double-width chars wr
 local cjk_tiny = render.wrap_text("中文", 1)
 assert(vim.deep_equal(cjk_tiny, { "中", "文" }), "double-width char with max_width=1 makes forward progress")
 
--- 2. build_palette_layout renders labels, [id], hover-only helper text, session dimming, and wrapping.
+-- 2. create_palette_layout_from_commands renders labels, [id], hover-only helper text, session dimming, and wrapping.
 local commands = {
     {
         id = "open",
@@ -54,7 +54,7 @@ local commands = {
     },
 }
 
-local palette_first = render.build_palette_layout(commands, 1, 44, { has_session = false })
+local palette_first = render.create_palette_layout_from_commands(commands, 1, 44, { has_session = false })
 assert_no_em_dash(palette_first.lines, "palette_first")
 assert(palette_first.lines[1] == "▸ Open Pull Request  [open]", "selected command row: " .. tostring(palette_first.lines[1]))
 assert(palette_first.cursor_line == 1, "cursor_line points to command 1")
@@ -96,7 +96,7 @@ assert(
 )
 
 -- Moving selected_index from 1 to 2 updates cursor_line and swaps hover helper text.
-local palette_second = render.build_palette_layout(commands, 2, 80, { has_session = true })
+local palette_second = render.create_palette_layout_from_commands(commands, 2, 80, { has_session = true })
 assert(palette_second.lines[1] == "  Open Pull Request  [open]", "command 1 unselected")
 assert(palette_second.lines[2] == "▸ Sync with GitHub  [sync]", "command 2 selected")
 assert(palette_second.cursor_line == 2, "cursor_line moves to command 2")
@@ -110,11 +110,11 @@ assert(
 )
 
 -- Empty command list handled safely without crashing.
-local palette_empty = render.build_palette_layout({}, 1, 60, { has_session = false })
+local palette_empty = render.create_palette_layout_from_commands({}, 1, 60, { has_session = false })
 assert(#palette_empty.lines >= 3, "empty palette renders fallback and footer")
 assert(palette_empty.cursor_line == 1, "empty palette sets safe cursor_line")
 
--- 3. build_step_layout renders header with dots, 1-sentence help, hover-only option help, and footers.
+-- 3. create_step_layout_from_state renders header with dots, 1-sentence help, hover-only option help, and footers.
 local active_steps = {
     {
         id = "source",
@@ -144,7 +144,7 @@ local active_steps = {
     },
 }
 
-local step_one = render.build_step_layout(commands[1], active_steps, 1, {
+local step_one = render.create_step_layout_from_state(commands[1], active_steps, 1, {
     selected_option_index = 1,
     can_return_to_palette = true,
 }, 68)
@@ -177,7 +177,7 @@ assert(vim.tbl_contains(step_one_muted, "○"), "inactive dot in JprMuted")
 assert(vim.tbl_contains(step_one_muted, "[list]"), "option badge in JprMuted")
 
 -- Loading state & validation error & step 2 final footer.
-local step_two_loading = render.build_step_layout(commands[1], active_steps, 2, {
+local step_two_loading = render.create_step_layout_from_state(commands[1], active_steps, 2, {
     is_loading = true,
     error_message = "Could not load pull requests.",
     can_return_to_palette = true,
@@ -196,7 +196,7 @@ assert(
 )
 
 -- Step 1 without palette omits [h] hint.
-local step_direct_only = render.build_step_layout(commands[1], { active_steps[1] }, 1, {
+local step_direct_only = render.create_step_layout_from_state(commands[1], { active_steps[1] }, 1, {
     selected_option_index = 1,
     can_return_to_palette = false,
 }, 68)
@@ -205,31 +205,31 @@ assert(
     "direct single-step footer omits back hint: " .. tostring(step_direct_only.lines[#step_direct_only.lines])
 )
 
--- 4. build_text_step_virt_lines builds virt_lines for help, error, and separator.
+-- 4. create_virt_lines_from_text_step builds virt_lines for help, error, and separator.
 local text_step = {
     id = "manual_pr",
     label = "Pull Request Number or URL",
     help = "Enter a PR number, #number, or GitHub URL.",
     kind = "text",
 }
-local virt_no_err = render.build_text_step_virt_lines(text_step, nil, 60)
+local virt_lines_without_error = render.create_virt_lines_from_text_step(text_step, nil, 60)
 assert(
-    vim.deep_equal(virt_no_err, {
+    vim.deep_equal(virt_lines_without_error, {
         { { "Enter a PR number, #number, or GitHub URL.", "JprMuted" } },
         { { "", "JprMuted" } },
     }),
-    "virt_lines without error: " .. vim.inspect(virt_no_err)
+    "virt_lines without error: " .. vim.inspect(virt_lines_without_error)
 )
 
-local virt_with_err = render.build_text_step_virt_lines(text_step, "Invalid PR number.", 60)
+local virt_lines_with_error = render.create_virt_lines_from_text_step(text_step, "Invalid PR number.", 60)
 assert(
-    vim.deep_equal(virt_with_err, {
+    vim.deep_equal(virt_lines_with_error, {
         { { "Enter a PR number, #number, or GitHub URL.", "JprMuted" } },
         { { "", "JprMuted" } },
         { { "Invalid PR number.", "JprError" } },
         { { "", "JprMuted" } },
     }),
-    "virt_lines with error: " .. vim.inspect(virt_with_err)
+    "virt_lines with error: " .. vim.inspect(virt_lines_with_error)
 )
 
 -- 5. build_text_step_footer adapts to step position and palette availability.
@@ -247,14 +247,14 @@ assert(
 )
 
 -- 6. Edge cases: clamping, selected session-dimmed command, toggle step options, empty state, and option swap.
-local clamped_high = render.build_palette_layout(commands, 99, 80, { has_session = false })
+local clamped_high = render.create_palette_layout_from_commands(commands, 99, 80, { has_session = false })
 assert(clamped_high.cursor_line == 2, "out-of-range selected_index clamps to last command")
 assert(
     vim.tbl_contains(collect_highlighted_texts(clamped_high, "JprMuted"), "Sync with GitHub"),
     "selected requires_session command also dims label when has_session == false"
 )
 
-local step_one_option_two = render.build_step_layout(commands[1], active_steps, 1, {
+local step_one_option_two = render.create_step_layout_from_state(commands[1], active_steps, 1, {
     selected_option_index = 2,
     can_return_to_palette = true,
 }, 40)
@@ -278,7 +278,7 @@ local toggle_step = {
     yes_label = "Yes",
     yes_help = "Show draft PRs.",
 }
-local toggle_layout = render.build_step_layout(commands[1], { toggle_step }, 1, { selected_option_index = 2 }, 60)
+local toggle_layout = render.create_step_layout_from_state(commands[1], { toggle_step }, 1, { selected_option_index = 2 }, 60)
 assert(toggle_layout.lines[4] == "  No (default)", "toggle option 1 rendered")
 assert(toggle_layout.lines[5] == "▸ Yes", "toggle option 2 selected")
 assert(toggle_layout.lines[6] == "    Show draft PRs.", "toggle option 2 hover help rendered")
@@ -287,7 +287,7 @@ assert(
     "toggle option 1 help hidden"
 )
 
-local empty_step_layout = render.build_step_layout(commands[1], active_steps, 2, {
+local empty_step_layout = render.create_step_layout_from_state(commands[1], active_steps, 2, {
     options = {},
     empty_message = "  No open pull requests found.",
 }, 60)

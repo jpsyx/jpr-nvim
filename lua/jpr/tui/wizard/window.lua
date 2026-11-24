@@ -1,53 +1,51 @@
 -- Floating window creation, geometry clamping, and buffer/extmark painting
 -- helpers shared by the command palette and step-by-step wizard controller.
+local render = require("jpr.tui.render")
+
 local M = {}
 
 local namespace = vim.api.nvim_create_namespace("jpr-tui")
 
-local function sanitize_single_line(text)
-    return (tostring(text or ""):gsub("[\r\n]+", " "))
-end
-
-local function compute_centered_row(height)
+local function get_centered_row(height)
     local centered = math.floor((vim.o.lines - height) / 2) - 1
     local max_row = math.max(0, vim.o.lines - height - 2)
     return math.max(0, math.min(centered, max_row))
 end
 
-local function compute_centered_col(width)
+local function get_centered_col(width)
     return math.max(0, math.floor((vim.o.columns - width) / 2))
 end
 
 local function open_floating_window_or_cleanup(buf, config)
-    local is_ok, win_or_err = pcall(vim.api.nvim_open_win, buf, true, config)
+    local is_ok, window_or_error = pcall(vim.api.nvim_open_win, buf, true, config)
     if not is_ok then
         if vim.api.nvim_buf_is_valid(buf) then
             pcall(vim.api.nvim_buf_delete, buf, { force = true })
         end
-        error(win_or_err)
+        error(window_or_error)
     end
-    return win_or_err
+    return window_or_error
 end
 
---- Computes the clamped floating modal inner width for the current editor size.
+--- Returns the clamped floating modal inner width for the current editor size.
 --- @return integer
-function M.compute_modal_width()
+function M.get_modal_width()
     local preferred_width = math.max(56, math.min(92, vim.o.columns - 6))
     local max_allowed_width = math.max(20, vim.o.columns - 4)
     return math.min(preferred_width, max_allowed_width)
 end
 
---- Computes the clamped floating modal inner height for `line_count` and `min_height`.
+--- Returns the clamped floating modal inner height for `line_count` and `min_height`.
 --- @param line_count integer
 --- @param min_height integer
 --- @return integer
-function M.compute_modal_height(line_count, min_height)
+function M.get_modal_height_from_lines(line_count, min_height)
     local max_viewport_height = math.max(1, vim.o.lines - 4)
     local floor_height = math.min(math.max(1, tonumber(min_height) or 6), max_viewport_height)
     return math.min(math.max(floor_height, tonumber(line_count) or floor_height), max_viewport_height)
 end
 
---- Builds centered rounded floating window options for `nvim_open_win`.
+--- Creates centered rounded floating window options for `nvim_open_win`.
 --- @param width integer
 --- @param height integer
 --- @param title string
@@ -56,17 +54,17 @@ end
 function M.create_window_config(width, height, title, footer)
     local config = {
         relative = "editor",
-        row = compute_centered_row(height),
-        col = compute_centered_col(width),
+        row = get_centered_row(height),
+        col = get_centered_col(width),
         width = width,
         height = height,
         style = "minimal",
         border = "rounded",
-        title = sanitize_single_line(title),
+        title = render.to_single_line(title),
         title_pos = "center",
     }
     if type(footer) == "string" and footer ~= "" then
-        config.footer = sanitize_single_line(footer)
+        config.footer = render.to_single_line(footer)
         config.footer_pos = "center"
     end
     return config
@@ -104,8 +102,8 @@ local function resize_centered_window(win, width, height)
     end
     pcall(vim.api.nvim_win_set_config, win, {
         relative = "editor",
-        row = compute_centered_row(height),
-        col = compute_centered_col(width),
+        row = get_centered_row(height),
+        col = get_centered_col(width),
         width = width,
         height = height,
     })
@@ -123,7 +121,7 @@ function M.create_menu_window(title, layout, width)
     vim.bo[buf].filetype = "jpr-tui"
     apply_layout_to_buffer(buf, layout)
 
-    local height = M.compute_modal_height(#layout.lines, 6)
+    local height = M.get_modal_height_from_lines(#layout.lines, 6)
     local win = open_floating_window_or_cleanup(buf, M.create_window_config(width, height, title, nil))
     vim.api.nvim_set_option_value("cursorline", true, { win = win, scope = "local" })
     vim.api.nvim_set_option_value("wrap", false, { win = win, scope = "local" })
@@ -142,7 +140,7 @@ function M.paint_menu_window(buf, win, layout, width)
         return
     end
     apply_layout_to_buffer(buf, layout)
-    local height = M.compute_modal_height(#layout.lines, 6)
+    local height = M.get_modal_height_from_lines(#layout.lines, 6)
     resize_centered_window(win, width, height)
     if win and vim.api.nvim_win_is_valid(win) then
         local cursor_line = math.max(1, math.min(layout.cursor_line or 1, math.max(1, #layout.lines)))
@@ -164,7 +162,7 @@ function M.paint_text_virt_lines(buf, win, virt_lines, width)
         virt_lines = virt_lines,
         virt_lines_above = true,
     })
-    local height = M.compute_modal_height(#virt_lines + 1, 4)
+    local height = M.get_modal_height_from_lines(#virt_lines + 1, 4)
     resize_centered_window(win, width, height)
 end
 
@@ -182,10 +180,10 @@ function M.create_text_window(title, footer, initial_text, virt_lines, width)
     vim.bo[buf].filetype = "jpr-tui-input"
     vim.bo[buf].modifiable = true
 
-    local single_line_text = sanitize_single_line(initial_text)
+    local single_line_text = render.to_single_line(initial_text)
     vim.api.nvim_buf_set_lines(buf, 0, -1, false, { single_line_text })
 
-    local height = M.compute_modal_height(#virt_lines + 1, 4)
+    local height = M.get_modal_height_from_lines(#virt_lines + 1, 4)
     local win = open_floating_window_or_cleanup(buf, M.create_window_config(width, height, title, footer))
     vim.api.nvim_set_option_value("cursorline", false, { win = win, scope = "local" })
     vim.api.nvim_set_option_value("wrap", false, { win = win, scope = "local" })

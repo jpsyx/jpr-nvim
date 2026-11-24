@@ -65,8 +65,14 @@ local function load_open_pr_options(_answers, _context, on_loaded)
     local session = session_module()
     session.list_open_prs(function(prs)
         if #prs == 0 then
-            jpr().info("no open pull requests in this repository")
-            on_loaded({}, nil, "No open pull requests in this repository. Press h to enter a PR number or URL.")
+            local is_applied = on_loaded(
+                {},
+                nil,
+                "No open pull requests in this repository. Press h to enter a PR number or URL."
+            )
+            if is_applied == true then
+                jpr().info("no open pull requests in this repository")
+            end
             return
         end
         local open_tabs = type(session.open_tab_numbers) == "function" and session.open_tab_numbers() or {}

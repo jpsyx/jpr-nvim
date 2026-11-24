@@ -81,6 +81,24 @@ function M.find_floating_win(title_substring)
     return nil
 end
 
+--- Returns the current window after asserting it is a floating window.
+function M.current_float_win()
+    local win = vim.api.nvim_get_current_win()
+    local config = vim.api.nvim_win_get_config(win)
+    assert(config.relative and config.relative ~= "", "expected current window to be a floating window")
+    return win
+end
+
+--- Returns all buffer lines of the currently focused floating window.
+function M.current_lines()
+    return vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(M.current_float_win()), 0, -1, false)
+end
+
+--- Returns the newline-joined buffer text of the currently focused floating window.
+function M.current_text()
+    return table.concat(M.current_lines(), "\n")
+end
+
 --- Finds the 1-based line number of the first line containing `needle`.
 function M.find_line_number(lines, needle)
     for idx, line in ipairs(lines) do

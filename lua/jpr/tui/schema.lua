@@ -10,13 +10,16 @@ M.VALID_STEP_KINDS = {
     text = true,
 }
 
-local function is_non_empty_string(value)
+--- Returns `true` when `value` is a string containing at least one non-whitespace character.
+--- @param value any
+--- @return boolean
+function M.is_non_blank_string(value)
     return type(value) == "string" and value:match("%S") ~= nil
 end
 
 local function is_non_empty_option_value(value)
     if type(value) == "string" then
-        return value:match("%S") ~= nil
+        return M.is_non_blank_string(value)
     end
     return value ~= nil
 end
@@ -34,7 +37,7 @@ local function validate_select_options(command_id, step)
             return false,
                 ("command %q step %q option %d: missing non-empty value"):format(command_id, step.id, option_index)
         end
-        if not is_non_empty_string(option.label) then
+        if not M.is_non_blank_string(option.label) then
             return false,
                 ("command %q step %q option %d: missing non-empty label"):format(command_id, step.id, option_index)
         end
@@ -50,10 +53,10 @@ local function validate_step_kind_fields(command_id, step)
         return false, ("command %q step %q: async_select step requires a load function"):format(command_id, step.id)
     end
     if step.kind == "toggle" then
-        if not is_non_empty_string(step.yes_label) then
+        if not M.is_non_blank_string(step.yes_label) then
             return false, ("command %q step %q: toggle step requires non-empty yes_label"):format(command_id, step.id)
         end
-        if not is_non_empty_string(step.no_label) then
+        if not M.is_non_blank_string(step.no_label) then
             return false, ("command %q step %q: toggle step requires non-empty no_label"):format(command_id, step.id)
         end
     end
@@ -64,17 +67,17 @@ local function validate_step_spec(command_id, step, step_index, seen_step_ids)
     if type(step) ~= "table" then
         return false, ("command %q step %d: expected table"):format(command_id, step_index)
     end
-    if not is_non_empty_string(step.id) then
+    if not M.is_non_blank_string(step.id) then
         return false, ("command %q step %d: missing non-empty id"):format(command_id, step_index)
     end
     if seen_step_ids[step.id] then
         return false, ("command %q: duplicate step id %q"):format(command_id, step.id)
     end
     seen_step_ids[step.id] = true
-    if not is_non_empty_string(step.label) then
+    if not M.is_non_blank_string(step.label) then
         return false, ("command %q step %q: missing non-empty label"):format(command_id, step.id)
     end
-    if not is_non_empty_string(step.help) then
+    if not M.is_non_blank_string(step.help) then
         return false, ("command %q step %q: missing non-empty help"):format(command_id, step.id)
     end
     if M.VALID_STEP_KINDS[step.kind] ~= true then
@@ -90,17 +93,17 @@ local function validate_command_spec(command, command_index, seen_command_ids)
     if type(command) ~= "table" then
         return false, ("command %d: expected table"):format(command_index)
     end
-    if not is_non_empty_string(command.id) then
+    if not M.is_non_blank_string(command.id) then
         return false, ("command %d: missing non-empty id"):format(command_index)
     end
     if seen_command_ids[command.id] then
         return false, ("duplicate command id %q"):format(command.id)
     end
     seen_command_ids[command.id] = true
-    if not is_non_empty_string(command.label) then
+    if not M.is_non_blank_string(command.label) then
         return false, ("command %q: missing non-empty label"):format(command.id)
     end
-    if not is_non_empty_string(command.help) then
+    if not M.is_non_blank_string(command.help) then
         return false, ("command %q: missing non-empty help"):format(command.id)
     end
     if command.steps == nil then
@@ -137,13 +140,13 @@ function M.validate_command_specs(commands)
     return true, nil
 end
 
---- Resolves the ordered list of active steps for `command` given `answers` and `context`.
---- Keeps every step whose `when` predicate is absent or returns `true`.
+--- Returns the ordered list of active steps for `command` given `answers` and `context`,
+--- keeping every step whose `when` predicate is absent or evaluates to `true`.
 --- @param command table
 --- @param answers table|nil
 --- @param context table|nil
 --- @return table[]
-function M.resolve_active_steps(command, answers, context)
+function M.get_active_steps_from_command(command, answers, context)
     local active_steps = {}
     local current_answers = answers or {}
     local current_context = context or {}
@@ -156,8 +159,8 @@ function M.resolve_active_steps(command, answers, context)
     return active_steps
 end
 
---- Computes the default value for `step`, calling `step.default(answers, context)` when
---- it is a function or returning `step.default` directly otherwise.
+--- Returns the initial default value for `step` given `answers` and `context`,
+--- or `nil` when no default is defined.
 --- @param step table|nil
 --- @param answers table|nil
 --- @param context table|nil
@@ -172,8 +175,8 @@ function M.get_default_value_from_step(step, answers, context)
     return step.default
 end
 
---- Returns a copy of `answers` containing only keys belonging to active steps of `command`.
---- Iterates to a fixed point so transitive `when` branches prune cleanly without mutating `answers`.
+--- Returns a fresh copy of `answers` retaining only entries for steps that remain
+--- active for `command` under `context`, leaving `answers` unmodified.
 --- @param command table
 --- @param answers table|nil
 --- @param context table|nil
@@ -183,8 +186,9 @@ function M.prune_inactive_answers(command, answers, context)
     for key, value in pairs(answers or {}) do
         current[key] = value
     end
+    -- Iterate to a fixed point so transitive `when` branches prune cleanly.
     while true do
-        local active_steps = M.resolve_active_steps(command, current, context)
+        local active_steps = M.get_active_steps_from_command(command, current, context)
         local active_step_ids = {}
         for _, step in ipairs(active_steps) do
             active_step_ids[step.id] = true

@@ -3,14 +3,7 @@ package.path = root .. "/lua/?.lua;" .. root .. "/lua/?/init.lua;" .. package.pa
 
 local schema = require("jpr.tui.schema")
 
--- 1. VALID_STEP_KINDS exports all four supported kinds.
-assert(schema.VALID_STEP_KINDS.select == true, "select kind supported")
-assert(schema.VALID_STEP_KINDS.async_select == true, "async_select kind supported")
-assert(schema.VALID_STEP_KINDS.toggle == true, "toggle kind supported")
-assert(schema.VALID_STEP_KINDS.text == true, "text kind supported")
-assert(schema.VALID_STEP_KINDS.unknown == nil, "unknown kind rejected")
-
--- 2. validate_command_specs accepts a complete valid spec set.
+-- 1. validate_command_specs accepts a complete valid spec set across all four step kinds.
 local valid_commands = {
     {
         id = "open",
@@ -75,10 +68,10 @@ local valid_commands = {
 local is_valid, validation_error = schema.validate_command_specs(valid_commands)
 assert(is_valid == true and validation_error == nil, "valid specs pass: " .. tostring(validation_error))
 
--- 3. validate_command_specs rejects invalid specs with clear error messages.
+-- 2. validate_command_specs rejects invalid specs with clear error messages.
 local function assert_invalid(commands, expected_substring, description)
-    local ok, error_message = schema.validate_command_specs(commands)
-    assert(ok == false, description .. ": expected false, got true")
+    local is_valid, error_message = schema.validate_command_specs(commands)
+    assert(is_valid == false, description .. ": expected false, got true")
     assert(type(error_message) == "string" and error_message ~= "", description .. ": expected error message")
     assert(
         error_message:lower():find(expected_substring:lower(), 1, true) ~= nil,
@@ -189,7 +182,7 @@ assert_invalid({
     },
 }, "yes_label", "missing toggle yes_label")
 
--- 4. resolve_active_steps evaluates discriminant predicates with answers and context.
+-- 3. get_active_steps_from_command evaluates discriminant predicates with answers and context.
 local branch_command = {
     id = "branch_demo",
     label = "Branch Demo",
@@ -235,12 +228,14 @@ local function extract_step_ids(steps)
 end
 
 assert(
-    vim.deep_equal(extract_step_ids(schema.resolve_active_steps(branch_command, {}, {})), { "mode" }),
+    vim.deep_equal(extract_step_ids(schema.get_active_steps_from_command(branch_command, {}, {})), { "mode" }),
     "only unconditional step active initially"
 )
 assert(
     vim.deep_equal(
-        extract_step_ids(schema.resolve_active_steps(branch_command, { mode = "custom" }, { has_session = true })),
+        extract_step_ids(
+            schema.get_active_steps_from_command(branch_command, { mode = "custom" }, { has_session = true })
+        ),
         { "mode", "custom_kind", "session_note" }
     ),
     "discriminant and context predicates include matching steps"
@@ -248,7 +243,7 @@ assert(
 assert(
     vim.deep_equal(
         extract_step_ids(
-            schema.resolve_active_steps(
+            schema.get_active_steps_from_command(
                 branch_command,
                 { mode = "custom", custom_kind = "advanced" },
                 { has_session = false }
