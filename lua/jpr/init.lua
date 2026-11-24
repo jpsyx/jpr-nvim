@@ -43,22 +43,7 @@ M.defaults = {
 M.config = vim.deepcopy(M.defaults)
 
 --- The `:Jpr` subcommands, in the order completion offers them.
-M.subcommands = {
-    "open",
-    "sync",
-    "toggle",
-    "stream",
-    "comment",
-    "suggest",
-    "expand",
-    "conversation",
-    "submit",
-    "push",
-    "agent",
-    "send",
-    "prepass",
-    "close",
-}
+M.subcommands = require("jpr.commands.schema").list_command_ids()
 
 --- Links the panel's and thread UI's highlight groups to the colorscheme's,
 --- without replacing any link the user set. Runs at `setup` and again when a
@@ -138,15 +123,28 @@ function M.parse_pr_arg(arg)
     return number and tonumber(number) or nil, repo
 end
 
---- Completes `:Jpr <subcommand>`; arguments after it have no completion.
-function M.complete(arglead, cmdline)
-    local words = vim.split(vim.trim(cmdline), "%s+")
-    if #words > 2 or (#words == 2 and arglead == "") then
-        return {}
-    end
+local function filter_by_prefix(items, prefix)
     return vim.tbl_filter(function(name)
-        return vim.startswith(name, arglead)
-    end, M.subcommands)
+        return vim.startswith(name, prefix)
+    end, items)
+end
+
+--- Completes `:Jpr <subcommand>` and schema-defined single-step arguments
+--- (`toggle`, `comment`, `agent`).
+function M.complete(arglead, cmdline)
+    local raw_cmdline = cmdline or ""
+    local trimmed = vim.trim(raw_cmdline)
+    local words = trimmed ~= "" and vim.split(trimmed, "%s+") or {}
+    local has_trailing_space = raw_cmdline:match("%s$") ~= nil
+    local token_index = has_trailing_space and (#words + 1) or #words
+    if token_index <= 2 then
+        return filter_by_prefix(M.subcommands, arglead or "")
+    end
+    if token_index == 3 then
+        local candidates = require("jpr.commands.schema").subcommand_arg_completions(words[2])
+        return filter_by_prefix(candidates, arglead or "")
+    end
+    return {}
 end
 
 --- Tells the user something failed, as a `jpr:` error notification.
@@ -173,30 +171,95 @@ function M.statusline()
     return require("jpr.render.statusline").build_statusline_from_session(session_module.current())
 end
 
---- Runs `:Jpr <fargs>` with optional command options `cmd_opts` (such as range).
-function M.command(fargs, cmd_opts)
-    local subcommand = fargs[1]
-    local session = require("jpr.session")
+local function is_cursor_on_diff_line(current_session)
+    if not current_session then
+        return false
+    end
+    local win = vim.api.nvim_get_current_win()
+    local buf = vim.api.nvim_win_get_buf(win)
+    local buffers = current_session.stream and current_session.stream.buffers
+    if buffers ~= nil and (buf == buffers.main or buf == buffers.left) then
+        local line = vim.api.nvim_win_get_cursor(win)[1]
+        return require("jpr.views.stream").anchor_at_range(current_session, win, line, line) ~= nil
+    end
+    if type(vim.b[buf].jpr_base_path) == "string" and vim.b[buf].jpr_base_path ~= "" then
+        return true
+    end
+    return require("jpr.views.diff").buffer_to_changed_path(current_session, buf) ~= nil
+end
+
+local function build_tui_context(session, cmd_opts)
+    local current_session = type(session.current) == "function" and session.current() or nil
+    local is_agent_open = false
+    if current_session ~= nil then
+        local agent_module = require("jpr.agent")
+        is_agent_open = type(agent_module.is_open) == "function" and agent_module.is_open(current_session) == true
+    end
+    return {
+        cmd_opts = cmd_opts,
+        has_session = current_session ~= nil,
+        is_agent_open = is_agent_open,
+        is_on_diff_line = is_cursor_on_diff_line(current_session),
+    }
+end
+
+local function dispatch_open_subcommand(session, argument, context)
+    if argument == nil or argument == "" then
+        local open_spec = require("jpr.commands.schema").find_command_spec("open")
+        return require("jpr.tui.wizard").open_command(open_spec, { source = "list" }, context, { start_step_id = "pr" })
+    end
+    local number, repo = M.parse_pr_arg(argument)
+    if not number then
+        return M.error(("invalid pull request %q; expected a PR number, #number, or pull request URL"):format(argument))
+    end
+    return session.open(number, repo)
+end
+
+local function dispatch_validated_arg(subcommand, argument, label, on_valid)
+    local valid_values = require("jpr.commands.schema").subcommand_arg_completions(subcommand)
+    if vim.tbl_contains(valid_values, argument) then
+        return on_valid(argument)
+    end
+    return M.error(("invalid %s %q; expected one of: %s"):format(label, tostring(argument), table.concat(valid_values, ", ")))
+end
+
+local function dispatch_comment_subcommand(session, argument, cmd_opts, context)
+    if argument == nil or argument == "" then
+        return session.comment_current(cmd_opts)
+    end
+    return dispatch_validated_arg("comment", argument, "comment scope", function(kind)
+        local comment_spec = require("jpr.commands.schema").find_command_spec("comment")
+        return comment_spec.execute({ kind = kind }, context)
+    end)
+end
+
+local function dispatch_direct_subcommand(session, subcommand, argument, cmd_opts, context)
     if subcommand == "open" then
-        local number, repo = M.parse_pr_arg(fargs[2])
-        if not number then
-            return M.error("usage: :Jpr open <number | #number | pull request URL>")
+        return dispatch_open_subcommand(session, argument, context)
+    end
+    if subcommand == "toggle" then
+        if argument == nil or argument == "" then
+            return session.toggle_view()
         end
-        return session.open(number, repo)
+        return dispatch_validated_arg("toggle", argument, "diff view", session.set_view_mode)
+    end
+    if subcommand == "comment" then
+        return dispatch_comment_subcommand(session, argument, cmd_opts, context)
+    end
+    if subcommand == "agent" then
+        if argument == nil or argument == "" then
+            return session.agent_current()
+        end
+        return dispatch_validated_arg("agent", argument, "agent", session.agent_current)
     end
     local dispatch = {
         sync = session.sync_current,
-        toggle = session.toggle_view,
         stream = session.stream_current,
-        comment = function()
-            session.comment_current(cmd_opts)
-        end,
         suggest = session.suggest_current,
         expand = session.expand_current,
         conversation = session.conversation_current,
         submit = session.submit_current,
         push = session.push_current,
-        agent = session.agent_current,
         send = session.send_current,
         prepass = session.prepass_current,
         close = session.close_current,
@@ -206,6 +269,18 @@ function M.command(fargs, cmd_opts)
         return handler()
     end
     M.error(("unknown subcommand %q; expected one of: %s"):format(tostring(subcommand), table.concat(M.subcommands, ", ")))
+end
+
+--- Runs `:Jpr [subcommand [arg]]` with optional command options `cmd_opts` (such as range).
+function M.command(fargs, cmd_opts)
+    local args = fargs or {}
+    local session = require("jpr.session")
+    local context = build_tui_context(session, cmd_opts)
+    if #args == 0 then
+        local commands = require("jpr.commands.schema").create_command_specs()
+        return require("jpr.tui.wizard").open_palette(commands, context)
+    end
+    return dispatch_direct_subcommand(session, args[1], args[2], cmd_opts, context)
 end
 
 --- Captures the 1-indexed inclusive visual line range and exits visual mode,

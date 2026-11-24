@@ -20,6 +20,51 @@ function M.current()
     return M.by_tab[vim.api.nvim_get_current_tabpage()]
 end
 
+--- Whether the current tab has an active pull request review session.
+function M.has_current_session()
+    return M.current() ~= nil
+end
+
+--- Returns a set `{ [number] = true }` of pull request numbers currently open
+--- in valid tabs, used to mark `[open]` badges in the PR picker.
+function M.open_tab_numbers()
+    local open_numbers = {}
+    for tab, existing in pairs(M.by_tab) do
+        if vim.api.nvim_tabpage_is_valid(tab) and type(existing.number) == "number" then
+            open_numbers[existing.number] = true
+        end
+    end
+    return open_numbers
+end
+
+--- Runs `jpr-review prs` asynchronously in the current working directory and
+--- calls `on_result(prs)` with the decoded PR list or `on_error(message)`.
+function M.list_open_prs(on_result, on_error)
+    local binary_path = jpr().binary_path()
+    if vim.fn.executable(binary_path) ~= 1 then
+        return on_error("jpr-review binary is missing; run :Lazy build jpr-nvim")
+    end
+    local is_started, start_error = pcall(
+        vim.system,
+        { binary_path, "prs" },
+        { cwd = vim.fn.getcwd(), text = true },
+        vim.schedule_wrap(function(result)
+            if result.code ~= 0 then
+                local stderr = vim.trim(result.stderr or "")
+                return on_error(stderr ~= "" and stderr or "failed to list open pull requests")
+            end
+            local is_decoded, prs = pcall(vim.json.decode, result.stdout or "")
+            if not is_decoded or type(prs) ~= "table" or (next(prs) ~= nil and not vim.islist(prs)) then
+                return on_error("failed to parse open pull requests response")
+            end
+            on_result(prs)
+        end)
+    )
+    if not is_started then
+        on_error(crash.build_clean_text_from_raw(start_error))
+    end
+end
+
 --- Reports that `session` is in read-only mode after an engine crash.
 function M.report_read_only(session)
     return jpr().error(

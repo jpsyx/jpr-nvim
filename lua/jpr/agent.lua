@@ -205,9 +205,17 @@ local function finish_pending_launch(session, pending, launch_plan)
     end
 end
 
+--- Whether `session`'s interactive agent terminal window is currently open.
+function M.is_open(session)
+    local agent_state = session and session.agent
+    return agent_state ~= nil
+        and agent_state.win ~= nil
+        and vim.api.nvim_win_is_valid(agent_state.win)
+end
+
 --- Ensures `session`'s interactive agent terminal is alive and visible on the
 --- right side of the tab, then calls `on_ready(agent_state)` when given.
-function M.ensure_open(session, on_ready)
+function M.ensure_open(session, on_ready, agent_kind)
     if is_live_agent(session.agent) then
         ensure_agent_window(session, session.agent)
         if on_ready then
@@ -225,8 +233,11 @@ function M.ensure_open(session, on_ready)
     if on_ready then
         pending[1] = on_ready
     end
+    local selected_agent = (type(agent_kind) == "string" and agent_kind ~= "")
+        and agent_kind
+        or jpr().config.agent
     session.agent_pending_callbacks = pending
-    require("jpr.session").request(session, "prepareAgentLaunch", { agent = jpr().config.agent }, function(launch_plan)
+    require("jpr.session").request(session, "prepareAgentLaunch", { agent = selected_agent }, function(launch_plan)
         finish_pending_launch(session, pending, launch_plan)
     end, function()
         if session.agent_pending_callbacks == pending then
@@ -237,9 +248,9 @@ end
 
 --- Toggles `session`'s right-hand agent terminal split without stopping a live
 --- agent process when hiding its window.
-function M.toggle(session)
-    local agent_state = session.agent
-    if agent_state and agent_state.win and vim.api.nvim_win_is_valid(agent_state.win) then
+function M.toggle(session, agent_kind)
+    if M.is_open(session) then
+        local agent_state = session.agent
         local window_tab = vim.api.nvim_win_get_tabpage(agent_state.win)
         if #vim.api.nvim_tabpage_list_wins(window_tab) <= 1 then
             return jpr().error("cannot close the last window in the tab")
@@ -252,7 +263,7 @@ function M.toggle(session)
         end
         return
     end
-    M.ensure_open(session)
+    M.ensure_open(session, nil, agent_kind)
 end
 
 local function send_terminal_bytes(agent_state, bytes, error_message)

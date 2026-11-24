@@ -7,7 +7,7 @@ vim.g.loaded_jpr = true
 vim.api.nvim_create_user_command("Jpr", function(opts)
     require("jpr").command(opts.fargs, opts)
 end, {
-    nargs = "+",
+    nargs = "*",
     range = true,
     desc = "Review a GitHub pull request",
     complete = function(arglead, cmdline)

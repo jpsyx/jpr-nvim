@@ -32,7 +32,12 @@ assert(
 assert(vim.deep_equal(jpr.complete("s", "Jpr s"), { "sync", "stream", "suggest", "submit", "send" }), "filtered s subcommands")
 assert(vim.deep_equal(jpr.complete("p", "Jpr p"), { "push", "prepass" }), "filtered p subcommands")
 assert(vim.deep_equal(jpr.complete("c", "Jpr c"), { "comment", "conversation", "close" }), "filtered c subcommands")
-assert(vim.deep_equal(jpr.complete("", "Jpr open "), {}), "nothing after the subcommand")
+assert(vim.deep_equal(jpr.complete("", "Jpr open "), {}), "nothing after open subcommand")
+assert(vim.deep_equal(jpr.complete("", "Jpr toggle "), { "unified", "split" }), "toggle argument completions")
+assert(vim.deep_equal(jpr.complete("s", "Jpr toggle s"), { "split" }), "filtered toggle argument completion")
+assert(vim.deep_equal(jpr.complete("", "Jpr comment "), { "line", "file", "suggest" }), "comment argument completions")
+assert(vim.deep_equal(jpr.complete("", "Jpr agent "), { "claude", "codex" }), "agent argument completions")
+assert(vim.deep_equal(jpr.complete("", "Jpr toggle split "), {}), "no completions after subcommand argument")
 
 jpr.setup({ worktree_cmd = "wt pr {n}" })
 assert(jpr.config.worktree_cmd == "wt pr {n}", "setup takes options")
@@ -56,7 +61,9 @@ for _, group in ipairs({
 end
 
 dofile(root .. "/plugin/jpr.lua")
-assert(vim.api.nvim_get_commands({})["Jpr"] ~= nil, ":Jpr exists")
+local jpr_command = vim.api.nvim_get_commands({})["Jpr"]
+assert(jpr_command ~= nil, ":Jpr exists")
+assert(jpr_command.nargs == "*", ":Jpr accepts zero or more arguments: " .. tostring(jpr_command.nargs))
 
 for _, plug in ipairs({
     "<Plug>(jpr-comment)",
@@ -105,7 +112,8 @@ jpr.command({ "frobnicate" })
 assert(messages[1].level == vim.log.levels.ERROR, "an unknown subcommand is an error")
 assert(messages[1].text:find("unknown subcommand", 1, true), messages[1].text)
 jpr.command({ "open", "abc" })
-assert(messages[2].text:find("usage", 1, true), "open without a number shows the usage")
+assert(messages[2].level == vim.log.levels.ERROR, "open with invalid arg emits ERROR")
+assert(messages[2].text:find("invalid pull request", 1, true), "open with invalid arg mentions invalid pull request: " .. messages[2].text)
 jpr.warn("watch out")
 assert(messages[3].level == vim.log.levels.WARN, "jpr.warn emits WARN level")
 assert(messages[3].text == "jpr: watch out", messages[3].text)

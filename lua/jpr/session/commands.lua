@@ -47,8 +47,7 @@ local function push_session(session_mod, session)
     end)
 end
 
-local function toggle_all_session_views(session_mod)
-    local mode = require("jpr.view_mode").toggle()
+local function redraw_all_session_views(session_mod, mode)
     for _, session in pairs(session_mod.by_tab) do
         if session.client and not session.is_read_only then
             require("jpr.views.diff").redraw_all(session)
@@ -58,11 +57,25 @@ local function toggle_all_session_views(session_mod)
     jpr().info(("%s view"):format(mode))
 end
 
+local function toggle_all_session_views(session_mod)
+    local mode = require("jpr.view_mode").toggle()
+    redraw_all_session_views(session_mod, mode)
+end
+
+local function set_all_session_views(session_mod, mode)
+    if mode ~= "unified" and mode ~= "split" then
+        return jpr().error(("invalid diff view %q; expected unified or split"):format(tostring(mode)))
+    end
+    require("jpr.view_mode").set(mode)
+    redraw_all_session_views(session_mod, mode)
+end
+
 local function attach_agent_commands(session_mod)
-    --- `:Jpr agent`: toggles the interactive agent terminal panel for the current review.
-    function session_mod.agent_current()
+    --- `:Jpr agent [claude|codex]`: toggles the interactive agent terminal panel
+    --- for the current review, optionally selecting the provider when opening.
+    function session_mod.agent_current(agent_kind)
         return run_with_current(session_mod, function(session)
-            require("jpr.agent").toggle(session)
+            require("jpr.agent").toggle(session, agent_kind)
         end)
     end
 
@@ -94,6 +107,11 @@ local function attach_view_commands(session_mod, forget)
     --- remembers the choice.
     function session_mod.toggle_view()
         return toggle_all_session_views(session_mod)
+    end
+
+    --- `:Jpr toggle <unified|split>`: sets the diff view mode and redraws active reviews.
+    function session_mod.set_view_mode(mode)
+        return set_all_session_views(session_mod, mode)
     end
 
     --- `:Jpr stream`: shows the current review's stream beside the panel and
