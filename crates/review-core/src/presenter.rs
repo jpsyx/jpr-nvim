@@ -16,7 +16,7 @@ use crate::tree::create_file_tree_from_paths;
 #[must_use]
 pub fn session_view(
     pr: Option<&PullRequest>,
-    files: &[ChangedFile],
+    files: &[(ChangedFile, bool)],
     threads: &[Thread],
     sync: &SyncState,
     queued_count: usize,
@@ -25,10 +25,10 @@ pub fn session_view(
     SessionView {
         pr: pr.cloned(),
         files: create_file_rows_from_files(files, threads, worktree_status),
-        tree: create_file_tree_from_paths(files.iter().map(|file| file.path.as_str())),
+        tree: create_file_tree_from_paths(files.iter().map(|(file, _)| file.path.as_str())),
         viewed_count: files
             .iter()
-            .filter(|file| file.viewed == ViewedState::Viewed)
+            .filter(|(file, _)| file.viewed == ViewedState::Viewed)
             .count(),
         thread_count: count_code_threads(threads),
         draft_count: threads
@@ -51,7 +51,7 @@ pub fn session_view(
 }
 
 fn create_file_rows_from_files(
-    files: &[ChangedFile],
+    files: &[(ChangedFile, bool)],
     threads: &[Thread],
     worktree_status: &WorktreeStatus,
 ) -> Vec<FileRow> {
@@ -62,7 +62,7 @@ fn create_file_rows_from_files(
         .collect();
     files
         .iter()
-        .map(|file| FileRow {
+        .map(|(file, is_local_only)| FileRow {
             path: file.path.clone(),
             additions: file.additions,
             deletions: file.deletions,
@@ -79,6 +79,7 @@ fn create_file_rows_from_files(
                         && thread.anchor.file.as_deref() == Some(file.path.as_str())
                 })
                 .count(),
+            is_local_only: *is_local_only,
         })
         .collect()
 }
@@ -133,9 +134,9 @@ mod tests {
     #[test]
     fn counts_threads_per_file_and_viewed_files() {
         let files = [
-            changed_file("a.rs", ViewedState::Viewed),
-            changed_file("b.rs", ViewedState::Dismissed),
-            changed_file("c.rs", ViewedState::Unviewed),
+            (changed_file("a.rs", ViewedState::Viewed), false),
+            (changed_file("b.rs", ViewedState::Dismissed), false),
+            (changed_file("c.rs", ViewedState::Unviewed), true),
         ];
         let mut draft_thread = github_thread("T3", "c.rs");
         draft_thread.messages[0].sync = Some(MessageSync::Draft);
@@ -160,6 +161,8 @@ mod tests {
             .map(|row| (row.path.as_str(), row.threads))
             .collect();
         assert_eq!(counts, [("a.rs", 3), ("b.rs", 0), ("c.rs", 1)]);
+        assert!(!view.files[0].is_local_only);
+        assert!(view.files[2].is_local_only);
         assert_eq!(view.viewed_count, 1, "a dismissed file is not viewed");
         assert_eq!(view.thread_count, 4);
         assert_eq!(view.conversation_count, 1);
@@ -172,8 +175,8 @@ mod tests {
     #[test]
     fn keeps_the_forge_file_order() {
         let files = [
-            changed_file("z.rs", ViewedState::Unviewed),
-            changed_file("a.rs", ViewedState::Unviewed),
+            (changed_file("z.rs", ViewedState::Unviewed), false),
+            (changed_file("a.rs", ViewedState::Unviewed), false),
         ];
         let view = session_view(
             None,
@@ -191,8 +194,8 @@ mod tests {
     #[test]
     fn marks_modified_files_and_counts_local_threads_per_file() {
         let files = [
-            changed_file("a.rs", ViewedState::Viewed),
-            changed_file("b.rs", ViewedState::Unviewed),
+            (changed_file("a.rs", ViewedState::Viewed), false),
+            (changed_file("b.rs", ViewedState::Unviewed), false),
         ];
         let mut resolved_local = create_local_unsent_thread("loc-3", "a.rs");
         resolved_local.state = ThreadState::Resolved;

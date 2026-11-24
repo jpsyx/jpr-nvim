@@ -58,6 +58,9 @@ impl ReviewSession {
             if self.saved.session.pr.is_some() || !current_digests.is_empty() {
                 self.disk_digests = Some(current_digests);
             }
+            if !self.base_cache.merge_base.is_empty() {
+                self.refresh_local_files();
+            }
             self.poll_worktree_status_change();
             return Ok(None);
         };
@@ -66,6 +69,9 @@ impl ReviewSession {
             self.poll_worktree_status_change();
             return Ok(None);
         }
+        self.invalidate_base_renames();
+        let _ = self.dismiss_edited_local_viewed(&changed_paths)?;
+        self.refresh_local_files();
         let did_reanchor = self.reanchor_and_save_local_threads(&changed_paths)?;
         self.disk_digests = Some(current_digests);
         let view = self.view();

@@ -1,6 +1,6 @@
 //! Marking files viewed, and the queue of marks the forge has not accepted.
 
-use anyhow::{Context, Result};
+use anyhow::{Result, bail};
 use review_model::{Event, SessionView};
 
 use super::ReviewSession;
@@ -8,24 +8,27 @@ use crate::viewed::viewed_flag_to_state;
 
 impl ReviewSession {
     /// Marks `path` viewed (`true`) or unviewed (`false`), here and on the
-    /// forge. When the forge cannot take it, the mark stands here and is
-    /// queued until a later sync or retry delivers it.
+    /// forge. Local-only worktree files update `local_viewed` in `local.json`
+    /// without calling or queueing on the forge.
     pub fn set_viewed(&mut self, path: &str, viewed: bool) -> Result<SessionView> {
         let pr = self.synced_pr()?.clone();
-        let file = self
-            .saved
-            .files
-            .iter_mut()
-            .find(|file| file.path == path)
-            .with_context(|| format!("{path} is not a file this pull request changes"))?;
-        file.viewed = viewed_flag_to_state(viewed);
-        let queue = &mut self.saved.registry.queued_viewed;
-        if self.ports.forge.set_viewed(&pr, path, viewed).is_ok() {
-            queue.remove(path);
-        } else {
-            queue.insert(path.to_owned(), viewed);
+        if let Some(file) = self.saved.files.iter_mut().find(|file| file.path == path) {
+            file.viewed = viewed_flag_to_state(viewed);
+            let queue = &mut self.saved.registry.queued_viewed;
+            if self.ports.forge.set_viewed(&pr, path, viewed).is_ok() {
+                queue.remove(path);
+            } else {
+                queue.insert(path.to_owned(), viewed);
+            }
+            return self.save_and_announce_viewed();
         }
-        self.save_and_announce_viewed()
+        if let Some(local_file) = self.local_files.iter_mut().find(|file| file.path == path) {
+            let state = viewed_flag_to_state(viewed);
+            local_file.viewed = state;
+            self.saved.local.local_viewed.insert(path.to_owned(), state);
+            return self.save_and_announce_viewed();
+        }
+        bail!("{path} is not a file this pull request changes");
     }
 
     /// Whether any viewed mark or comment operation is waiting for the forge,

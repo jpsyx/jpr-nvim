@@ -261,7 +261,7 @@ impl ReviewSession {
         if anchor.kind == AnchorKind::Pr {
             anchor = Anchor::pr();
         } else {
-            self.validate_anchor_file(&anchor)?;
+            self.validate_local_anchor_file(&anchor)?;
         }
         if anchor.snapshot.is_none()
             && anchor.side == Side::Right

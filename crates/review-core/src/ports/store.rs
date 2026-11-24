@@ -3,7 +3,9 @@
 use std::collections::BTreeMap;
 
 use anyhow::Result;
-use review_model::{AgentKind, AgentRound, ChangedFile, MentionCandidate, PullRequest, Thread};
+use review_model::{
+    AgentKind, AgentRound, ChangedFile, MentionCandidate, PullRequest, Thread, ViewedState,
+};
 use serde::{Deserialize, Serialize};
 
 use super::QueuedCommentOp;
@@ -44,6 +46,9 @@ pub struct LocalStoreState {
     pub next_round: u64,
     /// Every `Origin::Local` thread on this pull request.
     pub threads: Vec<Thread>,
+    /// Viewed state for local-only worktree files not yet present on the forge.
+    #[serde(default)]
+    pub local_viewed: BTreeMap<String, ViewedState>,
 }
 
 /// What the engine still owes the forge: changes made while the forge could

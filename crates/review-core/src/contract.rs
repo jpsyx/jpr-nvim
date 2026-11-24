@@ -87,6 +87,7 @@ fn create_sample_snapshot() -> StoreSnapshot {
             next_local_id: 3,
             next_round: 2,
             threads: vec![create_sample_local_thread()],
+            local_viewed: BTreeMap::from([("src/local.rs".to_owned(), ViewedState::Viewed)]),
         },
     }
 }
@@ -189,6 +190,7 @@ mod tests {
                 next_local_id: 3,
                 next_round: 2,
                 threads: vec![create_sample_local_thread()],
+                local_viewed: BTreeMap::from([("src/local.rs".to_owned(), ViewedState::Viewed)]),
             },
             ..StoreSnapshot::default()
         };

@@ -1,7 +1,9 @@
 //! Pulling the pull request from the forge.
 
 use anyhow::Result;
-use review_model::{Event, HeadMoveOutcome, Origin, PullRequest, SessionView, SyncState, Thread};
+use review_model::{
+    ChangedFile, Event, HeadMoveOutcome, Origin, PullRequest, SessionView, SyncState, Thread,
+};
 
 use super::ReviewSession;
 use crate::comments::{merge_unflushed_threads, reconcile_concurrent_edits, record_agreed_bodies};
@@ -201,10 +203,7 @@ impl ReviewSession {
         let _ = self.send_queued_comments();
         self.apply_pending_thread_ops();
         record_agreed_bodies(&self.threads, &mut self.saved.registry.agreed_bodies);
-        let queue = &mut self.saved.registry.queued_viewed;
-        drop_stale_marks(queue, &snapshot.files);
-        apply_queued(&mut snapshot.files, queue);
-        self.saved.files = snapshot.files;
+        self.reconcile_viewed_and_local_files(&mut snapshot.files);
         self.sync = SyncState::Synced { at: now };
         self.split_and_save_threads()?;
         if self
@@ -215,6 +214,24 @@ impl ReviewSession {
             self.pushed_head = None;
         }
         Ok(())
+    }
+
+    fn reconcile_viewed_and_local_files(&mut self, incoming_files: &mut Vec<ChangedFile>) {
+        let did_promote = self.promote_adopted_local_viewed(incoming_files);
+        let queue = &mut self.saved.registry.queued_viewed;
+        drop_stale_marks(queue, incoming_files);
+        apply_queued(incoming_files, queue);
+        self.saved.files = std::mem::take(incoming_files);
+        if did_promote {
+            let _ = self.send_queued();
+        }
+        if self.base_cache.merge_base.is_empty() {
+            self.local_files
+                .retain(|local| !self.saved.files.iter().any(|pr| pr.path == local.path));
+        } else {
+            self.refresh_local_files();
+            self.prune_stale_local_viewed();
+        }
     }
 
     fn handle_head_moved(&mut self, previous_sha: &str, pr_head_sha: &str) -> Result<SessionView> {

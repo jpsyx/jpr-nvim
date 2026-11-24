@@ -19,4 +19,4 @@ pub mod fakes;
 
 pub use guide::build_agent_guide;
 pub use presenter::session_view;
-pub use session::ReviewSession;
+pub use session::{PathRename, ReviewSession};

@@ -64,7 +64,11 @@ impl ReviewSession {
         F: FnMut(usize, usize, &str),
     {
         self.prepare_base()?;
-        let files = self.saved.files.clone();
+        let files: Vec<review_model::ChangedFile> = self
+            .effective_files()
+            .into_iter()
+            .map(|(file, _)| file)
+            .collect();
         let total = files.len();
         if total > 0 {
             on_progress(0, total, "");
@@ -92,14 +96,27 @@ impl ReviewSession {
     }
 
     /// The base and current text of `path`, which must be a file the pull
-    /// request changes: the forge's list is the only way in, so a path
-    /// from anywhere else is refused before the disk is touched.
+    /// request or local worktree changes.
     pub(super) fn file_texts(&mut self, path: &str) -> Result<(FileText, FileText)> {
-        if !self.saved.files.iter().any(|file| file.path == path) {
+        if !self.has_effective_file(path) {
             bail!("{path} is not a file this pull request changes");
         }
         self.prepare_base()?;
         self.file_texts_after_prepare(path)
+    }
+
+    /// Refreshes cached rename mappings and clears cached base texts when
+    /// worktree files move on disk.
+    pub(super) fn invalidate_base_renames(&mut self) {
+        if self.base_cache.merge_base.is_empty() {
+            return;
+        }
+        if let Ok(renames) = self.ports.workspace.renames(&self.base_cache.merge_base) {
+            self.base_cache.renamed_from =
+                renames.into_iter().map(|(old, new)| (new, old)).collect();
+            self.base_cache.texts.clear();
+            self.base_cache.too_large.clear();
+        }
     }
 
     fn file_texts_after_prepare(&mut self, path: &str) -> Result<(FileText, FileText)> {
@@ -112,7 +129,7 @@ impl ReviewSession {
     }
 
     /// `path` at the merge base, under its old name when it was renamed.
-    fn base_text_after_prepare(&mut self, path: &str) -> Result<FileText> {
+    pub(super) fn base_text_after_prepare(&mut self, path: &str) -> Result<FileText> {
         if let Some(text) = self.base_cache.texts.get(path) {
             return Ok(text.clone());
         }
@@ -168,6 +185,7 @@ impl ReviewSession {
             texts: HashMap::new(),
             too_large: HashSet::new(),
         };
+        self.local_file_counts.clear();
         Ok(())
     }
 }

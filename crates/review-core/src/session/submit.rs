@@ -46,9 +46,7 @@ impl ReviewSession {
         comment_body: Option<&str>,
     ) -> Result<(SuggestedEdit, Thread, SessionView)> {
         let pr = self.synced_pr()?.clone();
-        if !self.saved.files.iter().any(|file| file.path == path) {
-            bail!("{path} is not a file this pull request changes");
-        }
+        self.validate_github_anchor_file(&Anchor::file(path))?;
         let head_bytes = self
             .ports
             .workspace

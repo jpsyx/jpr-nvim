@@ -79,6 +79,9 @@ pub struct FileRow {
     /// Local threads anchored to this file, open or resolved.
     #[serde(default)]
     pub local_threads: usize,
+    /// Whether this file exists only in the local worktree and has not been pushed to the pull request yet.
+    #[serde(default)]
+    pub is_local_only: bool,
 }
 
 /// One row of the changed files drawn as a tree: a directory, or a file of
@@ -249,6 +252,7 @@ mod tests {
                 threads: 3,
                 is_modified: false,
                 local_threads: 0,
+                is_local_only: false,
             }],
             tree: Vec::new(),
             viewed_count: 1,
@@ -375,10 +379,12 @@ mod tests {
         let row = encoded["files"][0].as_object_mut().unwrap();
         row.remove("isModified").unwrap();
         row.remove("localThreads").unwrap();
+        row.remove("isLocalOnly").unwrap();
 
         let decoded: SessionView = serde_json::from_value(encoded).unwrap();
         assert!(!decoded.files[0].is_modified);
         assert_eq!(decoded.files[0].local_threads, 0);
+        assert!(!decoded.files[0].is_local_only);
         assert_eq!(decoded.worktree_status, WorktreeStatus::default());
     }
 }

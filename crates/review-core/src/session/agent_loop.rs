@@ -248,7 +248,7 @@ impl ReviewSession {
             return Ok(None);
         }
         let mut anchor = normalize_prepass_anchor(finding.anchor)?;
-        self.validate_anchor_file(&anchor)?;
+        self.validate_local_anchor_file(&anchor)?;
         if anchor.side == Side::Right
             && matches!(anchor.kind, AnchorKind::Line | AnchorKind::Range)
             && let Some(path) = anchor.file.as_deref()

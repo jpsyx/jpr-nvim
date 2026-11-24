@@ -20,7 +20,7 @@ use support::{
 fn initialize_reports_the_protocol_and_server_versions() {
     let written = run(&request(1, "initialize"), &forge());
     let result = &response(&written, 1)["result"];
-    assert_eq!(result["protocolVersion"], 6);
+    assert_eq!(result["protocolVersion"], 7);
     assert_eq!(result["version"], "9.9.9");
 }
 
@@ -152,7 +152,7 @@ fn missing_or_mistyped_params_are_errors_and_serving_goes_on() {
             "{error}"
         );
     }
-    assert_eq!(response(&written, 5)["result"]["protocolVersion"], 6);
+    assert_eq!(response(&written, 5)["result"]["protocolVersion"], 7);
 }
 
 #[test]
@@ -346,3 +346,5 @@ fn a_closed_output_ends_serving_with_an_error() {
 mod comments;
 #[path = "serve/polish.rs"]
 mod polish;
+#[path = "serve/refresh_worktree.rs"]
+mod refresh_worktree;

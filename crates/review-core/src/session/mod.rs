@@ -6,6 +6,7 @@ mod agent_loop;
 mod comments;
 mod diffs;
 mod local;
+mod local_files;
 mod push;
 mod submit;
 mod sync;
@@ -15,12 +16,15 @@ mod viewed;
 mod worktree_watch;
 
 use diffs::BaseCache;
+pub use local_files::PathRename;
 
 use std::collections::BTreeMap;
 use std::sync::mpsc::{self, Receiver, Sender};
 
 use anyhow::{Context, Result};
-use review_model::{Event, Origin, PullRequest, SessionView, SyncState, Thread, WorktreeStatus};
+use review_model::{
+    ChangedFile, Event, Origin, PullRequest, SessionView, SyncState, Thread, WorktreeStatus,
+};
 
 use crate::ports::{Ports, StoreSnapshot};
 use crate::presenter::session_view;
@@ -44,6 +48,8 @@ pub struct ReviewSession {
     sync: SyncState,
     subscribers: Vec<Sender<Event>>,
     base_cache: BaseCache,
+    local_files: Vec<ChangedFile>,
+    local_file_counts: BTreeMap<String, (u64, (u64, u64))>,
     disk_digests: Option<BTreeMap<String, u64>>,
     last_worktree_status: Option<WorktreeStatus>,
     pushed_head: Option<PushedHead>,
@@ -72,6 +78,8 @@ impl ReviewSession {
             sync,
             subscribers: Vec::new(),
             base_cache: BaseCache::default(),
+            local_files: Vec::new(),
+            local_file_counts: BTreeMap::new(),
             disk_digests: None,
             last_worktree_status: None,
             pushed_head: None,
@@ -114,9 +122,10 @@ impl ReviewSession {
 
     /// Builds the session status view using a pre-read worktree status.
     pub(super) fn view_with_status(&self, worktree_status: &WorktreeStatus) -> SessionView {
+        let effective = self.effective_files();
         session_view(
             self.saved.session.pr.as_ref(),
-            &self.saved.files,
+            &effective,
             &self.threads,
             &self.sync,
             self.saved.registry.queued_viewed.len() + self.saved.registry.queued_ops.len(),

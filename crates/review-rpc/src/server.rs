@@ -18,7 +18,9 @@ use review_model::Event;
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use crate::params::{get_bool_from_params, get_mode_from_params, get_string_from_params};
+use crate::params::{
+    get_bool_from_params, get_mode_from_params, get_renames_from_params, get_string_from_params,
+};
 use crate::protocol::{
     PROTOCOL_VERSION, Request, RpcError, failure, notification, parse_request, success,
 };
@@ -76,6 +78,12 @@ pub fn handle(
             );
             to_value(&engine_result_to_rpc(
                 lock(session)?.set_viewed(path, viewed),
+            )?)
+        }
+        "refreshWorktree" => {
+            let renames = get_renames_from_params(params)?;
+            to_value(&engine_result_to_rpc(
+                lock(session)?.refresh_worktree(&renames),
             )?)
         }
         "shutdown" => Ok(Value::Null),

@@ -122,6 +122,7 @@ fn the_local_file_round_trips_v1_and_refuses_version_9() {
             agent: Some(AgentThreadState::Sent { round: 1 }),
             promoted_to: Some("PRRT_promoted".into()),
         }],
+        local_viewed: BTreeMap::from([("src/local.rs".to_owned(), ViewedState::Viewed)]),
     };
     let bytes = encode_local(&local).unwrap();
     let encoded_json = as_json(&bytes);
@@ -142,6 +143,16 @@ fn the_local_file_round_trips_v1_and_refuses_version_9() {
         message.contains("version 9") && message.contains("version 1"),
         "{message}"
     );
+}
+
+#[test]
+fn local_json_v1_without_local_viewed_deserializes() {
+    let raw = br#"{"version": 1, "nextLocalId": 2, "nextRound": 1, "threads": []}"#;
+    let decoded = decode_local(raw).expect("v1 local.json without localViewed decodes");
+    assert_eq!(decoded.next_local_id, 2);
+    assert_eq!(decoded.next_round, 1);
+    assert_eq!(decoded.threads, Vec::new());
+    assert!(decoded.local_viewed.is_empty());
 }
 
 fn create_sample_queued_ops() -> Vec<review_core::ports::QueuedCommentOp> {
