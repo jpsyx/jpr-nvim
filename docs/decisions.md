@@ -723,10 +723,9 @@ matching artifact exists.
 **Decision.** Both frontends describe their full command surface in declarative
 schemas that render an interactive Command Palette and discriminant-first
 steppers: in Neovim (`lua/jpr/tui/schema.lua`, `lua/jpr/tui/render.lua`,
-`lua/jpr/tui/wizard.lua`, `lua/jpr/tui/wizard_window.lua`, and
-`lua/jpr/commands/schema.lua`) for bare `:Jpr` and `:Jpr open`, and in Rust
-(`crates/cli-tui` and `crates/jpr-review/src/tui_schema/`) for bare
-`jpr-review` and missing-input subcommands on an interactive TTY.
+`lua/jpr/tui/wizard/`, and `lua/jpr/commands/schema.lua`) for bare `:Jpr` and
+`:Jpr open`, and in Rust (`crates/cli-tui` and `crates/jpr-review/src/tui_schema/`)
+for bare `jpr-review` and missing-input subcommands on an interactive TTY.
 `crates/cli-tui` lives outside `crates/review-*` so generic engine crates stay
 UI-free and `crossterm` never enters `review-*`. Every command and option shows
 a human-readable display label paired with `[<id>]`, reveals concise helper
@@ -748,7 +747,7 @@ the editor and the terminal.
 
 **Consequences.** Every new or modified `:Jpr` subcommand or `jpr-review` CLI
 option must update its declarative schema in the same change, enforced by
-`crates/jpr-review/src/tui_schema/tests.rs` and
+`crates/jpr-review/src/tui_schema/tests/` and
 `tests/lua/palette_and_open_picker_spec.lua`. `crates/cli-tui` adds `crossterm`
 to the workspace strictly at the frontend layer, rendering to stderr inside an
 RAII raw-mode guard and gating on `cli_tui::is_interactive_terminal()` so
