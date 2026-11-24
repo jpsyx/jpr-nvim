@@ -26,6 +26,10 @@ M.defaults = {
     -- The diff view until the reviewer flips it with :Jpr toggle, which is
     -- then remembered: "unified" or "split".
     view = "unified",
+    -- Timeout in milliseconds for LSP workspace/willRenameFiles and willCreateFiles.
+    lsp_file_ops_timeout_ms = 30000,
+    -- Timeout in milliseconds to wait for an LSP client to attach on cold-start rename.
+    lsp_attach_timeout_ms = 3000,
     -- Buffer-local keybindings inside diff and stream buffers; set any entry to
     -- false to disable it while keeping its <Plug>(jpr-*) mapping available.
     keys = {
