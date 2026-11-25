@@ -1,0 +1,214 @@
+-- Compose specs: open_reply, open_edit, destination toggles, open_promote, and local-only lock.
+return function(ctx)
+    local compose = ctx.compose
+    local helpers = ctx.helpers
+    local log = ctx.log
+    local review = ctx.review
+    local line_anchor = ctx.line_anchor
+    local find_compose_win = ctx.find_compose_win
+
+    -- 5. open_reply uses [GitHub draft] Reply when draftCount > 0 else [GitHub reply] Reply, and <C-s> sends reply.
+    review.view.draftCount = 0
+    compose.open_reply(review, { threadId = "T1", anchor = line_anchor })
+    local reply_win_immediate = find_compose_win()
+    assert(helpers.win_title(reply_win_immediate):find("[GitHub reply] Reply", 1, true) ~= nil, helpers.win_title(reply_win_immediate))
+    compose.close(review)
+
+    review.view.draftCount = 2
+    compose.open_reply(review, { threadId = "T1", anchor = line_anchor })
+    local reply_win = find_compose_win()
+    assert(helpers.win_title(reply_win):find("[GitHub draft] Reply", 1, true) ~= nil, helpers.win_title(reply_win))
+    local replies_before = #helpers.read_requests(log, "reply")
+    vim.api.nvim_buf_set_lines(vim.api.nvim_win_get_buf(reply_win), 0, -1, false, { "Reply text" })
+    helpers.press_key("<C-s>")
+    assert(not vim.api.nvim_win_is_valid(reply_win), "<C-s> closes reply compose window")
+    assert(vim.wait(3000, function()
+        return #helpers.read_requests(log, "reply") == replies_before + 1
+    end), "reply RPC sent")
+    local sent_reply = helpers.read_requests(log, "reply")[replies_before + 1].params
+    assert(sent_reply.threadId == "T1" and sent_reply.body == "Reply text", vim.inspect(sent_reply))
+
+    -- 6. open_edit pre-populates recoverableBody or body and <C-s> sends editMessage.
+    compose.open_edit(review, { id = "M1", sync = "failed", body = "remote body", recoverableBody = "local recovered" })
+    local edit_win = find_compose_win()
+    assert(helpers.win_title(edit_win):find("[Edit GitHub comment]", 1, true) ~= nil, helpers.win_title(edit_win))
+    local edit_lines = vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(edit_win), 0, -1, false)
+    assert(table.concat(edit_lines, "\n") == "local recovered", vim.inspect(edit_lines))
+    local edits_before = #helpers.read_requests(log, "editMessage")
+    helpers.press_key("<C-s>")
+    assert(not vim.api.nvim_win_is_valid(edit_win), "<C-s> closes edit compose window")
+    assert(vim.wait(3000, function()
+        return #helpers.read_requests(log, "editMessage") == edits_before + 1
+    end), "editMessage RPC sent")
+    local sent_edit = helpers.read_requests(log, "editMessage")[edits_before + 1].params
+    assert(sent_edit.messageId == "M1" and sent_edit.body == "local recovered", vim.inspect(sent_edit))
+
+    compose.open_edit(review, { id = "M2", sync = "published", body = "original body" })
+    local plain_edit_win = find_compose_win()
+    assert(table.concat(vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(plain_edit_win), 0, -1, false), "\n") == "original body")
+    compose.close(review)
+
+    compose.open_edit(review, { id = "M2", sync = "published", body = "original body" }, { id = "T1", anchor = line_anchor })
+    local suggest_edit_win = find_compose_win()
+    local suggest_edit_buf = vim.api.nvim_win_get_buf(suggest_edit_win)
+    vim.api.nvim_win_set_cursor(suggest_edit_win, { 1, 13 })
+    local anchored_edit_before = #helpers.read_requests(log, "anchoredLines")
+    helpers.press_key("A<C-g>s<Esc>")
+    assert(vim.wait(3000, function()
+        return #helpers.read_requests(log, "anchoredLines") == anchored_edit_before + 1
+            and #vim.api.nvim_buf_get_lines(suggest_edit_buf, 0, -1, false) >= 4
+    end), "<C-g>s inside open_edit inserts suggestion fence")
+    local edited_with_fence = table.concat(vim.api.nvim_buf_get_lines(suggest_edit_buf, 0, -1, false), "\n")
+    assert(edited_with_fence == "original body\n```suggestion\nnew\n```", edited_with_fence)
+    compose.close(review)
+
+    -- 6b. Destination toggle (<C-g> / <M-s>), sticky session.compose_destination, and <C-g>s insert fence.
+    review.compose_destination = nil
+    compose.open_new(review, line_anchor, { suggest = false })
+    local toggle_win = find_compose_win()
+    assert(helpers.win_title(toggle_win):find("[GitHub draft] README.md:2", 1, true) ~= nil, helpers.win_title(toggle_win))
+    helpers.press_key("<C-g>")
+    assert(helpers.win_title(toggle_win):find("[Local → agent] README.md:2", 1, true) ~= nil, helpers.win_title(toggle_win))
+    assert(review.compose_destination == "local", "compose_destination persisted as local")
+    local local_comments_before = #helpers.read_requests(log, "comment")
+    vim.api.nvim_buf_set_lines(vim.api.nvim_win_get_buf(toggle_win), 0, -1, false, { "Ask agent to check" })
+    helpers.press_key("<C-s>")
+    assert(vim.wait(3000, function()
+        return #helpers.read_requests(log, "comment") == local_comments_before + 1
+    end), "local comment RPC sent")
+    assert(helpers.read_requests(log, "comment")[local_comments_before + 1].params.origin == "local")
+
+    compose.open_new(review, line_anchor, { suggest = false })
+    local sticky_win = helpers.find_floating_win("Local")
+    assert(sticky_win ~= nil and vim.api.nvim_win_is_valid(sticky_win), "re-opened compose starts on [Local -> agent]")
+    assert(helpers.win_title(sticky_win):find("[Local → agent] README.md:2", 1, true) ~= nil, helpers.win_title(sticky_win))
+    local sticky_buf = vim.api.nvim_win_get_buf(sticky_win)
+    vim.api.nvim_buf_set_lines(sticky_buf, 0, -1, false, { "Keep sticky" })
+    local anchored_sticky_before = #helpers.read_requests(log, "anchoredLines")
+    helpers.press_key("A<C-g>s<Esc>")
+    assert(vim.wait(3000, function()
+        return #helpers.read_requests(log, "anchoredLines") == anchored_sticky_before + 1
+            and #vim.api.nvim_buf_get_lines(sticky_buf, 0, -1, false) >= 4
+    end), "<C-g>s still inserts suggestion fence when destination toggle is enabled")
+    assert(review.compose_destination == "local", "<C-g>s does not flip compose_destination")
+    vim.api.nvim_buf_set_lines(sticky_buf, 0, -1, false, { "Send to alternate destination" })
+    helpers.press_key("<M-s>")
+    assert(vim.wait(3000, function()
+        return #helpers.read_requests(log, "comment") == local_comments_before + 2
+    end), "<M-s> sends comment to alternate destination")
+    assert(helpers.read_requests(log, "comment")[local_comments_before + 2].params.origin == "github")
+    assert(review.compose_destination == "local", "<M-s> keeps session.compose_destination unchanged")
+
+    compose.open_new(review, line_anchor, { suggest = false })
+    local insert_toggle_win = helpers.find_floating_win("Local")
+    assert(insert_toggle_win ~= nil, "sticky local compose opened for insert-mode toggle")
+    helpers.press_key("i<C-g><Esc>")
+    assert(helpers.win_title(insert_toggle_win):find("[GitHub draft] README.md:2", 1, true) ~= nil, helpers.win_title(insert_toggle_win))
+    assert(review.compose_destination == "github", "insert-mode <C-g> flips compose_destination back to github")
+    compose.close(review)
+
+    compose.open_new(review, { file = "README.md", kind = "file", side = "RIGHT" }, { initial_origin = "local" })
+    local local_file_win = helpers.find_floating_win("Local")
+    assert(helpers.win_title(local_file_win):find("[Local → agent] README.md", 1, true) ~= nil, helpers.win_title(local_file_win))
+    compose.close(review)
+
+    compose.open_new(review, { file = "README.md", kind = "range", side = "RIGHT", start = 1, ["end"] = 3 }, { initial_origin = "local" })
+    local local_range_win = helpers.find_floating_win("Local")
+    assert(helpers.win_title(local_range_win):find("[Local → agent] README.md:1-3", 1, true) ~= nil, helpers.win_title(local_range_win))
+    compose.close(review)
+    review.compose_destination = nil
+
+    -- 6c. open_promote pre-populates root body, sets [Promote -> GitHub] title, and sends promoteThread on <C-s>.
+    compose.open_promote(review, {
+        id = "loc-1",
+        origin = "local",
+        anchor = line_anchor,
+        messages = { { id = "loc-m-1", body = "Promote me" } },
+    })
+    local promote_win = helpers.find_floating_win("Promote")
+    assert(promote_win ~= nil and vim.api.nvim_win_is_valid(promote_win), "open_promote opens floating window")
+    assert(helpers.win_title(promote_win):find("[Promote → GitHub] README.md:2", 1, true) ~= nil, helpers.win_title(promote_win))
+    local promote_buf = vim.api.nvim_win_get_buf(promote_win)
+    assert(table.concat(vim.api.nvim_buf_get_lines(promote_buf, 0, -1, false), "\n") == "Promote me")
+    local promotes_before = #helpers.read_requests(log, "promoteThread")
+    helpers.press_key("<C-s>")
+    assert(not vim.api.nvim_win_is_valid(promote_win), "<C-s> closes promote compose window")
+    assert(vim.wait(3000, function()
+        return #helpers.read_requests(log, "promoteThread") == promotes_before + 1
+    end), "promoteThread RPC sent")
+    local sent_promote = helpers.read_requests(log, "promoteThread")[promotes_before + 1].params
+    assert(sent_promote.threadId == "loc-1" and sent_promote.body == "Promote me", vim.inspect(sent_promote))
+
+    compose.open_promote(review, {
+        id = "loc-empty",
+        origin = "local",
+        promotedTo = vim.NIL,
+        anchor = { kind = "pr", side = "RIGHT", file = vim.NIL, start = vim.NIL, ["end"] = vim.NIL },
+        messages = {},
+    })
+    local promote_pr_win = helpers.find_floating_win("Promote")
+    assert(helpers.win_title(promote_pr_win):find("[Promote → GitHub] PR Conversation", 1, true) ~= nil, helpers.win_title(promote_pr_win))
+    assert(table.concat(vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(promote_pr_win), 0, -1, false), "\n") == "")
+    compose.close(review)
+
+    ctx.captured.infos = {}
+    compose.open_promote(review, {
+        id = "loc-done",
+        origin = "local",
+        promotedTo = "PRRT_99",
+        anchor = line_anchor,
+        messages = { { id = "loc-m-done", body = "Already promoted" } },
+    })
+    assert(helpers.find_floating_win("Promote") == nil, "open_promote does not open window for already-promoted thread")
+    assert(#ctx.captured.infos == 1 and ctx.captured.infos[1]:find("already promoted", 1, true) ~= nil, vim.inspect(ctx.captured.infos))
+
+    -- 6d. open_reply / open_edit titles for local threads and messages.
+    review.view.draftCount = 2
+    compose.open_reply(review, { threadId = "loc-1", origin = "local", anchor = line_anchor })
+    local local_reply_win = helpers.find_floating_win("Local reply")
+    assert(local_reply_win ~= nil and helpers.win_title(local_reply_win):find("[Local reply] Reply", 1, true) ~= nil)
+    compose.close(review)
+
+    compose.open_edit(review, { id = "loc-m-1", body = "local edit" })
+    local local_edit_win = helpers.find_floating_win("Edit local comment")
+    assert(local_edit_win ~= nil and helpers.win_title(local_edit_win):find("[Edit local comment]", 1, true) ~= nil)
+    compose.close(review)
+
+    compose.open_edit(review, { id = "loc-m-2", sync = vim.NIL, body = "nil sync edit" })
+    local local_nil_edit_win = helpers.find_floating_win("Edit local comment")
+    assert(local_nil_edit_win ~= nil and helpers.win_title(local_nil_edit_win):find("[Edit local comment]", 1, true) ~= nil)
+    compose.close(review)
+
+    -- 6e. Local-only files lock compose to origin="local", disable <C-g>/<M-s> flip, and show footer hint.
+    local saved_files = review.view.files
+    review.view.files = {
+        { path = "README.md", additions = 2, deletions = 1, viewed = "UNVIEWED", threads = 1 },
+        { path = "unpushed.lua", additions = 3, deletions = 0, viewed = "UNVIEWED", threads = 0, isLocalOnly = true },
+    }
+    review.compose_destination = "github"
+    local local_only_anchor = { file = "unpushed.lua", kind = "line", side = "RIGHT", start = 1, ["end"] = 1 }
+    compose.open_new(review, local_only_anchor, { suggest = false })
+    local locked_win = helpers.find_floating_win("Local")
+    assert(locked_win ~= nil and vim.api.nvim_win_is_valid(locked_win), "local-only compose opens in local mode")
+    assert(helpers.win_title(locked_win):find("[Local → agent] unpushed.lua:1", 1, true) ~= nil, helpers.win_title(locked_win))
+    local locked_config = vim.api.nvim_win_get_config(locked_win)
+    local footer_text = type(locked_config.footer) == "string" and locked_config.footer
+        or table.concat(vim.tbl_map(function(chunk)
+            return type(chunk) == "table" and chunk[1] or tostring(chunk)
+        end, locked_config.footer or {}), "")
+    assert(footer_text:find("local only (unpushed file)", 1, true) ~= nil, "footer notes local only: " .. footer_text)
+    helpers.press_key("<C-g>")
+    assert(helpers.win_title(locked_win):find("[Local → agent] unpushed.lua:1", 1, true) ~= nil, "<C-g> cannot flip local-only compose")
+    local locked_before = #helpers.read_requests(log, "comment")
+    vim.api.nvim_buf_set_lines(vim.api.nvim_win_get_buf(locked_win), 0, -1, false, { "Local note on unpushed file" })
+    helpers.press_key("<M-s>")
+    assert(vim.api.nvim_win_is_valid(locked_win), "<M-s> does not submit to github for local-only file")
+    assert(#helpers.read_requests(log, "comment") == locked_before, "<M-s> sends no RPC for local-only file")
+    helpers.press_key("<C-s>")
+    assert(vim.wait(3000, function()
+        return #helpers.read_requests(log, "comment") == locked_before + 1
+    end), "<C-s> submits local comment on local-only file")
+    assert(helpers.read_requests(log, "comment")[locked_before + 1].params.origin == "local", "submitted origin is local")
+    review.view.files = saved_files
+    review.compose_destination = nil
+end

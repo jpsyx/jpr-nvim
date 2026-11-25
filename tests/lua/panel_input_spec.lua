@@ -259,5 +259,30 @@ assert(
     "notifies cleanly after directory creation: " .. vim.inspect(infos)
 )
 
+-- 10. Bottom-of-window flip anchors above hovered row using anchor = "SW" without occluding it.
+local readme_line = find_line_for_path("README.md")
+assert(readme_line ~= nil, "README.md row present in panel")
+local original_height = vim.api.nvim_win_get_height(panel_win)
+vim.api.nvim_win_set_height(panel_win, readme_line)
+press_panel_key("r", readme_line)
+local flip_win = find_panel_input_window()
+assert(flip_win ~= nil, "r opens float near bottom of panel")
+local flip_cfg = vim.api.nvim_win_get_config(flip_win)
+local flip_topline = vim.api.nvim_win_call(panel_win, function()
+    return vim.fn.line("w0")
+end)
+assert(flip_cfg.anchor == "SW", "bottom-of-window float flips to SW anchor: " .. tostring(flip_cfg.anchor))
+assert(flip_cfg.row == (readme_line - flip_topline), "SW float places bottom edge above hovered row: " .. tostring(flip_cfg.row))
+panel_input.close(true)
+vim.api.nvim_win_set_height(panel_win, original_height)
+
+-- 11. Read-only session blocks both r and a without opening the float.
+review.is_read_only = true
+press_panel_key("r", readme_line)
+assert(find_panel_input_window() == nil, "read-only session blocks r")
+press_panel_key("a", readme_line)
+assert(find_panel_input_window() == nil, "read-only session blocks a")
+review.is_read_only = false
+
 session.close_current()
 print("panel_input_spec: ok")

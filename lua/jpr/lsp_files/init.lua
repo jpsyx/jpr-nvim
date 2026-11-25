@@ -7,14 +7,6 @@ local M = {}
 local PROCEED_CHOICE = "Proceed with rename without full LSP import updates"
 local CANCEL_CHOICE = "Cancel rename"
 
-local function normalize_abs_path(path)
-    local normalized = vim.fs.normalize(vim.fn.fnamemodify(path, ":p"))
-    if #normalized > 1 then
-        normalized = normalized:gsub("/+$", "")
-    end
-    return normalized
-end
-
 local function invoke_done(on_done, is_ok, err_or_nil)
     if type(on_done) == "function" then
         on_done(is_ok, err_or_nil)
@@ -119,8 +111,8 @@ end
 function M.rename(old_abs_raw, new_abs_raw, opts, on_done)
     local options = opts or {}
     local jpr = require("jpr")
-    local old_abs = normalize_abs_path(old_abs_raw)
-    local new_abs = normalize_abs_path(new_abs_raw)
+    local old_abs = clients.normalize_path(old_abs_raw)
+    local new_abs = clients.normalize_path(new_abs_raw)
     local info, validate_err = validate_rename_paths(old_abs, new_abs)
     if not info then
         return invoke_done(on_done, false, validate_err)
@@ -166,7 +158,7 @@ end
 function M.create(target_abs_raw, is_directory, opts, on_done)
     local options = opts or {}
     local jpr = require("jpr")
-    local target_abs = normalize_abs_path(target_abs_raw)
+    local target_abs = clients.normalize_path(target_abs_raw)
     if vim.uv.fs_lstat(target_abs) ~= nil then
         return invoke_done(on_done, false, ("Destination already exists: %s"):format(target_abs))
     end

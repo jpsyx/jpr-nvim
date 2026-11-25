@@ -24,10 +24,12 @@ local function compute_anchor_geometry(panel_win)
     local win_height = vim.api.nvim_win_get_height(panel_win)
     local panel_width = vim.api.nvim_win_get_width(panel_win)
     local rel_row = cursor_line - topline
-    local anchor_row = (rel_row + 1 >= win_height) and math.max(0, rel_row - 1) or (rel_row + 1)
+    local should_flip_above = (rel_row + 4 > win_height) and rel_row > 0
+    local anchor = should_flip_above and "SW" or "NW"
+    local anchor_row = should_flip_above and rel_row or (rel_row + 1)
     local max_width = math.max(20, vim.o.columns - 4)
     local width = math.min(math.max(panel_width, 46), max_width)
-    return { row = anchor_row, col = 0, width = width }
+    return { anchor = anchor, row = anchor_row, col = 0, width = width }
 end
 
 local function create_virt_lines_from_input(raw_input, context, explicit_error)
@@ -64,6 +66,7 @@ local function paint_virt_lines(state, explicit_error)
         pcall(vim.api.nvim_win_set_config, state.win, {
             relative = "win",
             win = state.anchor_win,
+            anchor = state.geometry.anchor,
             row = state.geometry.row,
             col = state.geometry.col,
             width = state.geometry.width,
@@ -180,6 +183,7 @@ local function open_input_window(panel_win, buf, context, geometry, initial_text
     local win_config = {
         relative = "win",
         win = panel_win,
+        anchor = geometry.anchor,
         row = geometry.row,
         col = geometry.col,
         width = geometry.width,

@@ -1,10 +1,29 @@
 //! Tests for local worktree file merging, viewed lifecycle, origin-split comments, and rename migration.
 
-use review_model::{Anchor, Event, Origin, PrepassFinding, StreamRow, ViewMode, ViewedState};
+use review_model::{
+    Anchor, Event, FileRow, Origin, PrepassFinding, SessionView, StreamRow, ViewMode, ViewedState,
+};
 
 use super::super::PathRename;
 use super::super::test_support::{Fakes, create_snapshot};
 use crate::fakes::changed_file;
+
+fn find_file_row<'a>(view: &'a SessionView, path: &str) -> &'a FileRow {
+    view.files
+        .iter()
+        .find(|row| row.path == path)
+        .unwrap_or_else(|| panic!("{path} should appear in view.files"))
+}
+
+fn assert_local_only_github_error<T: std::fmt::Debug>(result: anyhow::Result<T>) {
+    let error = result.unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("Push this file to GitHub before adding GitHub comments"),
+        "{error}"
+    );
+}
 
 #[test]
 fn local_worktree_files_merge_into_view_and_diffs() {
@@ -20,11 +39,7 @@ fn local_worktree_files_merge_into_view_and_diffs() {
         .put_disk("src/new.rs", "fn fresh() {}\nlet x = 1;\n");
     let view = session.refresh_worktree(&[]).unwrap();
 
-    let local_row = view
-        .files
-        .iter()
-        .find(|row| row.path == "src/new.rs")
-        .expect("src/new.rs should appear in view.files");
+    let local_row = find_file_row(&view, "src/new.rs");
     assert!(local_row.is_local_only);
     assert_eq!(local_row.additions, 2);
     assert_eq!(local_row.deletions, 0);
@@ -44,24 +59,19 @@ fn local_worktree_files_merge_into_view_and_diffs() {
 }
 
 #[test]
-fn local_only_viewed_never_calls_forge_and_dismisses_on_disk_edit_and_promotes_on_sync() {
+fn local_only_viewed_skips_forge_and_dismisses_on_disk_edit() {
     let fakes = Fakes::new(100);
     fakes.workspace.put_base("src/a.rs", "one\n");
     fakes.workspace.put_disk("src/a.rs", "one\n");
-    fakes.workspace.put_base("src/b.rs", "b\n");
-    fakes.workspace.put_disk("src/b.rs", "b\n");
-    let mut session = fakes.open_synced();
-
     fakes.workspace.put_disk("src/new.rs", "fn v1() {}\n");
+    let mut session = fakes.open_synced();
     session.refresh_worktree(&[]).unwrap();
 
     let viewed_view = session.set_viewed("src/new.rs", true).unwrap();
-    let row = viewed_view
-        .files
-        .iter()
-        .find(|row| row.path == "src/new.rs")
-        .unwrap();
-    assert_eq!(row.viewed, ViewedState::Viewed);
+    assert_eq!(
+        find_file_row(&viewed_view, "src/new.rs").viewed,
+        ViewedState::Viewed
+    );
     assert_eq!(fakes.forge.viewed_calls(), Vec::<(String, bool)>::new());
     assert_eq!(
         fakes.store.saved().local.local_viewed.get("src/new.rs"),
@@ -79,16 +89,18 @@ fn local_only_viewed_never_calls_forge_and_dismisses_on_disk_edit_and_promotes_o
         fakes.store.saved().local.local_viewed.get("src/new.rs"),
         Some(&ViewedState::Dismissed)
     );
-    let dismissed_view = session.view();
     assert_eq!(
-        dismissed_view
-            .files
-            .iter()
-            .find(|row| row.path == "src/new.rs")
-            .unwrap()
-            .viewed,
+        find_file_row(&session.view(), "src/new.rs").viewed,
         ViewedState::Dismissed
     );
+}
+
+#[test]
+fn local_only_viewed_promotes_to_forge_when_file_appears_in_pr() {
+    let fakes = Fakes::new(100);
+    fakes.workspace.put_disk("src/new.rs", "fn v1() {}\n");
+    let mut session = fakes.open_synced();
+    session.refresh_worktree(&[]).unwrap();
 
     session.set_viewed("src/new.rs", true).unwrap();
     assert_eq!(fakes.forge.viewed_calls(), Vec::<(String, bool)>::new());
@@ -112,17 +124,13 @@ fn local_only_viewed_never_calls_forge_and_dismisses_on_disk_edit_and_promotes_o
             .local_viewed
             .contains_key("src/new.rs")
     );
-    let promoted_row = synced_view
-        .files
-        .iter()
-        .find(|row| row.path == "src/new.rs")
-        .unwrap();
+    let promoted_row = find_file_row(&synced_view, "src/new.rs");
     assert!(!promoted_row.is_local_only);
     assert_eq!(promoted_row.viewed, ViewedState::Viewed);
 }
 
 #[test]
-fn origin_split_comment_validation() {
+fn origin_split_allows_local_and_rejects_github_comments_on_local_only_files() {
     let fakes = Fakes::new(100);
     fakes.workspace.put_disk("src/new.rs", "let x = 1;\n");
     let mut session = fakes.open_synced();
@@ -142,35 +150,26 @@ fn origin_split_comment_validation() {
         .unwrap();
     assert_eq!(prepass_threads.len(), 1);
 
-    let github_error = session
-        .comment_with_origin(Anchor::line("src/new.rs", 1), "gh note", Origin::Github)
-        .unwrap_err();
-    assert!(
-        github_error
-            .to_string()
-            .contains("Push this file to GitHub before adding GitHub comments"),
-        "{github_error}"
-    );
+    assert_local_only_github_error(session.comment_with_origin(
+        Anchor::line("src/new.rs", 1),
+        "gh note",
+        Origin::Github,
+    ));
+    assert_local_only_github_error(session.promote_thread(&local_thread.id, "promoting"));
+    assert_local_only_github_error(session.suggest_from_edit(
+        "src/new.rs",
+        "let x = 2;\n",
+        1,
+        None,
+    ));
+}
 
-    let promote_error = session
-        .promote_thread(&local_thread.id, "promoting")
-        .unwrap_err();
-    assert!(
-        promote_error
-            .to_string()
-            .contains("Push this file to GitHub before adding GitHub comments"),
-        "{promote_error}"
-    );
-
-    let suggest_error = session
-        .suggest_from_edit("src/new.rs", "let x = 2;\n", 1, None)
-        .unwrap_err();
-    assert!(
-        suggest_error
-            .to_string()
-            .contains("Push this file to GitHub before adding GitHub comments"),
-        "{suggest_error}"
-    );
+fn add_local_note(session: &mut super::super::ReviewSession, path: &str, body: &str) -> String {
+    session
+        .comment_with_origin(Anchor::line(path, 1), body, Origin::Local)
+        .unwrap()
+        .0
+        .id
 }
 
 #[test]
@@ -185,30 +184,20 @@ fn refresh_worktree_migrates_local_threads_and_local_viewed_with_prefix_boundary
 
     session.set_viewed("src/api/u.rs", true).unwrap();
     session.set_viewed("src/api-extra/x.rs", true).unwrap();
-    let (thread_u, _) = session
-        .comment_with_origin(Anchor::line("src/api/u.rs", 1), "note u", Origin::Local)
-        .unwrap();
-    let (thread_x, _) = session
-        .comment_with_origin(
-            Anchor::line("src/api-extra/x.rs", 1),
-            "note x",
-            Origin::Local,
-        )
-        .unwrap();
+    let api_thread_id = add_local_note(&mut session, "src/api/u.rs", "note u");
+    let extra_thread_id = add_local_note(&mut session, "src/api-extra/x.rs", "note x");
 
     fakes.workspace.remove_disk("src/api/u.rs");
     fakes.workspace.put_disk("src/v2/api/u.rs", "fn u() {}\n");
-
-    let view = session
-        .refresh_worktree(&[PathRename {
-            old_path: "src/api".into(),
-            new_path: "src/v2/api".into(),
-        }])
-        .unwrap();
+    let rename = PathRename {
+        old_path: "src/api".into(),
+        new_path: "src/v2/api".into(),
+    };
+    let view = session.refresh_worktree(&[rename]).unwrap();
 
     let threads = session.threads();
-    let migrated = threads.iter().find(|t| t.id == thread_u.id).unwrap();
-    let untouched = threads.iter().find(|t| t.id == thread_x.id).unwrap();
+    let migrated = threads.iter().find(|t| t.id == api_thread_id).unwrap();
+    let untouched = threads.iter().find(|t| t.id == extra_thread_id).unwrap();
     assert_eq!(migrated.anchor.file.as_deref(), Some("src/v2/api/u.rs"));
     assert_eq!(untouched.anchor.file.as_deref(), Some("src/api-extra/x.rs"));
 
@@ -223,11 +212,7 @@ fn refresh_worktree_migrates_local_threads_and_local_viewed_with_prefix_boundary
         Some(&ViewedState::Viewed)
     );
     assert_eq!(
-        view.files
-            .iter()
-            .find(|row| row.path == "src/v2/api/u.rs")
-            .unwrap()
-            .viewed,
+        find_file_row(&view, "src/v2/api/u.rs").viewed,
         ViewedState::Viewed
     );
 }
@@ -249,12 +234,7 @@ fn first_poll_worktree_files_announces_preexisting_local_only_files() {
     match event {
         Event::FilesChanged { paths, view } => {
             assert_eq!(paths, vec!["src/preexisting.rs".to_owned()]);
-            let row = view
-                .files
-                .iter()
-                .find(|file| file.path == "src/preexisting.rs")
-                .expect("preexisting local file should be in view");
-            assert!(row.is_local_only);
+            assert!(find_file_row(&view, "src/preexisting.rs").is_local_only);
         }
         other => panic!("expected FilesChanged, got {other:?}"),
     }
@@ -275,19 +255,14 @@ fn refresh_worktree_dismisses_in_place_edited_local_viewed_without_dismissing_re
     fakes.workspace.remove_disk("src/old.rs");
     fakes.workspace.put_disk("src/moved.rs", "let b = 2;\n");
 
-    let view = session
-        .refresh_worktree(&[PathRename {
-            old_path: "src/old.rs".into(),
-            new_path: "src/moved.rs".into(),
-        }])
-        .unwrap();
+    let rename = PathRename {
+        old_path: "src/old.rs".into(),
+        new_path: "src/moved.rs".into(),
+    };
+    let view = session.refresh_worktree(&[rename]).unwrap();
 
     assert_eq!(
-        view.files
-            .iter()
-            .find(|row| row.path == "src/edited.rs")
-            .unwrap()
-            .viewed,
+        find_file_row(&view, "src/edited.rs").viewed,
         ViewedState::Dismissed
     );
     assert_eq!(
@@ -295,11 +270,7 @@ fn refresh_worktree_dismisses_in_place_edited_local_viewed_without_dismissing_re
         Some(&ViewedState::Dismissed)
     );
     assert_eq!(
-        view.files
-            .iter()
-            .find(|row| row.path == "src/moved.rs")
-            .unwrap()
-            .viewed,
+        find_file_row(&view, "src/moved.rs").viewed,
         ViewedState::Viewed
     );
     assert_eq!(

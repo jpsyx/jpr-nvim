@@ -2,7 +2,8 @@
 -- workspace fileOperations requests for `jpr.lsp_files`.
 local M = {}
 
-local function normalize_path(path)
+--- Normalizes `path` to an absolute path without trailing slashes (except `/`).
+function M.normalize_path(path)
     local normalized = vim.fs.normalize(vim.fn.fnamemodify(path, ":p"))
     if #normalized > 1 then
         normalized = normalized:gsub("/+$", "")
@@ -10,14 +11,40 @@ local function normalize_path(path)
     return normalized
 end
 
+local function resolve_realpath_or_parent(path)
+    local direct = vim.uv.fs_realpath(path)
+    if direct then
+        return M.normalize_path(direct)
+    end
+    local current = path
+    local suffix_parts = {}
+    while true do
+        local parent = vim.fs.dirname(current)
+        if not parent or parent == current then
+            return nil
+        end
+        suffix_parts[#suffix_parts + 1] = vim.fs.basename(current)
+        local parent_real = vim.uv.fs_realpath(parent)
+        if parent_real then
+            local resolved = M.normalize_path(parent_real)
+            for idx = #suffix_parts, 1, -1 do
+                resolved = resolved .. "/" .. suffix_parts[idx]
+            end
+            return resolved
+        end
+        current = parent
+    end
+end
+
 local function is_path_under_root(path, root)
     if path == root or path:sub(1, #root + 1) == root .. "/" then
         return true
     end
-    local real_path = vim.uv.fs_realpath(path)
+    local real_path = resolve_realpath_or_parent(path)
     local real_root = vim.uv.fs_realpath(root)
     if real_path and real_root then
-        return real_path == real_root or real_path:sub(1, #real_root + 1) == real_root .. "/"
+        local norm_root = M.normalize_path(real_root)
+        return real_path == norm_root or real_path:sub(1, #norm_root + 1) == norm_root .. "/"
     end
     return false
 end
@@ -27,15 +54,15 @@ local function collect_client_roots(client)
     if type(client.workspace_folders) == "table" then
         for _, folder in ipairs(client.workspace_folders) do
             if type(folder) == "table" and type(folder.uri) == "string" then
-                roots[#roots + 1] = normalize_path(vim.uri_to_fname(folder.uri))
+                roots[#roots + 1] = M.normalize_path(vim.uri_to_fname(folder.uri))
             end
         end
     end
     local config_root = client.config and client.config.root_dir
     if type(config_root) == "string" and config_root ~= "" then
-        roots[#roots + 1] = normalize_path(config_root)
+        roots[#roots + 1] = M.normalize_path(config_root)
     elseif type(client.root_dir) == "string" and client.root_dir ~= "" then
-        roots[#roots + 1] = normalize_path(client.root_dir)
+        roots[#roots + 1] = M.normalize_path(client.root_dir)
     end
     return roots
 end
@@ -118,11 +145,11 @@ function M.find_matching_clients(op_name, paths, is_directory)
 end
 
 local function find_loaded_buffer_for_path(abs_path)
-    local target = normalize_path(abs_path)
+    local target = M.normalize_path(abs_path)
     for _, buf in ipairs(vim.api.nvim_list_bufs()) do
-        if vim.api.nvim_buf_is_valid(buf) and vim.bo[buf].buftype == "" then
+        if vim.api.nvim_buf_is_valid(buf) and vim.api.nvim_buf_is_loaded(buf) and vim.bo[buf].buftype == "" then
             local name = vim.api.nvim_buf_get_name(buf)
-            if name ~= "" and normalize_path(name) == target then
+            if name ~= "" and M.normalize_path(name) == target then
                 return buf
             end
         end

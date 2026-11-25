@@ -1,14 +1,8 @@
 -- Buffer snapshot, WorkspaceEdit application, autosave, and open-buffer path
 -- updates for `jpr.lsp_files`.
-local M = {}
+local clients = require("jpr.lsp_files.clients")
 
-local function normalize_path(path)
-    local normalized = vim.fs.normalize(vim.fn.fnamemodify(path, ":p"))
-    if #normalized > 1 then
-        normalized = normalized:gsub("/+$", "")
-    end
-    return normalized
-end
+local M = {}
 
 --- Captures modified state and changedtick for every currently valid file buffer
 --- before applying LSP `WorkspaceEdit`s.
@@ -75,6 +69,23 @@ local function compute_renamed_target(buf_norm, old_abs, old_real, new_abs, is_d
     return nil
 end
 
+local function clear_unloaded_target_buffer(target_path, exclude_buf)
+    local target_norm = clients.normalize_path(target_path)
+    for _, other_buf in ipairs(vim.api.nvim_list_bufs()) do
+        if
+            other_buf ~= exclude_buf
+            and vim.api.nvim_buf_is_valid(other_buf)
+            and not vim.api.nvim_buf_is_loaded(other_buf)
+            and not vim.bo[other_buf].modified
+        then
+            local other_name = vim.api.nvim_buf_get_name(other_buf)
+            if other_name ~= "" and clients.normalize_path(other_name) == target_norm then
+                pcall(vim.api.nvim_buf_delete, other_buf, { force = true })
+            end
+        end
+    end
+end
+
 --- Updates open Neovim buffer names after `old_abs` moves to `new_abs` (exact
 --- file match or strict directory prefix match with `/` boundary).
 function M.rename_open_buffers(old_abs, old_real, new_abs, is_directory)
@@ -82,12 +93,13 @@ function M.rename_open_buffers(old_abs, old_real, new_abs, is_directory)
         if vim.api.nvim_buf_is_valid(buf) and vim.bo[buf].buftype == "" then
             local buf_name = vim.api.nvim_buf_get_name(buf)
             if buf_name ~= "" then
-                local buf_norm = normalize_path(buf_name)
+                local buf_norm = clients.normalize_path(buf_name)
                 local target_path = compute_renamed_target(buf_norm, old_abs, old_real, new_abs, is_directory)
                 if target_path ~= nil then
                     local was_modified = vim.bo[buf].modified == true
-                    vim.api.nvim_buf_set_name(buf, target_path)
-                    if not was_modified and vim.api.nvim_buf_is_loaded(buf) then
+                    clear_unloaded_target_buffer(target_path, buf)
+                    local renamed_ok = pcall(vim.api.nvim_buf_set_name, buf, target_path)
+                    if renamed_ok and not was_modified and vim.api.nvim_buf_is_loaded(buf) then
                         vim.api.nvim_buf_call(buf, function()
                             pcall(vim.cmd, "silent edit!")
                         end)

@@ -214,6 +214,10 @@ fn non_object_and_numeric_edge_cases_are_rejected_as_invalid_params() {
             .code,
         RpcError::INVALID_PARAMS
     );
+}
+
+#[test]
+fn get_renames_from_params_parses_optional_array_and_rejects_invalid_shape() {
     assert_eq!(get_renames_from_params(&Value::Null).unwrap(), Vec::new());
     assert_eq!(get_renames_from_params(&json!({})).unwrap(), Vec::new());
     let renames = get_renames_from_params(&json!({

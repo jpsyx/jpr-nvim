@@ -10,8 +10,7 @@ use review_rpc::serve;
 
 use super::support::{build_request_with_params, forge, messages, options, request, response};
 
-#[test]
-fn serve_handles_refresh_worktree_and_reports_protocol_7() {
+fn create_renamed_local_session() -> Arc<Mutex<ReviewSession>> {
     let workspace = FakeWorkspace::default();
     workspace.put_base("src/a.rs", "fn a() {}\n");
     workspace.put_at("abc123", "src/a.rs", "fn a() { 1 }\n");
@@ -35,6 +34,12 @@ fn serve_handles_refresh_worktree_and_reports_protocol_7() {
         workspace.remove_disk("src/old.rs");
         workspace.put_disk("src/renamed.rs", "fn old() {}\n");
     }
+    shared
+}
+
+#[test]
+fn serve_handles_refresh_worktree_and_reports_protocol_7() {
+    let shared = create_renamed_local_session();
     let input = request(1, "initialize")
         + &build_request_with_params(
             2,

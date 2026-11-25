@@ -146,17 +146,17 @@ local function add_file_line(content, file, name, indent, depth, parent_dir)
 end
 
 local function count_descendant_files(tree, dir_index, dir_depth, files)
-    local count = 0
+    local file_count = 0
     for index = dir_index + 1, #tree do
         local descendant = tree[index]
         if descendant.depth <= dir_depth then
             break
         end
         if descendant.file ~= nil and files[descendant.file + 1] ~= nil then
-            count = count + 1
+            file_count = file_count + 1
         end
     end
-    return count
+    return file_count
 end
 
 local function add_directory_line(content, row, dir_path, parent_dir, is_collapsed, descendant_count)
