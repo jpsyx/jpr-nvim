@@ -56,4 +56,64 @@ local past_end = { added = { { line = 1, words = {} }, { line = 3, words = { { s
 local shortened = overlay.create_extmarks_from_diff(past_end, 2, { width = 0, tabstop = 8 })
 assert(vim.deep_equal(shortened, { { line = 0, col = 0, opts = { line_hl_group = "JprDiffAdd" } } }), vim.inspect(shortened))
 
+-- Optional fg_group and syntax_spans split chunks across both word-diff and
+-- syntax boundaries using { bg_group, fg_group } highlight arrays.
+local syntax_chunks = overlay.removed_line_to_chunks(
+    { text = "let x = 1;", words = { { start = 8, ["end"] = 9 } } },
+    {
+        width = 12,
+        tabstop = 4,
+        fg_group = "JprDiffDeleteFg_Normal",
+        syntax_spans = {
+            { col_start = 0, col_end = 3, hl_group = "JprDiffDeleteFg_Keyword" },
+        },
+    }
+)
+assert(vim.deep_equal(syntax_chunks, {
+    { "let", { "JprDiffDelete", "JprDiffDeleteFg_Keyword" } },
+    { " x = ", { "JprDiffDelete", "JprDiffDeleteFg_Normal" } },
+    { "1", { "JprDiffDeleteText", "JprDiffDeleteFg_Normal" } },
+    { ";", { "JprDiffDelete", "JprDiffDeleteFg_Normal" } },
+    { "  ", "JprDiffDelete" },
+}), vim.inspect(syntax_chunks))
+
+-- Overlapping syntax span and word-diff span keeps both word bg and syntax fg.
+local overlap_chunks = overlay.removed_line_to_chunks(
+    { text = "let x = 1;", words = { { start = 8, ["end"] = 9 } } },
+    {
+        width = 0,
+        tabstop = 4,
+        fg_group = "JprDiffDeleteFg_Normal",
+        syntax_spans = {
+            { col_start = 6, col_end = 10, hl_group = "JprDiffDeleteFg_Number" },
+        },
+    }
+)
+assert(vim.deep_equal(overlap_chunks, {
+    { "let x ", { "JprDiffDelete", "JprDiffDeleteFg_Normal" } },
+    { "= ", { "JprDiffDelete", "JprDiffDeleteFg_Number" } },
+    { "1", { "JprDiffDeleteText", "JprDiffDeleteFg_Number" } },
+    { ";", { "JprDiffDelete", "JprDiffDeleteFg_Number" } },
+}), vim.inspect(overlap_chunks))
+
+-- create_extmarks_from_diff forwards per-block syntax spans and removed_fg_group.
+local styled_marks = overlay.create_extmarks_from_diff(
+    { removed = { { above = 1, lines = { { text = "local x = 1", words = {} } } } } },
+    1,
+    {
+        width = 0,
+        tabstop = 4,
+        removed_fg_group = "JprDiffDeleteFg_Normal",
+        removed_syntax_by_block = {
+            [1] = {
+                [1] = { { col_start = 0, col_end = 5, hl_group = "JprDiffDeleteFg_Keyword" } },
+            },
+        },
+    }
+)
+assert(vim.deep_equal(styled_marks[1].opts.virt_lines[1], {
+    { "local", { "JprDiffDelete", "JprDiffDeleteFg_Keyword" } },
+    { " x = 1", { "JprDiffDelete", "JprDiffDeleteFg_Normal" } },
+}), vim.inspect(styled_marks[1].opts.virt_lines[1]))
+
 print("overlay_render_spec: ok")
