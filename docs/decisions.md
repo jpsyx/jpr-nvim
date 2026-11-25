@@ -805,3 +805,58 @@ over 5,000 stream rows) render cleanly without syntax highlighting, and
 **Revisit when.** Large multi-hundred-file streams need incremental chunked
 rendering before `stream` finishes, or a second frontend needs `streamProgress`
 exposed on a shared event bus rather than per-request callbacks.
+
+## Self-contained native LSP file operations and local-only worktree file merging
+
+**Decision.** Sidebar file creation, renaming, and moving combine two
+self-contained layers with zero third-party plugin dependencies:
+
+1. **Native Neovim LSP file operations (`lua/jpr/lsp_files/`).**
+   `lua/jpr/lsp_files/` (`init.lua`, `clients.lua`, `buffers.lua`) drives
+   `workspace/willRenameFiles`/`didRenameFiles` and
+   `workspace/willCreateFiles`/`didCreateFiles` directly through Neovim's
+   built-in `vim.lsp` API. Before renaming or creating, `clients.lua` checks
+   workspace roots and server `fileOperations` glob filters, cold-starts an
+   attached buffer for matching servers when none is attached yet, and waits
+   for all `will*` edits with a configurable timeout. Any LSP failure or
+   timeout pauses before mutating disk and prompts the user to either proceed
+   without full import updates or cancel atomically. Case-only renames on
+   case-insensitive filesystems such as APFS perform a two-step rename via a
+   unique temporary sibling path (rolling back on step-2 failure), and
+   `buffers.lua` snapshots dirty state before applying `WorkspaceEdit`s so
+   previously clean buffers autosave while pre-dirty buffers warn instead of
+   overwriting unsaved user work.
+2. **Effective worktree file merging and `refreshWorktree` (`PROTOCOL_VERSION = 7`).**
+   `crates/review-core/src/session/local_files.rs` merges GitHub's `saved.files`
+   with local worktree changes since `merge_base` (`isLocalOnly: true` on
+   `FileRow`), caching line counts by `(path, disk_digest)`. Comment validation
+   splits by origin: local threads (`origin = "local"`) are allowed on both PR
+   files and local-only files, whereas GitHub comments, `promoteThread`, and
+   `suggestFromEdit` refuse local-only files until pushed to GitHub. Viewed
+   state for local-only files persists in `local.json` (`localViewed`),
+   transitions to `DISMISSED` when edited on disk, prunes when removed, and
+   promotes into `queuedViewed` on sync once GitHub adopts the file. The
+   stdio-only `refreshWorktree` RPC (accepting optional `renames`) immediately
+   migrates local thread anchors and `localViewed` entries across file or
+   directory renames, refreshes digests and `worktreeStatus`, and emits
+   `threadsChanged` / `filesChanged` / `worktreeStatusChanged` without waiting
+   for the 2-second watcher tick.
+
+**Why.** Requiring an external file-explorer or LSP-file-operations plugin
+would break out-of-the-box sidebar renames for reviewers who do not install
+those plugins, and mutating disk after a partial or timed-out `willRenameFiles`
+response leaves broken imports behind. Merging local-only worktree files in
+`review-core` keeps the file list, diffs, viewed state, and comment rules
+frontend-neutral so any future TUI shares the same semantics, while
+`refreshWorktree` gives sidebar rename/create actions instant UI feedback and
+preserves local review threads across path moves.
+
+**Consequences.** Sidebar `r` and `a` update imports across attached LSP
+servers and immediately reflect new, renamed, or moved files with `[local]`
+badges in the panel and diffs. Local-only files stay clearly separated from
+GitHub-backed review actions until `:Jpr push` and sync promote them, and
+`PROTOCOL_VERSION` advances to `7`.
+
+**Revisit when.** Neovim ships a built-in high-level `vim.lsp.fs` file
+operations helper with cold-start attach and atomic error prompts, or when
+reviewers want sidebar delete (`d`) with `workspace/willDeleteFiles` support.

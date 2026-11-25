@@ -1,4 +1,4 @@
-# Engine protocol (version 6)
+# Engine protocol (version 7)
 
 `jpr-review serve` speaks JSON-RPC 2.0, one JSON message per line, UTF-8.
 Requests from the primary frontend arrive on stdin. Responses and notifications
@@ -27,9 +27,9 @@ spawns the interactive agent terminal, it exports that path as `JPR_SOCKET`.
 - Only an allowlisted set of methods is accepted over the socket: `snapshot`,
   `threads`, `agentReply`, and `prepassWrite`.
 - Any other method (including `shutdown`, `initialize`, `sync`, `push`,
-  `submitReview`, `promoteThread`, `confirmSend`, and
-  `prepareConflictResolution`) is refused over the socket with `-32600`
-  (`INVALID_REQUEST`).
+  `submitReview`, `promoteThread`, `confirmSend`,
+  `prepareConflictResolution`, and `refreshWorktree`) is refused over the
+  socket with `-32600` (`INVALID_REQUEST`).
 - After a socket request runs, any events it produced (such as
   `threadsChanged`) are flushed immediately to the stdio client before the
   socket reply is written.
@@ -45,7 +45,7 @@ with `:Lazy build jpr-nvim`.
 
 | Method | Params | Result |
 | --- | --- | --- |
-| `initialize` | `{ "protocolVersion": 6, "client": "..." }` (the server reads neither) | `{ "protocolVersion": 6, "version": "0.5.2" }` |
+| `initialize` | `{ "protocolVersion": 7, "client": "..." }` (the server reads neither) | `{ "protocolVersion": 7, "version": "0.6.0" }` |
 | `snapshot` | none | `SessionView` |
 | `sync` | none | `SessionView`; error `-32000` when GitHub fails, after a `syncFailed` event (announces `headMoved` before `synced` when `pr.headSha` changes) |
 | `push` | none | `PushResult`; pushes `HEAD` to `refs/heads/<headRef>` (stdio-only; refused over `JPR_SOCKET` with `-32600`); error `-32000` before the first sync, when local `HEAD` is behind or already at the remote head, when a cross-repository (`pr.isCrossRepository`) pull request lacks explicit fork tracking or targets the base repository, or when `git push` fails |
@@ -74,23 +74,29 @@ with `:Lazy build jpr-nvim`.
 | `prepareConflictResolution` | `{ "paths": string[], "agent"?: "claude" \| "codex" \| null }` (`agent` optional, defaults to `"claude"`) | `AgentDispatch` (`kind: "conflict"`, `threadIds: []`; stdio-only, refused over `JPR_SOCKET` with `-32600`); error `-32000` for empty or unsafe `paths` or before the first sync |
 | `prepassWrite` | `{ "findings": PrepassFinding[] }` | `{ "threads": Thread[], "view": SessionView }`, after a `threadsChanged` event when threads are created |
 | `updateLocalAnchors` | `{ "path": "src/a.rs", "updates": LocalAnchorUpdate[] }` | `SessionView`, after a `threadsChanged` event when any local anchor moves |
+| `refreshWorktree` | `{ "renames"?: [{ "oldPath": string, "newPath": string }] }` (optional) | `SessionView`, after migrating local thread anchors and `localViewed` entries for `renames`, refreshing local worktree files/digests/status, and emitting `threadsChanged`, `filesChanged`, or `worktreeStatusChanged` when applicable (stdio-only; refused over `JPR_SOCKET` with `-32600`) |
 | `shutdown` | none | `null`; the server stops reading and exits (refused over Unix socket) |
 
 The server also exits when stdin closes. Methods without params ignore them,
 so `null`, `{}` or a missing `params` all work. `push`,
-`prepareConflictResolution`, and `confirmSend` are stdio-only and rejected over
-the Unix domain socket (`JPR_SOCKET`) with `-32600`. `setViewed` succeeds even
-when GitHub refuses the mark: the mark stands, is counted in `queuedCount`, and
-is sent again by later retries and syncs.
+`prepareConflictResolution`, `confirmSend`, and `refreshWorktree` are
+stdio-only and rejected over the Unix domain socket (`JPR_SOCKET`) with
+`-32600`. `setViewed` succeeds even when GitHub refuses the mark: the mark
+stands, is counted in `queuedCount`, and is sent again by later retries and
+syncs. For local-only worktree files (`isLocalOnly: true`), `setViewed` updates
+`local.json` (`localViewed`) without calling GitHub.
 
 Comment mutations behave consistently offline and on errors:
 
 - `comment`, `reply`, `editMessage` return `-32000` if `body` is blank or (for
   GitHub threads) before the first sync. With `origin: "github"` (default),
   `comment` creates a draft thread in the pending review for
-  `line`/`range`/`file` anchors, and a published PR comment for `pr` anchors.
-  With `origin: "local"`, `comment`, `reply`, `editMessage`, `deleteMessage`,
-  `setResolved`, and `toggleReaction` update `local.json` only and never call
+  `line`/`range`/`file` anchors, and a published PR comment for `pr` anchors;
+  GitHub comments, `promoteThread`, and `suggestFromEdit` refuse local-only
+  worktree files (`isLocalOnly: true`) with `-32000` until those files are
+  pushed to GitHub. With `origin: "local"`, `comment`, `reply`, `editMessage`,
+  `deleteMessage`, `setResolved`, and `toggleReaction` accept both PR files and
+  local-only worktree files, updating `local.json` only and never calling
   GitHub (`retryMessage` refuses local messages with `-32000`).
 - `reply` on a GitHub thread posts immediately via REST when no pending review
   is active, or adds a draft reply when one is active.
@@ -172,7 +178,7 @@ event is written before the `shutdown` response.
           "url": "https://github.com/octo/widgets/pull/7", "nodeId": "PR_7", "author": "alice",
           "headRef": "fix/widget", "headSha": "abc123", "baseRef": "main", "baseSha": "base000",
           "isCrossRepository": false },
-  "files": [ { "path": "src/a.rs", "additions": 12, "deletions": 3, "viewed": "VIEWED", "threads": 2, "isModified": false, "localThreads": 1 } ],
+  "files": [ { "path": "src/a.rs", "additions": 12, "deletions": 3, "viewed": "VIEWED", "threads": 2, "isModified": false, "localThreads": 1, "isLocalOnly": false } ],
   "tree": [ { "depth": 0, "name": "src", "file": null }, { "depth": 1, "name": "a.rs", "file": 0 } ],
   "viewedCount": 1,
   "threadCount": 2,
@@ -188,11 +194,13 @@ event is written before the `shutdown` response.
 - `pr` is `null` until the first successful sync; `pr.isCrossRepository` is
   `true` when the pull request's head branch lives in a fork repository.
 - Each `FileRow` in `files` carries `viewed` (`VIEWED`, `UNVIEWED`, or
-  `DISMISSED` when viewed and later changed on GitHub), `threads` (all GitHub
-  and local threads anchored to `path`), `isModified` (`true` when `path` has
-  uncommitted local changes in `worktreeStatus.modifiedPaths`), and
-  `localThreads` (open or resolved `origin: "local"` threads anchored to
-  `path`).
+  `DISMISSED` when viewed and later changed on GitHub or edited on disk for a
+  local-only file), `threads` (all GitHub and local threads anchored to
+  `path`), `isModified` (`true` when `path` has uncommitted local changes in
+  `worktreeStatus.modifiedPaths`), `localThreads` (open or resolved
+  `origin: "local"` threads anchored to `path`), and `isLocalOnly` (`boolean`,
+  `#[serde(default)]`; `true` when `path` exists only in the local worktree and
+  has not been pushed to the pull request yet).
 - `tree` is `files` drawn as a tree, in drawing order: directories first, then
   files, each sorted by name. A directory holding only one directory is joined
   to it (`"name": "docs/x"`). A file row's `file` is its index in `files`; a
@@ -500,7 +508,7 @@ checked-out head; the current side is the file on disk:
 | -32700 | The line is not JSON (the response `id` is `null`) |
 | -32600 | Not a request: no string `method`, no `id` (the response `id` is `null` when there was none), or a method disallowed on the Unix socket |
 | -32601 | Unknown method |
-| -32602 | Invalid params: a missing or mistyped param (`path`, `paths`, `viewed`, `mode`, `anchor`, `origin`, `agent`, `kind`, `round`, `threadIds`, `findings`, `updates`, `content`, `event`, `cursorLine`, etc.) |
+| -32602 | Invalid params: a missing or mistyped param (`path`, `paths`, `viewed`, `mode`, `anchor`, `origin`, `agent`, `kind`, `round`, `threadIds`, `findings`, `updates`, `renames`, `content`, `event`, `cursorLine`, etc.) |
 | -32000 | The engine could not do it; `message` says why |
 
 ## Versioning
@@ -536,3 +544,6 @@ result or an event changes shape, and update this document in the same commit.
 - **Version 6** added the `streamProgress` JSON-RPC notification
   (`{ "completed", "total", "path" }`) emitted per file while a `stream`
   request executes, before the `stream` response arrives.
+- **Version 7** added `refreshWorktree` (optional `renames` array of
+  `{ "oldPath", "newPath" }`, returning `SessionView`) and `isLocalOnly`
+  (`boolean`, `#[serde(default)]`) on `FileRow`.

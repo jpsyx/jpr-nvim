@@ -84,16 +84,42 @@ binary manually.
 | `:Jpr prepass` | Dispatch a pre-pass review prompt asking the agent to write local findings via `jpr-review prepass-write` |
 | `:Jpr close` | Stop the engine and close the tab |
 
-In the panel, `<CR>` or `o` opens the PR conversation view on the
-`Conversation` row or opens the file under the cursor from the worktree, `v`
-toggles it viewed, and `?` opens the keyboard shortcuts cheatsheet. The top of
-the panel shows a reviewed-files progress bar (`█`/`░` with `X/Y (Z%)`) above
-`Conversation`, and prefixes review counts with `dirty · ↑N ↓M` when the
-worktree has uncommitted changes, `↑N ↓M` when ahead or behind the pull
-request's remote head, or `[read-only]` after engine recovery fallback. Changed
-file rows show `✎` (`JprModified`, linked to `Special`) before locally modified
-files and suffix thread counts as `[G]` (GitHub), `[NL]` (local, e.g. `[2L]`),
-or `[G · NL]` (both, e.g. `[2 · 1L]`).
+The left sidebar panel acts as a vertical-only collapsible menu:
+
+| Key | What it does |
+| --- | --- |
+| `j` / `k` | Move selection down / up across selectable rows |
+| `h` / `<Left>` | Collapse directory or jump to its parent directory |
+| `l` / `<Right>` | Expand directory or open the file / `Conversation` row |
+| `<CR>` / `o` | Open the PR conversation view or file from the worktree (`<CR>` also toggles directories) |
+| `r` | Rename or move the file or directory under the cursor (inline input + automatic LSP import updates) |
+| `a` | Create a new file or directory (inline input; trailing `/` creates a directory + LSP `willCreateFiles`/`didCreateFiles`) |
+| `v` | Toggle viewed for the file under the cursor |
+| `?` | Show the keyboard shortcuts cheatsheet |
+
+Inline rename (`r`) and create (`a`) follow three path rules with live
+destination hints: a plain name without `/` targets a sibling (or child of a
+selected directory), a path containing `/` resolves relative to the project
+root, and a `./` or `../` prefix resolves relative to the current directory.
+Renames and creations run native Neovim LSP `workspace/willRenameFiles` /
+`didRenameFiles` and `workspace/willCreateFiles` / `didCreateFiles` directly
+with zero third-party plugin dependencies, updating imports and open buffers
+automatically.
+
+Newly created, renamed, or locally modified files that have not been pushed to
+GitHub yet appear immediately in the sidebar with a `[local]` badge. You can
+open their diffs, toggle local viewed state, and attach local agent threads
+right away; GitHub comments and suggestions unlock once those files are pushed
+via `:Jpr push`.
+
+The top of the panel shows a reviewed-files progress bar (`█`/`░` with
+`X/Y (Z%)`) above `Conversation`, and prefixes review counts with
+`dirty · ↑N ↓M` when the worktree has uncommitted changes, `↑N ↓M` when ahead
+or behind the pull request's remote head, or `[read-only]` after engine
+recovery fallback. Changed file rows show `✎` (`JprModified`, linked to
+`Special`) before locally modified files, `[local]` on local-only worktree
+files, and suffix thread counts as `[G]` (GitHub), `[NL]` (local, e.g.
+`[2L]`), or `[G · NL]` (both, e.g. `[2 · 1L]`).
 
 In the stream:
 
