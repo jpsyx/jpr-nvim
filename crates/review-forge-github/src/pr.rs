@@ -64,6 +64,36 @@ pub fn parse_pr(stdout: &str) -> Result<PullRequest> {
     })
 }
 
+/// Parses `gh pr view --json PR_FIELDS`, returning `Ok(None)` when the pull
+/// request exists on GitHub but is not open (`MERGED` or `CLOSED`).
+pub fn parse_optional_open_pr(stdout: &str) -> Result<Option<PullRequest>> {
+    let value: Value = serde_json::from_str(stdout).context("reading gh pr view output")?;
+    match value["state"].as_str() {
+        Some("OPEN") => parse_pr(stdout).map(Some),
+        Some(_) => Ok(None),
+        None => bail!("gh pr view did not report the state"),
+    }
+}
+
+/// Whether `gh pr view` stderr indicates the current branch has no GitHub pull
+/// request (or the repository has no GitHub remote), rather than a network or
+/// authentication failure.
+#[must_use]
+pub fn is_no_pr_for_branch_stderr(stderr: &str) -> bool {
+    let lower = stderr.to_ascii_lowercase();
+    [
+        "no pull requests found for branch",
+        "could not find pull request",
+        "no pull request found",
+        "not on any branch",
+        "could not determine current branch",
+        "none of the git remotes configured for this repository point to a known github host",
+        "no git remotes found",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
+}
+
 /// Parses `gh pr list --json PR_LIST_FIELDS` into compact pull request summaries.
 pub fn parse_pr_list(stdout: &str) -> Result<Vec<PullRequestSummary>> {
     let items: Vec<Value> = serde_json::from_str(stdout).context("reading gh pr list output")?;
@@ -164,6 +194,48 @@ mod tests {
     fn rejects_a_merged_pull_request() {
         let error = parse_pr(&OPEN.replace("OPEN", "MERGED")).unwrap_err();
         assert_eq!(error.to_string(), "pull request #7 is not open (merged)");
+    }
+
+    #[test]
+    fn parse_optional_open_pr_returns_some_for_open_and_none_for_merged_or_closed() {
+        assert_eq!(parse_optional_open_pr(OPEN).unwrap().unwrap().number, 7);
+        assert!(
+            parse_optional_open_pr(&OPEN.replace("OPEN", "MERGED"))
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            parse_optional_open_pr(&OPEN.replace("OPEN", "CLOSED"))
+                .unwrap()
+                .is_none()
+        );
+        assert!(parse_optional_open_pr("not json").is_err());
+    }
+
+    #[test]
+    fn is_no_pr_for_branch_stderr_classifies_absent_pr_vs_network_or_auth_errors() {
+        for expected_absent in [
+            "no pull requests found for branch \"feat/local\"",
+            "could not find pull request for branch",
+            "none of the git remotes configured for this repository point to a known GitHub host",
+            "no git remotes found",
+            "not on any branch",
+        ] {
+            assert!(
+                is_no_pr_for_branch_stderr(expected_absent),
+                "expected absent-PR match for {expected_absent:?}"
+            );
+        }
+        for expected_error in [
+            "gh timed out after 30s",
+            "To get started with GitHub CLI, please run:  gh auth login",
+            "error connecting to api.github.com",
+        ] {
+            assert!(
+                !is_no_pr_for_branch_stderr(expected_error),
+                "must not treat {expected_error:?} as absent PR"
+            );
+        }
     }
 
     #[test]

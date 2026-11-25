@@ -7,6 +7,7 @@ mod mutations;
 pub mod pr;
 
 use std::path::PathBuf;
+use std::sync::{Arc, RwLock};
 
 use anyhow::{Context, Result, bail};
 use review_core::ports::{
@@ -26,18 +27,22 @@ pub use gh::{GH_TIMEOUT, Gh};
 #[derive(Debug, Clone)]
 pub struct GhForge {
     gh: Gh,
-    repo: Option<String>,
+    repo: Arc<RwLock<Option<String>>>,
 }
 
 impl GhForge {
     /// Runs `gh` in `dir`. `repo` (`owner/name`) pins the repository
     /// `gh pr view` looks in; without it `gh` infers it from `dir`'s remotes.
     #[must_use]
-    pub const fn new(dir: PathBuf, repo: Option<String>) -> Self {
+    pub fn new(dir: PathBuf, repo: Option<String>) -> Self {
         Self {
             gh: Gh::new(dir),
-            repo,
+            repo: Arc::new(RwLock::new(repo)),
         }
+    }
+
+    fn pinned_repo(&self) -> Option<String> {
+        self.repo.read().ok().and_then(|guard| guard.clone())
     }
 
     /// The `gh pr view` arguments for pull request `number`.
@@ -50,9 +55,25 @@ impl GhForge {
             "--json".to_owned(),
             pr::PR_FIELDS.to_owned(),
         ];
-        if let Some(repo) = &self.repo {
+        if let Some(repo) = self.pinned_repo() {
             args.push("--repo".to_owned());
-            args.push(repo.clone());
+            args.push(repo);
+        }
+        args
+    }
+
+    /// The `gh pr view` arguments for probing the current branch's open PR.
+    #[must_use]
+    pub fn current_branch_view_args(&self) -> Vec<String> {
+        let mut args = vec![
+            "pr".to_owned(),
+            "view".to_owned(),
+            "--json".to_owned(),
+            pr::PR_FIELDS.to_owned(),
+        ];
+        if let Some(repo) = self.pinned_repo() {
+            args.push("--repo".to_owned());
+            args.push(repo);
         }
         args
     }
@@ -70,9 +91,9 @@ impl GhForge {
             "--json".to_owned(),
             pr::PR_LIST_FIELDS.to_owned(),
         ];
-        if let Some(repo) = &self.repo {
+        if let Some(repo) = self.pinned_repo() {
             args.push("--repo".to_owned());
-            args.push(repo.clone());
+            args.push(repo);
         }
         args
     }
@@ -124,7 +145,19 @@ impl Forge for GhForge {
     }
 
     fn current_branch_pr(&self) -> Result<Option<PullRequest>> {
-        bail!("current_branch_pr not yet wired")
+        let args = self.current_branch_view_args();
+        let arg_refs: Vec<&str> = args.iter().map(String::as_str).collect();
+        match self.gh.run(&arg_refs, None) {
+            Ok(stdout) => pr::parse_optional_open_pr(&stdout),
+            Err(error) if pr::is_no_pr_for_branch_stderr(&format!("{error:#}")) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
+    fn pin_repo(&self, owner: &str, repo: &str) {
+        if let Ok(mut guard) = self.repo.write() {
+            *guard = Some(format!("{owner}/{repo}"));
+        }
     }
 
     fn fetch(&self, pr: &PullRequest) -> Result<ForgeSnapshot> {
@@ -257,6 +290,34 @@ mod tests {
         assert_eq!(
             local.view_args(7),
             ["pr", "view", "7", "--json", pr::PR_FIELDS]
+        );
+        assert_eq!(
+            local.current_branch_view_args(),
+            ["pr", "view", "--json", pr::PR_FIELDS]
+        );
+        local.pin_repo("upstream-org", "widgets");
+        assert_eq!(
+            local.view_args(7),
+            [
+                "pr",
+                "view",
+                "7",
+                "--json",
+                pr::PR_FIELDS,
+                "--repo",
+                "upstream-org/widgets"
+            ]
+        );
+        assert_eq!(
+            local.current_branch_view_args(),
+            [
+                "pr",
+                "view",
+                "--json",
+                pr::PR_FIELDS,
+                "--repo",
+                "upstream-org/widgets"
+            ]
         );
     }
 
