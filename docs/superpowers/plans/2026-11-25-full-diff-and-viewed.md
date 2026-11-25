@@ -45,7 +45,7 @@
 
 ### Task 1: Batched Multi-Path Viewed Rules & Session API (`review-core`)
 
-help-me-pick: implement L2 (hours=1.5 cause=known material=familiar stakes=medium verified=yes)
+help-me-pick: implement L2 (hours=1.5 cause=known material=familiar stakes=high verified=yes)
 
 High-risk: yes
 
@@ -103,7 +103,7 @@ git commit -m "feat(core): add batched multi-path viewed updates and directory h
 
 ### Task 2: Parameterized Aliased GraphQL Batching (`review-forge-github`)
 
-help-me-pick: implement L1 (hours=0.75 cause=known material=familiar stakes=low verified=yes)
+help-me-pick: implement L1 (hours=0.75 cause=known material=familiar stakes=none verified=yes)
 
 High-risk: no
 
@@ -154,7 +154,7 @@ git commit -m "feat(forge-github): batch viewed mutations with parameterized Gra
 
 ### Task 3: Protocol v10 Multi-Path `setViewed` RPC & Lockstep Updates (`review-rpc`, `lua/jpr/rpc.lua`, `fake_engine.sh`)
 
-help-me-pick: implement L2 (hours=1 cause=known material=familiar stakes=medium verified=yes)
+help-me-pick: implement L2 (hours=1 cause=known material=familiar stakes=high verified=yes)
 
 High-risk: yes
 
@@ -211,7 +211,7 @@ git commit -m "feat(rpc): bump protocol to v10 and support multi-path setViewed"
 
 ### Task 4: Single-Line Collapsed Viewed Files & Navigation in Full Branch Diff (`lua/jpr/render/stream.lua`, `lua/jpr/views/stream/`)
 
-help-me-pick: implement L2 (hours=1.25 cause=known material=familiar stakes=low verified=yes)
+help-me-pick: implement L2 (hours=1.25 cause=known material=familiar stakes=none verified=yes)
 
 High-risk: no
 
@@ -278,7 +278,7 @@ git commit -m "feat(stream): collapse viewed files to a single header line with 
 
 ### Task 5: Recursive Directory `'v'`, Live Full-Diff Collapse/Expand, and Main-Window Advancement (`lua/jpr/render/panel.lua`, `lua/jpr/views/panel.lua`)
 
-help-me-pick: implement L2 (hours=1.25 cause=known material=familiar stakes=low verified=yes)
+help-me-pick: implement L2 (hours=1.25 cause=known material=familiar stakes=none verified=yes)
 
 High-risk: no
 
@@ -355,7 +355,7 @@ git commit -m "feat(panel): support recursive directory viewed toggling and next
 
 ### Task 6: Conditional `"Full Branch Diff"` Palette Command, `:Jpr full` Alias, and `gF` / `gv` Shortcuts
 
-help-me-pick: implement L2 (hours=1.5 cause=known material=familiar stakes=low verified=yes)
+help-me-pick: implement L2 (hours=1.5 cause=known material=familiar stakes=none verified=yes)
 
 High-risk: no
 
@@ -489,7 +489,7 @@ git commit -m "docs: document full diff navigation, single-line folds, and direc
 
 ## Final Review
 
-help-me-pick: bug-hunting-and-code-review L3 (use=final cause=unknown material=familiar stakes=medium verified=yes)
+help-me-pick: bug-hunting-and-code-review L3 (use=final cause=unknown material=familiar stakes=high verified=yes)
 
 After Task 7 passes `just check`, run the repository's mandatory completion sequence on `feat/full-diff-and-viewed`:
 1. Run `/avandar-code-review`, fix any findings, re-verify with `just check`, and commit.
