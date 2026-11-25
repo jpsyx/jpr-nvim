@@ -222,10 +222,23 @@ local function build_tui_context(session, cmd_opts)
     }
 end
 
+local function open_pr_picker_for_context(context)
+    local open_spec = require("jpr.commands.schema").find_command_spec("open")
+    return require("jpr.tui.wizard").open_command(open_spec, { source = "list" }, context, { start_step_id = "pr" })
+end
+
 local function dispatch_open_subcommand(session, argument, context)
     if argument == nil or argument == "" then
-        local open_spec = require("jpr.commands.schema").find_command_spec("open")
-        return require("jpr.tui.wizard").open_command(open_spec, { source = "list" }, context, { start_step_id = "pr" })
+        if not context.has_session and not require("jpr.repo_picker").is_git_repo(vim.fn.getcwd()) then
+            return require("jpr.repo_picker").pick(function(selected_repo)
+                local repo_context = vim.tbl_extend("force", context, {
+                    is_git_repo = false,
+                    repo = selected_repo,
+                })
+                open_pr_picker_for_context(repo_context)
+            end)
+        end
+        return open_pr_picker_for_context(context)
     end
     local number, repo = M.parse_pr_arg(argument)
     if not number then
@@ -350,6 +363,26 @@ local function canonicalize_command_args(args)
     return canonical_args
 end
 
+local function open_palette_with_repo_picker(commands, context)
+    local repo_picker = require("jpr.repo_picker")
+    if context.has_session or repo_picker.is_git_repo(vim.fn.getcwd()) then
+        context.is_git_repo = true
+        return require("jpr.tui.wizard").open_palette(commands, context)
+    end
+    local function pick_and_open()
+        repo_picker.pick(function(selected_repo)
+            local scoped_context = vim.tbl_extend("force", context, {
+                is_git_repo = false,
+                repo = selected_repo,
+                title = (" Jpr Commands · %s "):format(selected_repo),
+                on_back = pick_and_open,
+            })
+            require("jpr.tui.wizard").open_palette(commands, scoped_context)
+        end)
+    end
+    return pick_and_open()
+end
+
 --- Dispatches `:Jpr [subcommand [arg]]` with optional command options `cmd_opts` (such as range), opening the interactive floating command palette when no subcommand is given.
 function M.command(fargs, cmd_opts)
     local args = canonicalize_command_args(fargs or {})
@@ -357,7 +390,7 @@ function M.command(fargs, cmd_opts)
     local context = build_tui_context(session, cmd_opts)
     if #args == 0 then
         local commands = require("jpr.commands.schema").create_command_specs()
-        return require("jpr.tui.wizard").open_palette(commands, context)
+        return open_palette_with_repo_picker(commands, context)
     end
     return dispatch_direct_subcommand(session, args, cmd_opts, context)
 end
