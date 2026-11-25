@@ -16,15 +16,15 @@ At the same time, marking work as viewed has three friction points:
   - Relabel `:Jpr stream` in the Command Palette to `"Full Branch Diff"` (`[stream]`), add `full = "stream"` to `COMMAND_ALIASES` (`:Jpr full`), and hide `stream` from the interactive Command Palette when the full branch diff view is already visible.
   - Add configurable `gF` (`keys.full_diff`, `<Plug>(jpr-full-diff)`) to return to and focus the full branch diff view from review buffers (changed text and binary files, split base buffers, unchanged worktree files visited in the review tab, PR conversation, sidebar panel, and stream).
   - Add configurable `gv` (`keys.toggle_viewed`, `<Plug>(jpr-toggle-viewed)`) in Normal mode:
-    - In single-file editor buffers (and split base buffers, including binary changed files): toggle the current file's viewed state in place while keeping focus in the open file buffer.
-    - In the full branch diff view: toggle the file section under the cursor and jump to the next unviewed file when marking viewed (matching `v`).
-    - In the sidebar panel: toggle the file or recursive directory under the cursor (matching `v`).
+    - In single-file editor buffers (and split base buffers, including binary changed files): toggle the current file's viewed state; when marking it **viewed**, automatically advance to the next unviewed file in the review (or return to the full branch diff view with an `"all files viewed"` notice when no unviewed files remain); when marking it **unviewed**, stay in the open file buffer.
+    - In the full branch diff view: toggle the file section under the cursor and jump to the next unviewed file when marking viewed (staying put when unmarking, matching `v`).
+    - In the sidebar panel: toggle the file or recursive directory under the cursor (matching `v`); if the main window is currently displaying a single file that was just marked viewed (and the full diff view is not visible), advance the main window to the next unviewed file (or full branch diff when none remain) while keeping sidebar focus.
   - Support recursive directory viewed toggling on `v` (and `gv`) in the sidebar panel: if any descendant changed file under `dir/` is not `VIEWED`, mark all descendant files `VIEWED`; if all descendant files are already `VIEWED`, mark all of them `UNVIEWED`.
   - Execute multi-file viewed updates in a single batched Rust engine call (`setViewed` with `paths`) backed by parameterized aliased GitHub GraphQL mutations (chunked at 50 paths per request), saving store state once and emitting a single `viewedChanged` event.
   - Collapse viewed files in the full branch diff view onto a single header line (`▸ ✓ path  +N -M`) with no `+-- N lines` banner below it while preserving `zo`/`zc` manual fold inspection, and repaint any visible full diff view on `viewedChanged` to collapse newly viewed files and expand newly unviewed ones.
 - **Non-Goals:**
   - Changing the Rust CLI `jpr-review` subcommand surface or TUI command schema (`viewed` remains a JSON-RPC session mutation).
-  - Auto-closing single-file editor buffers when pressing `gv` (explicitly stays in the open file buffer; `gF` returns to the full diff view).
+  - Auto-closing or deleting buffers from Neovim's buffer list when advancing to the next unviewed file (simply switches the main window to the next file or full diff view).
 - **Anti-Goals:**
   - Sending N sequential `gh api graphql` subprocess calls, N disk writes, and N full-diff stream redraws when toggling a directory.
   - Interpolating untrusted PR file paths directly into GraphQL query source strings (always pass paths as GraphQL variables).
@@ -44,7 +44,7 @@ At the same time, marking work as viewed has three friction points:
 | **1. Batched Rust Engine + Parameterized Aliased GraphQL Mutation (Chosen)** | Extend `setViewed` (protocol v10) to accept `path` or `paths`, add `ReviewSession::set_viewed_paths` in `review-core` and `Forge::set_viewed_many` in `review-forge-github` using parameterized GraphQL aliases (`$p0`, `$p1`, ...), save once, and emit one `viewedChanged` event. | Marks an entire directory on GitHub in one `gh` round-trip (per 50-file chunk), writes disk state once, handles mixed PR + `[local]` directories atomically, and triggers a single sidebar + full-diff repaint. Requires bumping `PROTOCOL_VERSION` to `10`. |
 | **2. Sequential Per-File `setViewed` Calls from Lua (Rejected)** | Keep protocol v9 unchanged and loop `setViewed` in Lua for every descendant file under a directory. | No Rust changes, but spawns N sequential `gh` processes (blocking the server thread for seconds on medium directories), writes 4 JSON files N times, and triggers N full-diff stream recomputations. |
 
-Pablo selected **Approach 1**, along with staying in the open file buffer on `gv` in editor view and rendering collapsed viewed files in the full diff view as a single header line (`▸ ✓ path  +N -M`) with `zo` expand preserved.
+Pablo selected **Approach 1**, along with advancing to the next unviewed file whenever a viewed file is marked done (never leaving the reviewer looking at a file they just marked viewed) and rendering collapsed viewed files in the full diff view as a single header line (`▸ ✓ path  +N -M`) with `zo` expand preserved.
 
 ---
 
@@ -117,22 +117,26 @@ Pablo selected **Approach 1**, along with staying in the open file buffer on `gv
   - Resolves `session = session_mod.current()` (reporting `"no pull request is open in this tab"` when absent).
   - Routes by active window/buffer:
     1. Sidebar panel buffer -> `panel.toggle_viewed_under_cursor(session)`.
-    2. Stream buffer (`main` or `left`) -> `stream.toggle_viewed(session)` (toggles the file section at the cursor and jumps to the next unviewed file when marking viewed).
-    3. Changed worktree file buffer or split base buffer (`vim.b[buf].jpr_base_path` or `diff.buffer_to_changed_path(session, buf)`) -> looks up `file.viewed` in `session.view.files` and sends `setViewed` (`{ path = path, viewed = file.viewed ~= "VIEWED" }`), keeping focus in the current file buffer.
+    2. Stream buffer (`main` or `left`) -> `stream.toggle_viewed(session)` (toggles the file section at the cursor; when marking viewed, jumps to the next unviewed file with wrap-around once redrawn; when unmarking, stays on the newly expanded file).
+    3. Changed worktree file buffer or split base buffer (`vim.b[buf].jpr_base_path` or `diff.buffer_to_changed_path(session, buf)`) -> looks up `file.viewed` in `session.view.files`, computes `target_viewed = file.viewed ~= "VIEWED"`, and sends `setViewed` (`{ path = path, viewed = target_viewed }`). When `target_viewed == true` and the main window is still displaying `path` when the reply arrives, automatically opens and focuses the next unviewed file in tree order (wrapping around via `find_next_unviewed_path(updated_view, path)`), or switches to and focuses the full branch diff view with `jpr.info("all files viewed")` when no unviewed files remain. When `target_viewed == false`, keeps focus in the open file buffer.
     4. Any other buffer -> `jpr.error("move to a changed file, directory, or the full diff view to toggle viewed")`.
 - **Cheatsheet & docs (`lua/jpr/views/cheatsheet.lua`, `README.md`, `docs/architecture.md`, `docs/protocol.md`, `docs/decisions.md`):**
   - Update `:Jpr keys` (`?`) cheatsheet entries for `PR Sidebar Panel` (`v`: `"Toggle file or directory viewed"`) and `Diff & Stream Views` (`full_diff` `gF`, `toggle_viewed` `gv`), plus `README.md` and `docs/`.
 
-### 3. Recursive Directory `'v'` in Sidebar Panel (`lua/jpr/render/panel.lua`, `lua/jpr/views/panel.lua`)
+### 3. Recursive Directory `'v'` & Next-Unviewed Navigation (`lua/jpr/render/panel.lua`, `lua/jpr/views/panel.lua`)
 
 - Add pure helper `M.collect_directory_toggle_from_files(files, dir_path)` in `lua/jpr/render/panel.lua`:
   - Matches all entries in `files` whose `path` starts with `dir_path .. "/"` (works identically whether `dir_path` or any nested subdirectory is expanded or collapsed in the sidebar, and handles joined single-child directory rows such as `docs/x`).
   - Returns `nil` when zero files match; otherwise returns `{ paths = matching_paths, viewed = has_any_not_viewed }` where `has_any_not_viewed` is `true` if at least one matching file has `file.viewed ~= "VIEWED"`, and `false` when all matching files are already `"VIEWED"`.
+- Add pure helper `M.find_next_unviewed_path(view, current_path)` in `lua/jpr/render/panel.lua`:
+  - Walks changed files in tree display order (`view.tree` when present, else `view.files`).
+  - Scans forward after `current_path`, then wraps around from the start up to `current_path`, returning the first file path whose `viewed ~= "VIEWED"`, or `nil` when every file is `"VIEWED"`.
 - Update `M.toggle_viewed_under_cursor(session)` in `lua/jpr/views/panel.lua`:
   - Inspect `M.get_row_under_cursor(session)`:
     - `row.kind == "file"`: send `{ path = row.path, viewed = viewed ~= "VIEWED" }`.
     - `row.kind == "dir"`: compute `toggle = render.collect_directory_toggle_from_files((session.view and session.view.files) or {}, row.path)` and, when non-nil, send `{ paths = toggle.paths, viewed = toggle.viewed }`.
     - `row.kind == "conversation"` or header lines: no-op.
+  - When marking `viewed == true` and the full branch diff view is **not** visible, check whether the main window is currently displaying one of the newly marked file paths: if so, advance the main window to `find_next_unviewed_path(updated_view, open_path)` (or show the full branch diff view with `jpr.info("all files viewed")` when none remain) while keeping focus in the sidebar panel.
 
 ### 4. Single-Line Collapsed Viewed Files & Live Repaint in Full Branch Diff (`lua/jpr/render/stream.lua`, `lua/jpr/views/stream/init.lua`, `lua/jpr/views/stream/navigation.lua`)
 
