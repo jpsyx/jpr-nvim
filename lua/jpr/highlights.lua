@@ -28,8 +28,8 @@ local DARK_TINTS = {
     delete = 0xf85149,
     add_alpha = 0.24,
     add_text_alpha = 0.38,
-    delete_alpha = 0.14,
-    delete_text_alpha = 0.28,
+    delete_alpha = 0.24,
+    delete_text_alpha = 0.38,
 }
 
 local LIGHT_TINTS = {
@@ -37,22 +37,22 @@ local LIGHT_TINTS = {
     delete = 0xcf222e,
     add_alpha = 0.24,
     add_text_alpha = 0.38,
-    delete_alpha = 0.12,
-    delete_text_alpha = 0.24,
+    delete_alpha = 0.22,
+    delete_text_alpha = 0.34,
 }
 
 local DARK_FALLBACK_DIFF_HIGHLIGHTS = {
     JprDiffAdd = { bg = 0x274932 },
     JprDiffAddText = { bg = 0x2c5d37 },
-    JprDiffDelete = { bg = 0x3e2629 },
-    JprDiffDeleteText = { bg = 0x5a2d33 },
+    JprDiffDelete = { bg = 0x542b2d },
+    JprDiffDeleteText = { bg = 0x723232 },
 }
 
 local LIGHT_FALLBACK_DIFF_HIGHLIGHTS = {
     JprDiffAdd = { bg = 0xcde8d2 },
     JprDiffAddText = { bg = 0xb0dbb8 },
-    JprDiffDelete = { bg = 0xf9e4e6 },
-    JprDiffDeleteText = { bg = 0xf3c9cd },
+    JprDiffDelete = { bg = 0xf4ced1 },
+    JprDiffDeleteText = { bg = 0xefb4b8 },
 }
 
 local last_applied_diff_bg = {}

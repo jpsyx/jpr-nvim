@@ -37,8 +37,8 @@ for _, group_name in ipairs({ "JprDiffAdd", "JprDiffAddText", "JprDiffDelete", "
 end
 assert(dark_groups.JprDiffAdd.bg == highlights.blend_rgb(onedark_bg, 0x3fb950, 0.24), "dark JprDiffAdd blend")
 assert(dark_groups.JprDiffAddText.bg == highlights.blend_rgb(onedark_bg, 0x3fb950, 0.38), "dark JprDiffAddText blend")
-assert(dark_groups.JprDiffDelete.bg == highlights.blend_rgb(onedark_bg, 0xf85149, 0.14), "dark JprDiffDelete blend")
-assert(dark_groups.JprDiffDeleteText.bg == highlights.blend_rgb(onedark_bg, 0xf85149, 0.28), "dark JprDiffDeleteText blend")
+assert(dark_groups.JprDiffDelete.bg == highlights.blend_rgb(onedark_bg, 0xf85149, 0.24), "dark JprDiffDelete blend")
+assert(dark_groups.JprDiffDeleteText.bg == highlights.blend_rgb(onedark_bg, 0xf85149, 0.38), "dark JprDiffDeleteText blend")
 local add_contrast = math.abs(rgb_to_luminance(dark_groups.JprDiffAdd.bg) - rgb_to_luminance(onedark_bg))
 local solid_contrast = math.abs(rgb_to_luminance(solid_bright_green) - rgb_to_luminance(onedark_bg))
 assert(add_contrast < solid_contrast * 0.25, "soft diff tint has much lower contrast than solid bright green")
@@ -47,23 +47,23 @@ assert(add_contrast < solid_contrast * 0.25, "soft diff tint has much lower cont
 local dark_fallback = highlights.create_diff_highlights(nil, "dark")
 assert(dark_fallback.JprDiffAdd.bg == 0x274932 and dark_fallback.JprDiffAdd.fg == nil, "dark fallback JprDiffAdd")
 assert(dark_fallback.JprDiffAddText.bg == 0x2c5d37 and dark_fallback.JprDiffAddText.fg == nil, "dark fallback JprDiffAddText")
-assert(dark_fallback.JprDiffDelete.bg == 0x3e2629 and dark_fallback.JprDiffDelete.fg == nil, "dark fallback JprDiffDelete")
-assert(dark_fallback.JprDiffDeleteText.bg == 0x5a2d33 and dark_fallback.JprDiffDeleteText.fg == nil, "dark fallback JprDiffDeleteText")
+assert(dark_fallback.JprDiffDelete.bg == 0x542b2d and dark_fallback.JprDiffDelete.fg == nil, "dark fallback JprDiffDelete")
+assert(dark_fallback.JprDiffDeleteText.bg == 0x723232 and dark_fallback.JprDiffDeleteText.fg == nil, "dark fallback JprDiffDeleteText")
 
 -- create_diff_highlights: light theme with explicit Normal.bg and nil fallback.
 local light_bg = 0xfafafa
 local light_groups = highlights.create_diff_highlights(light_bg, "light")
 assert(light_groups.JprDiffAdd.bg == highlights.blend_rgb(light_bg, 0x2ea043, 0.24), "light JprDiffAdd blend")
 assert(light_groups.JprDiffAddText.bg == highlights.blend_rgb(light_bg, 0x2ea043, 0.38), "light JprDiffAddText blend")
-assert(light_groups.JprDiffDelete.bg == highlights.blend_rgb(light_bg, 0xcf222e, 0.12), "light JprDiffDelete blend")
-assert(light_groups.JprDiffDeleteText.bg == highlights.blend_rgb(light_bg, 0xcf222e, 0.24), "light JprDiffDeleteText blend")
+assert(light_groups.JprDiffDelete.bg == highlights.blend_rgb(light_bg, 0xcf222e, 0.22), "light JprDiffDelete blend")
+assert(light_groups.JprDiffDeleteText.bg == highlights.blend_rgb(light_bg, 0xcf222e, 0.34), "light JprDiffDeleteText blend")
 assert(light_groups.JprDiffAdd.fg == nil and light_groups.JprDiffDelete.fg == nil, "light groups set no fg")
 
 local light_fallback = highlights.create_diff_highlights(nil, "light")
 assert(light_fallback.JprDiffAdd.bg == 0xcde8d2 and light_fallback.JprDiffAdd.fg == nil, "light fallback JprDiffAdd")
 assert(light_fallback.JprDiffAddText.bg == 0xb0dbb8 and light_fallback.JprDiffAddText.fg == nil, "light fallback JprDiffAddText")
-assert(light_fallback.JprDiffDelete.bg == 0xf9e4e6 and light_fallback.JprDiffDelete.fg == nil, "light fallback JprDiffDelete")
-assert(light_fallback.JprDiffDeleteText.bg == 0xf3c9cd and light_fallback.JprDiffDeleteText.fg == nil, "light fallback JprDiffDeleteText")
+assert(light_fallback.JprDiffDelete.bg == 0xf4ced1 and light_fallback.JprDiffDelete.fg == nil, "light fallback JprDiffDelete")
+assert(light_fallback.JprDiffDeleteText.bg == 0xefb4b8 and light_fallback.JprDiffDeleteText.fg == nil, "light fallback JprDiffDeleteText")
 
 -- define_highlights in headless Neovim with onedark Normal colors.
 vim.o.background = "dark"
