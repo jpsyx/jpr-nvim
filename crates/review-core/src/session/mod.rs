@@ -5,6 +5,9 @@
 mod agent_loop;
 mod comments;
 mod diffs;
+mod link;
+#[cfg(test)]
+mod link_tests;
 mod local;
 mod local_files;
 #[cfg(test)]

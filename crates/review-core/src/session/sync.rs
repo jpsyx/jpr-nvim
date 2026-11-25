@@ -103,6 +103,9 @@ impl ReviewSession {
     /// and only when marks were sent before it failed.
     pub fn sync(&mut self) -> Result<SessionView> {
         let now = self.ports.clock.now();
+        if !self.is_linked() {
+            return self.sync_or_link_local(now);
+        }
         // GitHub may lag behind a mark that lands now, so the pull that
         // follows can briefly undo it until a later pull.
         let has_landed = self.send_queued();
@@ -142,7 +145,7 @@ impl ReviewSession {
 
     /// Applies a fetched pull request and forge snapshot to session state,
     /// announces the update, and returns the refreshed view.
-    fn apply_pull(
+    pub(super) fn apply_pull(
         &mut self,
         pr: PullRequest,
         snapshot: ForgeSnapshot,
