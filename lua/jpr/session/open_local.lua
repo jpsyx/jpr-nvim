@@ -116,8 +116,55 @@ local function open_local_worktree(session_mod, base_ref)
     end
 end
 
---- Attaches `:Jpr local [base_ref]` helpers onto `session_mod`.
-function M.attach(session_mod)
+local function start_local_session(info, hooks)
+    jpr().define_highlights()
+    hooks.setup_session_autocmds()
+    vim.cmd("tabnew")
+    local session = {
+        mode = "local",
+        tab = vim.api.nvim_get_current_tabpage(),
+        placeholder_buf = vim.api.nvim_get_current_buf(),
+        worktree = info.worktree,
+        branch = info.branch,
+        base_ref = info.baseRef,
+        repo = info.repo,
+        view = {
+            localContext = {
+                branch = info.branch,
+                baseRef = info.baseRef,
+                baseSha = info.baseSha,
+                repo = info.repo,
+            },
+        },
+    }
+    local is_tcd_ok, tcd_error = pcall(vim.cmd.tcd, vim.fn.fnameescape(info.worktree))
+    if not is_tcd_ok then
+        hooks.forget(session)
+        return jpr().error("could not enter worktree: " .. crash.build_clean_text_from_raw(tcd_error))
+    end
+    require("jpr.views.diff").attach(session)
+    local is_opened, open_error = pcall(require("jpr.views.panel").open, session)
+    if not is_opened then
+        hooks.forget(session)
+        return jpr().error("could not open the panel: " .. tostring(open_error))
+    end
+    hooks.spawn_engine(session)
+end
+
+--- Transitions an unlinked local `session` in-place when `pr` is linked.
+function M.upgrade_local_session_to_pr(session, pr)
+    session.mode = "pr"
+    session.number = pr.number
+    if type(pr.owner) == "string" and type(pr.repo) == "string" then
+        session.repo = pr.owner .. "/" .. pr.repo
+    end
+    local title = type(pr.title) == "string" and pr.title or ""
+    local suffix = title ~= "" and (": " .. crash.build_clean_text_from_raw(title)) or ""
+    jpr().info(("Linked to PR #%d%s"):format(pr.number, suffix))
+end
+
+--- Attaches `:Jpr local [base_ref]` helpers and `start_local` onto `session_mod`.
+function M.attach(session_mod, hooks)
     session_mod.local_probe_args = build_local_probe_args
     session_mod.parse_local_output = parse_local_output
     session_mod.handle_local_probe_result = function(info)
@@ -125,6 +172,9 @@ function M.attach(session_mod)
     end
     function session_mod.open_local(base_ref)
         return open_local_worktree(session_mod, base_ref)
+    end
+    function session_mod.start_local(info)
+        return start_local_session(info, hooks)
     end
 end
 

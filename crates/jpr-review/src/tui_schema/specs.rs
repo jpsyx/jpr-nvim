@@ -28,7 +28,18 @@ pub fn build_command_specs() -> Vec<CommandSpec> {
 }
 
 fn create_local_spec() -> CommandSpec {
-    let mut steps = vec![
+    let mut steps = create_local_base_steps();
+    steps.extend(create_local_pr_detection_steps());
+    CommandSpec::new(
+        "local",
+        "Inspect Current Worktree Review",
+        "Inspects the current worktree for local review or active PR auto-detection as JSON.",
+        steps,
+    )
+}
+
+fn create_local_base_steps() -> Vec<StepSpec> {
+    vec![
         StepSpec::new(
             "base_mode",
             "Base Branch Selection",
@@ -53,6 +64,11 @@ fn create_local_spec() -> CommandSpec {
         )
         .with_when(|answers| has_answer_value(answers, "base_mode", "custom"))
         .with_validate(validate_git_ref),
+    ]
+}
+
+fn create_local_pr_detection_steps() -> Vec<StepSpec> {
+    let mut steps = vec![
         StepSpec::new(
             "detect_pr",
             "Active PR Detection",
@@ -84,12 +100,7 @@ fn create_local_spec() -> CommandSpec {
         });
         steps.push(step);
     }
-    CommandSpec::new(
-        "local",
-        "Inspect Current Worktree Review",
-        "Inspects the current worktree for local review or active PR auto-detection as JSON.",
-        steps,
-    )
+    steps
 }
 
 fn create_prs_spec() -> CommandSpec {

@@ -1,8 +1,8 @@
 -- One open pull-request review per tab: the checkout, the engine process, and
 -- the panel. Every review rule lives in the engine; this only wires it up.
 local crash = require("jpr.session.crash")
+local engine = require("jpr.session.engine")
 local panel = require("jpr.views.panel")
-local rpc = require("jpr.rpc")
 
 local M = {}
 
@@ -139,126 +139,8 @@ function M.forget_closed_tabs()
     end
 end
 
-local function fail_handshake(session, client, error_message)
-    if session.has_restarted and session.ready then
-        session.client = nil
-        client:stop()
-        local log_path = crash.append_crash_log(session.number, "handshake", error_message, session.branch)
-        return crash.transition_to_read_only(session, "handshake", log_path, error_message)
-    end
-    forget(session)
-    return jpr().error(error_message)
-end
-
-local function build_handshake_error_from_result(result)
-    if type(result) ~= "table" or type(result.protocolVersion) ~= "number" then
-        return "invalid handshake response: missing protocolVersion"
-    end
-    local binary_label = crash.build_clean_text_from_raw(jpr().binary_path())
-    if result.protocolVersion ~= rpc.PROTOCOL_VERSION then
-        return ("protocol mismatch: the plugin speaks %d and %s speaks %d; run :Lazy build jpr-nvim"):format(
-            rpc.PROTOCOL_VERSION,
-            binary_label,
-            result.protocolVersion
-        )
-    end
-    if type(result.version) ~= "string" or result.version == "" then
-        return ("invalid handshake response from %s: missing engine version"):format(binary_label)
-    end
-    if result.version ~= "test" and result.version ~= jpr().VERSION then
-        return ("version mismatch: plugin is %s and %s is %s; run :Lazy build jpr-nvim"):format(
-            jpr().VERSION,
-            binary_label,
-            crash.build_clean_text_from_raw(result.version)
-        )
-    end
-    return nil
-end
-
---- Checks the engine speaks our protocol and release version, then loads and
---- syncs the view. A failed startup handshake stops the engine and forgets the
---- session; a failed restart handshake falls back to read-only mode.
-local function handshake(session, client)
-    local params = { protocolVersion = rpc.PROTOCOL_VERSION, client = "jpr.nvim" }
-    client:request("initialize", params, function(init_error, result)
-        if session.closing or session.client ~= client then
-            return
-        end
-        if init_error then
-            -- An engine that died is handled by on_exit, with its stderr.
-            if client.exited then
-                return
-            end
-            local clean_message = crash.build_clean_text_from_raw(init_error.message)
-            return fail_handshake(session, client, "could not start the review engine: " .. clean_message)
-        end
-        local handshake_error = build_handshake_error_from_result(result)
-        if handshake_error then
-            return fail_handshake(session, client, handshake_error)
-        end
-        session.ready = true
-        if session.loading then
-            require("jpr.views.loading").update(session, { stage = 3 })
-        end
-        client:request("snapshot", nil, function(_, view)
-            if session.closing or session.client ~= client then
-                return
-            end
-            if view then
-                M.show(session, view)
-            end
-        end)
-        if session.mode ~= "local" then
-            M.sync(session)
-        end
-    end)
-end
-
-local function build_serve_args_from_session(session)
-    if session.mode == "local" then
-        local args = { jpr().binary_path(), "serve", "--local" }
-        if type(session.base_ref) == "string" and session.base_ref ~= "" then
-            vim.list_extend(args, { "--base", session.base_ref })
-        end
-        return args
-    end
-    return {
-        jpr().binary_path(),
-        "serve",
-        "--pr",
-        tostring(session.number),
-        "--repo",
-        session.repo,
-    }
-end
-
 local function spawn_engine(session)
-    local spawned_client
-    local client, spawn_error = rpc.start(build_serve_args_from_session(session), {
-        cwd = session.worktree,
-        on_notification = function(method, params)
-            if session.closing or session.client ~= spawned_client then
-                return
-            end
-            M.on_notification(session, method, params)
-        end,
-        on_exit = function(code, stderr)
-            M.on_exit(session, code, stderr, spawned_client)
-        end,
-    })
-    if not client then
-        if not session.has_restarted then
-            forget(session)
-            local clean_spawn_error = crash.build_clean_text_from_raw(spawn_error)
-            jpr().error(clean_spawn_error ~= "" and clean_spawn_error or "could not start the review engine")
-        end
-        return false
-    end
-    spawned_client = client
-    session.client = client
-    M.by_tab[session.tab] = session
-    handshake(session, client)
-    return true
+    return engine.spawn(M, session, forget)
 end
 
 local function setup_session_autocmds()
@@ -346,43 +228,6 @@ function M.start(info, pending_session)
     spawn_engine(session)
 end
 
---- Opens a tab for an unlinked local worktree review and starts `serve --local`.
---- info: { worktree, branch, baseRef, baseSha, repo? }.
-function M.start_local(info)
-    jpr().define_highlights()
-    setup_session_autocmds()
-    vim.cmd("tabnew")
-    local session = {
-        mode = "local",
-        tab = vim.api.nvim_get_current_tabpage(),
-        placeholder_buf = vim.api.nvim_get_current_buf(),
-        worktree = info.worktree,
-        branch = info.branch,
-        base_ref = info.baseRef,
-        repo = info.repo,
-        view = {
-            localContext = {
-                branch = info.branch,
-                baseRef = info.baseRef,
-                baseSha = info.baseSha,
-                repo = info.repo,
-            },
-        },
-    }
-    local is_tcd_ok, tcd_error = pcall(vim.cmd.tcd, vim.fn.fnameescape(info.worktree))
-    if not is_tcd_ok then
-        forget(session)
-        return jpr().error("could not enter worktree: " .. crash.build_clean_text_from_raw(tcd_error))
-    end
-    require("jpr.views.diff").attach(session)
-    local is_opened, open_error = pcall(panel.open, session)
-    if not is_opened then
-        forget(session)
-        return jpr().error("could not open the panel: " .. tostring(open_error))
-    end
-    spawn_engine(session)
-end
-
 --- Whether the pull request's head/base commit or local base SHA moved between
 --- `previous_view` and `view`, which changes every diff.
 function M.have_commits_changed(previous_view, view)
@@ -401,17 +246,6 @@ function M.have_commits_changed(previous_view, view)
     return (previous_local ~= nil and current_pr ~= nil)
 end
 
-local function upgrade_local_session_to_pr(session, pr)
-    session.mode = "pr"
-    session.number = pr.number
-    if type(pr.owner) == "string" and type(pr.repo) == "string" then
-        session.repo = pr.owner .. "/" .. pr.repo
-    end
-    local title = type(pr.title) == "string" and pr.title or ""
-    local suffix = title ~= "" and (": " .. crash.build_clean_text_from_raw(title)) or ""
-    jpr().info(("Linked to PR #%d%s"):format(pr.number, suffix))
-end
-
 --- Keeps `view` as the session's latest and redraws from it: the panel
 --- always, and the stream and the diffs once the PR or local context is known.
 function M.show(session, view)
@@ -422,7 +256,7 @@ function M.show(session, view)
     local has_synced_pr = type(view.pr) == "table"
     local has_local_context = type(view.localContext) == "table"
     if has_synced_pr and session.mode == "local" then
-        upgrade_local_session_to_pr(session, view.pr)
+        require("jpr.session.open_local").upgrade_local_session_to_pr(session, view.pr)
     end
     if
         not has_synced_pr
@@ -476,7 +310,11 @@ function M.on_exit(session, code, stderr, exited_client)
 end
 
 require("jpr.session.open").attach(M)
-require("jpr.session.open_local").attach(M)
+require("jpr.session.open_local").attach(M, {
+    setup_session_autocmds = setup_session_autocmds,
+    forget = forget,
+    spawn_engine = spawn_engine,
+})
 require("jpr.session.commands").attach(M, forget)
 require("jpr.session.comments").attach(M)
 
