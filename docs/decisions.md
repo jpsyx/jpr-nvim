@@ -866,7 +866,7 @@ reviewers want sidebar delete (`d`) with `workspace/willDeleteFiles` support.
 
 ## Unified local worktree review with in-place PR upgrade (`PROTOCOL_VERSION = 8`)
 
-**Decision.** Local worktree reviews (`:Jpr local [base]` and `jpr-review serve --local`)
+**Decision.** Local worktree reviews (`:Jpr local [base]`, with `:Jpr self [base]` as an Ex alias not shown in the Command Palette, and `jpr-review serve --local`)
 run inside the same `ReviewSession` facade via `SessionTarget::{Pr, Local}`
 rather than a separate session type or engine binary:
 

@@ -66,7 +66,8 @@ helpers.eq(is_valid_ws, false, "whitespace rejected")
 local is_valid_head = local_spec.steps[2].validate("HEAD")
 helpers.eq(is_valid_head, true, "HEAD accepted")
 
--- 2. Direct `:Jpr local` and `:Jpr local HEAD` dispatch.
+-- 2. Direct `:Jpr local`, `:Jpr self` alias, and explicit base ref dispatch (without adding `self` to palette).
+helpers.eq(commands_schema.find_command_spec("self"), nil, "self alias is not in command palette schema")
 local captured_base_args = {}
 local original_open_local = session.open_local
 session.open_local = function(base_ref)
@@ -74,8 +75,13 @@ session.open_local = function(base_ref)
 end
 jpr.command({ "local" })
 jpr.command({ "local", "HEAD" })
+jpr.command({ "self" })
+jpr.command({ "self", "HEAD" })
+clear_notifications()
+jpr.command({ "self", "HEAD", "extra" })
 session.open_local = original_open_local
-helpers.eq(captured_base_args, { "<nil>", "HEAD" }, "direct :Jpr local dispatch")
+helpers.eq(captured_base_args, { "<nil>", "HEAD", "<nil>", "HEAD" }, "direct :Jpr local and :Jpr self dispatch")
+helpers.eq(has_notification("too many arguments"), true, "extra arg on :Jpr self errors")
 
 -- 3. `binary.create_agent_env_from_session` omits JPR_PR when nil and sets string when numeric.
 local local_env = binary.create_agent_env_from_session("jpr-review", "/tmp/local.sock", nil, "/usr/bin")

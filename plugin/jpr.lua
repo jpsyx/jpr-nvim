@@ -15,6 +15,12 @@ end, {
     end,
 })
 
+vim.keymap.set("n", "<Plug>(jpr-palette)", function()
+    require("jpr").command({})
+end, { desc = "Open Jpr command palette" })
+if vim.fn.maparg("<leader>J", "n") == "" then
+    vim.keymap.set("n", "<leader>J", "<Plug>(jpr-palette)", { remap = true, silent = true, desc = "Open Jpr command palette" })
+end
 vim.keymap.set({ "n", "x" }, "<Plug>(jpr-comment)", function()
     require("jpr").action("comment")
 end, { desc = "New GitHub draft comment on line or visual range" })

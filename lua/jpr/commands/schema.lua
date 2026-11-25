@@ -8,6 +8,7 @@ local M = {}
 --- completion candidate. Keys are the alias; values are canonical command ids.
 local COMMAND_ALIASES = {
     review = "open",
+    self = "local",
 }
 
 local function jpr()

@@ -7,13 +7,21 @@ local commands_schema = require("jpr.commands.schema")
 local aliases_ok, aliases_error = commands_schema.validate_command_aliases()
 assert(aliases_ok == true, "command aliases are valid: " .. tostring(aliases_error))
 assert(
-    vim.deep_equal(commands_schema.list_command_aliases(), { { alias = "review", command_id = "open" } }),
-    "review is the configured alias for open: " .. vim.inspect(commands_schema.list_command_aliases())
+    vim.deep_equal(
+        commands_schema.list_command_aliases(),
+        {
+            { alias = "review", command_id = "open" },
+            { alias = "self", command_id = "local" },
+        }
+    ),
+    "review and self are the configured aliases: " .. vim.inspect(commands_schema.list_command_aliases())
 )
 assert(commands_schema.resolve_command_id("review") == "open", "review resolves to open")
+assert(commands_schema.resolve_command_id("self") == "local", "self resolves to local")
 assert(commands_schema.resolve_command_id("open") == "open", "a canonical id resolves to itself")
 assert(commands_schema.resolve_command_id("frobnicate") == nil, "an unknown name does not resolve")
 assert(not vim.tbl_contains(commands_schema.list_command_ids(), "review"), "review is not a command id")
+assert(not vim.tbl_contains(commands_schema.list_command_ids(), "self"), "self is not a command id")
 
 assert(jpr.parse_pr_arg("123") == 123, "a bare number")
 assert(jpr.parse_pr_arg("#45") == 45, "a hash number")
@@ -23,6 +31,10 @@ assert(select(2, jpr.parse_pr_arg("123")) == nil, "a bare number names no reposi
 local url_number, url_repo = jpr.parse_pr_arg("https://github.com/octo/gadgets/pull/12/files")
 assert(url_number == 12 and url_repo == "octo/gadgets", "a URL names its repository: " .. tostring(url_repo))
 assert(jpr.parse_pr_arg("abc") == nil, "not a number")
+assert(jpr.parse_pr_arg("0") == nil, "zero is not a valid PR ID")
+assert(jpr.parse_pr_arg("#0") == nil, "hash zero is not a valid PR ID")
+assert(jpr.parse_pr_arg("-5") == nil, "negative number is not a valid PR ID")
+assert(jpr.parse_pr_arg("3.14") == nil, "float is not a valid PR ID")
 assert(jpr.parse_pr_arg(nil) == nil, "missing")
 
 local cargo_toml = table.concat(vim.fn.readfile(root .. "/Cargo.toml"), "\n") .. "\n["
@@ -61,6 +73,7 @@ jpr.setup({ worktree_cmd = "wt pr {n}" })
 assert(jpr.config.worktree_cmd == "wt pr {n}", "setup takes options")
 assert(jpr.config.binary == nil, "setup keeps nil default binary so bundled target/release/jpr-review is used")
 assert(jpr.binary_path() == root .. "/target/release/jpr-review", "binary_path resolves bundled release binary")
+assert(jpr.config.keys.palette == "<leader>J", "setup keeps default palette key")
 assert(jpr.config.keys.comment == "gc", "setup keeps default keys")
 jpr.setup({ binary = "/tmp/custom" })
 assert(jpr.binary_path() == "/tmp/custom", "binary_path honors explicit setup override")
@@ -84,6 +97,7 @@ assert(jpr_command ~= nil, ":Jpr exists")
 assert(jpr_command.nargs == "*", ":Jpr accepts zero or more arguments: " .. tostring(jpr_command.nargs))
 
 for _, plug in ipairs({
+    "<Plug>(jpr-palette)",
     "<Plug>(jpr-comment)",
     "<Plug>(jpr-suggest-comment)",
     "<Plug>(jpr-file-comment)",
@@ -96,6 +110,29 @@ end
 for _, plug in ipairs({ "<Plug>(jpr-comment)", "<Plug>(jpr-suggest-comment)" }) do
     assert(vim.fn.maparg(plug, "x", false, true).lhs == plug, plug .. " exists in visual mode")
 end
+
+assert(
+    vim.fn.maparg("<leader>J", "n", false, true).rhs == "<Plug>(jpr-palette)",
+    "plugin/jpr.lua binds default <leader>J to <Plug>(jpr-palette)"
+)
+jpr.setup({ keys = { palette = false } })
+assert(vim.fn.maparg("<leader>J", "n", false, true).lhs == nil, "disabling palette key removes default <leader>J")
+assert(
+    vim.fn.maparg("<Plug>(jpr-palette)", "n", false, true).lhs == "<Plug>(jpr-palette)",
+    "<Plug>(jpr-palette) remains defined when palette key is disabled"
+)
+jpr.setup({ keys = { palette = "<leader>gj" } })
+assert(
+    vim.fn.maparg("<leader>gj", "n", false, true).rhs == "<Plug>(jpr-palette)",
+    "custom palette key binds to <Plug>(jpr-palette)"
+)
+assert(vim.fn.maparg("<leader>J", "n", false, true).lhs == nil, "old default palette key stays unbound")
+jpr.setup({})
+assert(
+    vim.fn.maparg("<leader>J", "n", false, true).rhs == "<Plug>(jpr-palette)",
+    "default setup restores <leader>J mapping"
+)
+assert(vim.fn.maparg("<leader>gj", "n", false, true).lhs == nil, "previous custom palette key is cleaned up")
 
 jpr.setup({ keys = { comment = false } })
 local key_buf = vim.api.nvim_create_buf(false, true)
@@ -165,6 +202,35 @@ assert(
     messages[review_message_count + 2].text:find("too many arguments", 1, true),
     "review rejects extra arguments: " .. messages[review_message_count + 2].text
 )
+
+opened = {}
+jpr.command({ "123" })
+assert(opened.number == 123 and opened.repo == nil, ":Jpr 123 aliases :Jpr open 123: " .. vim.inspect(opened))
+
+opened = {}
+jpr.command({ "#456" })
+assert(opened.number == 456 and opened.repo == nil, ":Jpr #456 aliases :Jpr open #456: " .. vim.inspect(opened))
+
+opened = {}
+jpr.command({ "https://github.com/octo/gadgets/pull/78" })
+assert(opened.number == 78 and opened.repo == "octo/gadgets", ":Jpr <url> aliases :Jpr open <url>: " .. vim.inspect(opened))
+
+local before_invalid_pr_id = #messages
+jpr.command({ "0" })
+assert(#messages == before_invalid_pr_id + 1 and messages[#messages].level == vim.log.levels.ERROR, ":Jpr 0 emits ERROR")
+assert(messages[#messages].text:find("invalid pull request", 1, true) ~= nil, messages[#messages].text)
+
+jpr.command({ "-7" })
+assert(messages[#messages].level == vim.log.levels.ERROR, ":Jpr -7 emits ERROR")
+assert(messages[#messages].text:find("invalid pull request", 1, true) ~= nil, messages[#messages].text)
+
+jpr.command({ "3.14" })
+assert(messages[#messages].level == vim.log.levels.ERROR, ":Jpr 3.14 emits ERROR")
+assert(messages[#messages].text:find("invalid pull request", 1, true) ~= nil, messages[#messages].text)
+
+jpr.command({ "123", "extra" })
+assert(messages[#messages].level == vim.log.levels.ERROR, ":Jpr 123 extra emits ERROR")
+assert(messages[#messages].text:find("too many arguments", 1, true) ~= nil, messages[#messages].text)
 package.loaded["jpr.session"] = nil
 
 local calls = {}

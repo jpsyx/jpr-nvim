@@ -30,9 +30,10 @@ M.defaults = {
     lsp_file_ops_timeout_ms = 30000,
     -- Timeout in milliseconds to wait for an LSP client to attach on cold-start rename.
     lsp_attach_timeout_ms = 3000,
-    -- Buffer-local keybindings inside diff and stream buffers; set any entry to
-    -- false to disable it while keeping its <Plug>(jpr-*) mapping available.
+    -- Global (`palette`) and buffer-local keybindings; set any entry to false
+    -- to disable it while keeping its `<Plug>(jpr-*)` mapping available.
     keys = {
+        palette = "<leader>J",
         comment = "gc",
         suggest_comment = "gC",
         file_comment = "gf",
@@ -56,11 +57,35 @@ function M.define_highlights()
     require("jpr.highlights").define_highlights()
 end
 
+local bound_palette_key = M.defaults.keys.palette
+
+--- Binds the configured global `<Plug>(jpr-palette)` shortcut (default `<leader>J`),
+--- removing any previous plugin-owned palette mapping when changed or disabled.
+function M.bind_global_keys()
+    if type(bound_palette_key) == "string" and bound_palette_key ~= "" then
+        local existing = vim.fn.maparg(bound_palette_key, "n", false, true)
+        if existing and existing.rhs == "<Plug>(jpr-palette)" then
+            pcall(vim.keymap.del, "n", bound_palette_key)
+        end
+    end
+    bound_palette_key = nil
+    local palette_key = M.config.keys and M.config.keys.palette
+    if type(palette_key) == "string" and palette_key ~= "" then
+        vim.keymap.set("n", palette_key, "<Plug>(jpr-palette)", {
+            remap = true,
+            silent = true,
+            desc = "Open Jpr command palette",
+        })
+        bound_palette_key = palette_key
+    end
+end
+
 --- Configures the plugin from a user's `opts` (see `defaults`), for example
 --- from `require("jpr").setup({ worktree_cmd = "wt pr {n}" })`.
 function M.setup(opts)
     M.config = vim.tbl_deep_extend("force", vim.deepcopy(M.defaults), opts or {})
     M.define_highlights()
+    M.bind_global_keys()
 end
 
 --- Active engine binary path or command, defaulting to the bundled release binary.
@@ -97,8 +122,12 @@ function M.parse_pr_arg(arg)
         return nil
     end
     local repo, url_number = arg:match("^%a+://[^/]+/([^/]+/[^/]+)/pull/(%d+)")
-    local number = url_number or arg:match("^#?(%d+)$") or arg:match("/pull/(%d+)")
-    return number and tonumber(number) or nil, repo
+    local raw_number = url_number or arg:match("^#?(%d+)$") or arg:match("/pull/(%d+)")
+    local parsed_number = raw_number and tonumber(raw_number) or nil
+    if not parsed_number or parsed_number < 1 then
+        return nil
+    end
+    return parsed_number, repo
 end
 
 local function filter_by_prefix(items, prefix)
@@ -263,6 +292,13 @@ local ZERO_ARG_SESSION_METHODS = {
     close = "close_current",
 }
 
+local function is_numeric_pr_attempt(token)
+    if type(token) ~= "string" then
+        return false
+    end
+    return tonumber(token) ~= nil or token:match("^#%-?%d") ~= nil
+end
+
 local function dispatch_direct_subcommand(session, args, cmd_opts, context)
     local subcommand = args[1]
     if subcommand == "keys" then
@@ -283,6 +319,16 @@ local function dispatch_direct_subcommand(session, args, cmd_opts, context)
             return M.error((":Jpr %s does not accept arguments"):format(subcommand))
         end
         return session[method_name]()
+    end
+    local pr_number, pr_repo = M.parse_pr_arg(subcommand)
+    if pr_number then
+        if #args > 1 then
+            return M.error(("too many arguments for :Jpr %s"):format(subcommand))
+        end
+        return session.open(pr_number, pr_repo)
+    end
+    if is_numeric_pr_attempt(subcommand) then
+        return M.error(("invalid pull request %q; expected a positive PR number, #number, or pull request URL"):format(subcommand))
     end
     M.error(("unknown subcommand %q; expected one of: %s"):format(tostring(subcommand), table.concat(M.subcommands, ", ")))
 end
