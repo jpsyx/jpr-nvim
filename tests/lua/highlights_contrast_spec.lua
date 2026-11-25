@@ -115,4 +115,70 @@ for _, case in ipairs({
     assert(adjusted >= 0 and adjusted <= 0xffffff and adjusted == math.floor(adjusted), "valid 24-bit integer RGB")
 end
 
+-- Task 2: lazy derived highlight cache, style preservation, overrides, and ColorScheme refresh.
+local highlights = require("jpr.highlights")
+
+local dot_name = highlights.build_contrast_group_name("@a.b", "add")
+local underscore_name = highlights.build_contrast_group_name("@a_b", "add")
+assert(dot_name ~= underscore_name, "derived group names are injective across punctuation")
+assert(dot_name:match("^JprDiffAddFg_[%w_]+$") ~= nil, "add derived group matches JprDiffAddFg_ prefix")
+assert(
+    highlights.build_contrast_group_name("@a.b", "delete"):match("^JprDiffDeleteFg_[%w_]+$") ~= nil,
+    "delete derived group matches JprDiffDeleteFg_ prefix"
+)
+
+vim.o.background = "dark"
+vim.api.nvim_set_hl(0, "Normal", { bg = onedark_bg, fg = 0xabb2bf })
+vim.api.nvim_set_hl(0, "@string", { fg = 0x98c379, italic = true, bold = true })
+vim.api.nvim_set_hl(0, "TestBgOnly", { bg = 0x334455 })
+vim.api.nvim_set_hl(0, "TestReversed", { fg = 0xabb2bf, reverse = true })
+vim.api.nvim_set_hl(0, "TestTransient", { fg = 0x61afef })
+highlights.define_highlights()
+
+local derived_string_add = highlights.get_contrast_group("@string", "add")
+assert(derived_string_add == highlights.build_contrast_group_name("@string", "add"), "derives @string add group")
+assert(highlights.get_contrast_group("@string", "add") == derived_string_add, "returns cached derived group")
+local derived_spec = vim.api.nvim_get_hl(0, { name = derived_string_add, link = false })
+local active_add_bg = vim.api.nvim_get_hl(0, { name = "JprDiffAdd", link = false }).bg
+assert(derived_spec.bg == nil, "derived contrast group leaves bg unset")
+assert(derived_spec.italic == true and derived_spec.bold == true, "derived contrast group preserves text styles")
+assert(
+    contrast.contrast_ratio(derived_spec.fg, active_add_bg) > contrast.contrast_ratio(0x98c379, active_add_bg),
+    "derived @string has higher contrast on active JprDiffAdd.bg"
+)
+
+assert(highlights.get_contrast_group("TestBgOnly", "add") == "TestBgOnly", "skips bg-only groups")
+assert(highlights.get_contrast_group("TestReversed", "add") == "TestReversed", "skips reversed groups")
+
+-- Transparent Normal with fg = nil returns "Normal" without error.
+vim.api.nvim_set_hl(0, "Normal", { bg = onedark_bg })
+highlights.define_highlights()
+assert(highlights.get_contrast_group("Normal", "add") == "Normal", "transparent Normal.fg returns Normal safely")
+
+-- Custom user override on JprDiffAdd is respected when computing contrast.
+vim.api.nvim_set_hl(0, "Normal", { bg = onedark_bg, fg = 0xabb2bf })
+vim.api.nvim_set_hl(0, "JprDiffAdd", { bg = 0x3a6e4c })
+highlights.define_highlights()
+local custom_derived = highlights.get_contrast_group("TestTransient", "add")
+local custom_spec = vim.api.nvim_get_hl(0, { name = custom_derived, link = false })
+local expected_custom_fg = contrast.adjust_fg_for_diff_bg(0x61afef, onedark_bg, 0x3a6e4c, true)
+assert(custom_spec.fg == expected_custom_fg, "uses active custom JprDiffAdd.bg override")
+
+-- ColorScheme refresh updates registered derived groups in place and relinks groups that lose fg.
+vim.api.nvim_set_hl(0, "JprDiffAdd", {})
+vim.o.background = "light"
+vim.api.nvim_set_hl(0, "Normal", { bg = light_bg, fg = 0x24292f })
+vim.api.nvim_set_hl(0, "@string", { fg = 0x116329 })
+vim.api.nvim_set_hl(0, "TestTransient", { bg = 0xeeeeee })
+vim.api.nvim_exec_autocmds("ColorScheme", {})
+
+local refreshed_string = vim.api.nvim_get_hl(0, { name = derived_string_add, link = false })
+assert(refreshed_string.bg == nil, "refreshed derived group keeps bg unset")
+assert(
+    select(1, contrast.rgb_to_oklch(refreshed_string.fg)) < select(1, contrast.rgb_to_oklch(0x116329)),
+    "ColorScheme refresh darkens derived @string for light theme"
+)
+local relinked_transient = vim.api.nvim_get_hl(0, { name = custom_derived, link = true })
+assert(relinked_transient.link == "TestTransient", "derived group relinks to source when fg is lost")
+
 print("highlights_contrast_spec: ok")
