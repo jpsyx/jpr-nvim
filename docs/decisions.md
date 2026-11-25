@@ -994,3 +994,52 @@ prompted and a post-login sync flushes the queued mark.
 **Revisit when.** Reviewers need multi-host GitHub Enterprise support (where
 cache directories and `gh auth login --hostname` would key on forge host) or
 want a `:Jpr cache clean` command to prune old managed clones.
+
+## Contrast-aware OKLCH foreground lifting on diff lines
+
+**Decision.** Foreground legibility over the brighter `JprDiffAdd`/`JprDiffDelete`
+background tints is solved in Lua (`lua/jpr/highlights/contrast.lua`,
+`lua/jpr/highlights/init.lua`, `lua/jpr/views/stream/syntax.lua`,
+`lua/jpr/views/diff/contrast.lua`, and `lua/jpr/render/overlay.lua`) by lazily
+deriving colorscheme-aware companion highlight groups (`JprDiffAddFg_*` and
+`JprDiffDeleteFg_*`) in perceptual OKLCH space:
+
+1. **Hue-locked OKLCH adjustment with same-hue guard.** Each source group's
+   resolved `fg` is converted to OKLCH, lifted away from the active diff
+   background (lighter on dark themes, darker on light themes) to compensate
+   for the background's lightness shift from `Normal.bg`, given a smooth extra
+   boost when a chromatic foreground's hue falls within 50 degrees of the
+   green/red diff tint, and binary-searched in chroma into the sRGB gamut at
+   fixed `(L, H)` so syntax hues stay faithful without washing out bright
+   tokens to white.
+2. **Background-only diff groups stay untouched.** `JprDiffAdd`,
+   `JprDiffAddText`, `JprDiffDelete`, and `JprDiffDeleteText` continue to omit
+   `fg`. Derived groups copy text styles (`bold`, `italic`, `undercurl`, etc.),
+   omit `bg`, skip `bg`-only and `reverse = true` sources, read the active diff
+   `bg` (honoring custom user overrides), and refresh (or relink back to their
+   source if `fg` disappears) automatically on `ColorScheme`.
+3. **Direct swap in the stream; viewport decoration provider in file diffs.**
+   The diff stream swaps syntax extmarks directly during `syntax.apply`
+   (priority 85 `Normal` fallback, priority 90 contrast-adjusted Treesitter),
+   adding zero scroll overhead. Unified file overlays and split `:diffthis`
+   windows share one `nvim_set_decoration_provider` gated strictly to active
+   `jpr` diff windows (`on_start` returns `false` when none are open; `on_win`
+   emits `ephemeral = true` marks for visible diff lines up to 1,000 bytes at
+   priorities 45 `Normal`, 115 Treesitter, and 135 LSP semantic tokens, using
+   `nvim_win_call` + `diff_hlID` for split windows). Unified removed virtual
+   lines reuse `collect_line_spans` and `{ bg_group, fg_group }` chunk arrays.
+
+**Why.** Neovim has no render-time foreground brightness or contrast shader.
+Setting `fg` directly on `JprDiff*` would override syntax colors; a flat RGB
+brightness multiplier clips bright tokens, shifts hues, and fails on dim
+comments and light themes; per-column `vim.inspect_pos` stutters on scroll.
+Lazy per-group OKLCH derivation costs under 1 ms per colorscheme and keeps
+real-buffer redraw work bounded to visible diff lines in active `jpr` windows.
+
+**Consequences.** Legacy regex `:syntax` tokens (priority 50) in real file
+buffers without Treesitter are preserved untouched rather than inspected per
+column, while uncaptured `Normal` text still lifts at priority 45. Diagnostics
+(150) and user/search highlights (200) remain above all contrast overrides.
+
+**Revisit when.** Neovim exposes a native highlight contrast/blend modifier or
+reviewers ask for configurable contrast strength in `setup()`.
