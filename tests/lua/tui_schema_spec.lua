@@ -385,8 +385,8 @@ local gated_step = {
     help = "Choose comment scope.",
     kind = "select",
     options = {
-        { value = "line", label = "Line", when = function(_answers, ctx) return ctx.is_on_diff_line == true end },
-        { value = "file", label = "File", when = function(_answers, ctx) return ctx.can_comment_file == true end },
+        { value = "line", label = "Line", when = function(_answers, command_context) return command_context.is_on_diff_line == true end },
+        { value = "file", label = "File", when = function(_answers, command_context) return command_context.can_comment_file == true end },
         { value = "always", label = "Always" },
     },
 }

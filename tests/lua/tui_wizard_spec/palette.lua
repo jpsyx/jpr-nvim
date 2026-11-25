@@ -53,9 +53,8 @@ return function(context)
         assert(#executed_calls == 0, "closing without confirm does not execute")
     end
 
-    local function test_palette_filters_non_executable_commands_preserves_step_back_and_filters_step_options()
-        local executed_calls = {}
-        local commands = {
+    local function create_filtered_palette_commands(executed_calls)
+        return {
             {
                 id = "open",
                 label = "Open Pull Request",
@@ -82,14 +81,19 @@ return function(context)
                         help = "Pick comment scope.",
                         kind = "select",
                         options = {
-                            { value = "line", label = "Line Comment", badge = "[line]", when = function(_a, ctx) return ctx.is_on_diff_line == true end },
-                            { value = "file", label = "File Comment", badge = "[file]", when = function(_a, ctx) return ctx.can_comment_file == true end },
+                            { value = "line", label = "Line Comment", badge = "[line]", when = function(_answers, command_context) return command_context.is_on_diff_line == true end },
+                            { value = "file", label = "File Comment", badge = "[file]", when = function(_answers, command_context) return command_context.can_comment_file == true end },
                         },
                     },
                 },
                 execute = function(answers) executed_calls[#executed_calls + 1] = "comment:" .. tostring(answers.kind) end,
             },
         }
+    end
+
+    local function test_palette_omits_non_executable_commands_and_preserves_step_back()
+        local executed_calls = {}
+        local commands = create_filtered_palette_commands(executed_calls)
 
         wizard.open_palette(commands, { has_session = false, is_on_diff_line = false, can_comment_file = true })
         local initial_text = helpers.current_text()
@@ -97,7 +101,6 @@ return function(context)
         assert(initial_text:find("▸ Open Pull Request", 1, true) ~= nil, "open command visible")
         assert(initial_text:find("Add Comment", 1, true) ~= nil, "executable comment command visible")
 
-        -- Navigating down moves directly to Add Comment (index 2 in filtered list), and stepping back restores it.
         helpers.press_key("j<CR>")
         local step_text = helpers.current_text()
         assert(step_text:find("Line Comment", 1, true) == nil, "inapplicable line option hidden from select step")
@@ -111,8 +114,10 @@ return function(context)
         helpers.press_key("<CR><CR>")
         assert(wizard.is_open() == false, "confirming filtered step option closes modal")
         assert(vim.deep_equal(executed_calls, { "comment:file" }), "executes confirmed filtered option")
+    end
 
-        -- All commands filtered out renders empty fallback cleanly and ignores keys.
+    local function test_palette_shows_empty_placeholder_when_all_commands_are_filtered()
+        local commands = create_filtered_palette_commands({})
         wizard.open_palette({ commands[2] }, { has_session = false })
         assert(helpers.current_text():find("(no commands available)", 1, true) ~= nil, "all-filtered palette shows empty state")
         for _, key in ipairs({ "j", "k", "G", "gg", "<CR>" }) do
@@ -199,7 +204,8 @@ return function(context)
     end
 
     test_palette_renders_floating_window_wraps_hover_navigation_and_closes_without_executing()
-    test_palette_filters_non_executable_commands_preserves_step_back_and_filters_step_options()
+    test_palette_omits_non_executable_commands_and_preserves_step_back()
+    test_palette_shows_empty_placeholder_when_all_commands_are_filtered()
     test_palette_syncs_selection_on_cursor_moved_and_cancels_on_q_or_esc()
     test_zero_step_command_executes_immediately_and_prunes_stale_answers()
     test_empty_palette_renders_placeholder_and_ignores_navigation()

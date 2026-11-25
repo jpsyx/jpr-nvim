@@ -140,6 +140,7 @@ local context = {
 
 local is_suite_ok, suite_error = pcall(function()
     dofile(root .. "/tests/lua/palette_and_open_picker_spec/palette.lua")(context)
+    dofile(root .. "/tests/lua/palette_and_open_picker_spec/filtering.lua")(context)
     dofile(root .. "/tests/lua/palette_and_open_picker_spec/open_picker.lua")(context)
     dofile(root .. "/tests/lua/palette_and_open_picker_spec/session_integration.lua")(context)
 end)
