@@ -218,12 +218,50 @@ local function execute_comment_command(answers, context)
     return session_module().comment_current(cmd_opts)
 end
 
+local function is_live_session(context)
+    return type(context) == "table" and context.has_session == true and context.is_read_only ~= true
+end
+
+local function is_live_linked_pr_session(context)
+    return is_live_session(context) and context.is_linked_pr == true
+end
+
+local function is_comment_executable(context)
+    return is_live_session(context)
+        and (context.is_on_diff_line == true or context.can_comment_file == true)
+end
+
+local function is_suggest_executable(context)
+    return is_live_linked_pr_session(context) and context.is_in_changed_worktree_file == true
+end
+
+local function is_conversation_executable(context)
+    return type(context) == "table"
+        and context.has_session == true
+        and (context.is_read_only ~= true or context.has_cached_conversation == true)
+end
+
+local function is_agent_executable(context)
+    return type(context) == "table"
+        and context.has_session == true
+        and (context.is_read_only ~= true or context.has_live_agent == true)
+end
+
+local function is_send_executable(context)
+    return is_live_session(context) and (tonumber(context.local_unsent_count) or 0) > 0
+end
+
+local function is_close_executable(context)
+    return type(context) == "table" and (context.has_session == true or context.has_pending_tab == true)
+end
+
 local function create_comment_command_spec()
     return {
         id = "comment",
         label = "Add Review Comment",
         help = "Draft a new review comment on the current line, visual selection, or entire file.",
         requires_session = true,
+        when = is_comment_executable,
         steps = {
             {
                 id = "kind",
@@ -234,9 +272,33 @@ local function create_comment_command_spec()
                     return (context and context.is_on_diff_line) and "line" or "file"
                 end,
                 options = {
-                    { value = "line", label = "Line / Selection Comment", badge = "[line]", help = "Attach a review comment to the current diff line or visual selection." },
-                    { value = "file", label = "File-Level Comment", badge = "[file]", help = "Attach a review comment to the current file without anchoring to a line." },
-                    { value = "suggest", label = "Code Suggestion", badge = "[suggest]", help = "Draft a review comment pre-filled with a GitHub code suggestion block." },
+                    {
+                        value = "line",
+                        label = "Line / Selection Comment",
+                        badge = "[line]",
+                        help = "Attach a review comment to the current diff line or visual selection.",
+                        when = function(_answers, context)
+                            return type(context) == "table" and context.is_on_diff_line == true
+                        end,
+                    },
+                    {
+                        value = "file",
+                        label = "File-Level Comment",
+                        badge = "[file]",
+                        help = "Attach a review comment to the current file without anchoring to a line.",
+                        when = function(_answers, context)
+                            return type(context) == "table" and context.can_comment_file == true
+                        end,
+                    },
+                    {
+                        value = "suggest",
+                        label = "Code Suggestion",
+                        badge = "[suggest]",
+                        help = "Draft a review comment pre-filled with a GitHub code suggestion block.",
+                        when = function(_answers, context)
+                            return type(context) == "table" and context.is_on_diff_line == true
+                        end,
+                    },
                 },
             },
         },
@@ -250,6 +312,7 @@ local function create_agent_command_spec()
         label = "Coding Agent Panel",
         help = "Open, configure, or hide the interactive coding-agent terminal split for this review.",
         requires_session = true,
+        when = is_agent_executable,
         steps = {
             {
                 id = "provider",
@@ -274,14 +337,28 @@ local function create_agent_command_spec()
     }
 end
 
-local function create_session_action_spec(id, label, help, session_method)
+local function create_session_action_spec(id, label, help, session_method, when_predicate)
     return {
         id = id,
         label = label,
         help = help,
         requires_session = true,
+        when = when_predicate,
         execute = function()
             session_module()[session_method]()
+        end,
+    }
+end
+
+local function create_close_command_spec()
+    return {
+        id = "close",
+        label = "Close Review Session",
+        help = "Close the current tab's pull request review session and stop its background engine.",
+        requires_session = false,
+        when = is_close_executable,
+        execute = function()
+            session_module().close_current()
         end,
     }
 end
@@ -354,19 +431,19 @@ function M.create_command_specs()
     return {
         create_open_command_spec(),
         create_local_command_spec(),
-        create_session_action_spec("sync", "Sync with GitHub", "Sync with GitHub (or detect and link an open PR when reviewing locally).", "sync_current"),
+        create_session_action_spec("sync", "Sync with GitHub", "Sync with GitHub (or detect and link an open PR when reviewing locally).", "sync_current", is_live_session),
         create_toggle_command_spec(),
-        create_session_action_spec("stream", "Open Stream View", "View all changed files stacked continuously in a single scrollable diff stream.", "stream_current"),
+        create_session_action_spec("stream", "Open Stream View", "View all changed files stacked continuously in a single scrollable diff stream.", "stream_current", is_live_session),
         create_comment_command_spec(),
-        create_session_action_spec("suggest", "Suggest Code Change", "Draft a review comment pre-filled with a GitHub suggestion block for the current line.", "suggest_current"),
+        create_session_action_spec("suggest", "Suggest Code Change", "Draft a review comment pre-filled with a GitHub suggestion block for the current line.", "suggest_current", is_suggest_executable),
         create_session_action_spec("expand", "Expand Inline Threads", "Toggle inline expansion of review threads across diff and stream buffers.", "expand_current"),
-        create_session_action_spec("conversation", "Open PR Conversation", "Read and post top-level pull request issue comments in the main review window.", "conversation_current"),
-        create_session_action_spec("submit", "Submit Review", "Preview pending draft comments and submit your review decision to GitHub.", "submit_current"),
-        create_session_action_spec("push", "Push Head Branch", "Push local commits on the checked-out pull request branch back to GitHub.", "push_current"),
+        create_session_action_spec("conversation", "Open PR Conversation", "Read and post top-level pull request issue comments in the main review window.", "conversation_current", is_conversation_executable),
+        create_session_action_spec("submit", "Submit Review", "Preview pending draft comments and submit your review decision to GitHub.", "submit_current", is_live_linked_pr_session),
+        create_session_action_spec("push", "Push Head Branch", "Push local commits on the checked-out pull request branch back to GitHub.", "push_current", is_live_linked_pr_session),
         create_agent_command_spec(),
-        create_session_action_spec("send", "Send Local Threads to Agent", "Prompt the coding agent to address pending local review threads in this worktree.", "send_current"),
-        create_session_action_spec("prepass", "Run Agent Pre-Pass", "Ask the coding agent to scan the pull request diff and post local pre-pass findings.", "prepass_current"),
-        create_session_action_spec("close", "Close Review Session", "Close the current tab's pull request review session and stop its background engine.", "close_current"),
+        create_session_action_spec("send", "Send Local Threads to Agent", "Prompt the coding agent to address pending local review threads in this worktree.", "send_current", is_send_executable),
+        create_session_action_spec("prepass", "Run Agent Pre-Pass", "Ask the coding agent to scan the pull request diff and post local pre-pass findings.", "prepass_current", is_live_session),
+        create_close_command_spec(),
         create_keys_command_spec(),
     }
 end
