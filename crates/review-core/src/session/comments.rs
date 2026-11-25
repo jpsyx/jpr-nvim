@@ -27,6 +27,9 @@ impl ReviewSession {
     /// Cached `@mention` completion candidates, PR participants first.
     #[must_use]
     pub fn mentions(&self) -> &[MentionCandidate] {
+        if !self.is_linked() {
+            return &[];
+        }
         &self.saved.registry.mention_candidates
     }
 
@@ -47,7 +50,7 @@ impl ReviewSession {
         if self.is_local_thread(thread_id) {
             return self.reply_local_thread(thread_id, body);
         }
-        let pr = self.synced_pr()?.clone();
+        let pr = self.require_linked_pr()?.clone();
         let canonical_thread_id = self.get_canonical_id_from_id(thread_id);
         let root_database_id = self
             .find_thread(&canonical_thread_id)
@@ -91,7 +94,7 @@ impl ReviewSession {
         if self.is_local_message(message_id) {
             return self.edit_local_message(message_id, body);
         }
-        let _ = self.synced_pr()?;
+        let _ = self.require_linked_pr()?;
         let canonical_message_id = self.get_canonical_id_from_id(message_id);
         let (thread_id, anchor_kind, current_sync) = self.locate_message(&canonical_message_id)?;
         if let Some(result) =
@@ -128,7 +131,7 @@ impl ReviewSession {
         if self.is_local_message(message_id) {
             return self.delete_local_message(message_id);
         }
-        let _ = self.synced_pr()?;
+        let _ = self.require_linked_pr()?;
         let canonical_message_id = self.get_canonical_id_from_id(message_id);
         let (thread_id, anchor_kind, _) = self.locate_message(&canonical_message_id)?;
         if canonical_message_id.starts_with("tmp-") {
@@ -175,7 +178,7 @@ impl ReviewSession {
         if self.is_local_thread(thread_id) {
             return self.set_local_resolved(thread_id, is_resolved);
         }
-        let _ = self.synced_pr()?;
+        let _ = self.require_linked_pr()?;
         let canonical_thread_id = self.get_canonical_id_from_id(thread_id);
         let target_state = if is_resolved {
             ThreadState::Resolved
@@ -236,7 +239,7 @@ impl ReviewSession {
         if self.is_local_message(message_id) {
             return self.toggle_local_reaction(message_id, content);
         }
-        let _ = self.synced_pr()?;
+        let _ = self.require_linked_pr()?;
         let canonical_message_id = self.get_canonical_id_from_id(message_id);
         let (thread_id, _, _) = self.locate_message(&canonical_message_id)?;
         let message = find_message_mut(&mut self.threads, &canonical_message_id)
@@ -265,10 +268,10 @@ impl ReviewSession {
     /// Retries sending a [`MessageSync::Failed`](review_model::MessageSync::Failed)
     /// message to the forge and returns the updated [`SessionView`].
     pub fn retry_message(&mut self, message_id: &str) -> Result<SessionView> {
+        let _ = self.require_linked_pr()?;
         if self.is_local_message(message_id) {
             bail!("local comments cannot be retried on GitHub");
         }
-        let _ = self.synced_pr()?;
         let canonical_message_id = self.get_canonical_id_from_id(message_id);
         self.enqueue_failed_message(&canonical_message_id, None)?;
         let _ = self.send_queued_comments();

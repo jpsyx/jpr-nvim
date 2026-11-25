@@ -132,7 +132,10 @@ impl ReviewSession {
     }
 
     fn pull(&self) -> Result<(PullRequest, ForgeSnapshot)> {
-        let pr = self.ports.forge.pull_request(self.number)?;
+        let super::SessionTarget::Pr { number } = self.target else {
+            anyhow::bail!("cannot pull pull request while unlinked");
+        };
+        let pr = self.ports.forge.pull_request(number)?;
         let snapshot = self.ports.forge.fetch(&pr)?;
         Ok((pr, snapshot))
     }

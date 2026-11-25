@@ -47,7 +47,7 @@ impl ReviewSession {
         anchor: Anchor,
         body: &str,
     ) -> Result<Thread> {
-        let pr = self.synced_pr()?.clone();
+        let pr = self.require_linked_pr()?.clone();
         if anchor.kind == AnchorKind::Pr {
             return Ok(self.insert_pr_comment(&pr, body));
         }

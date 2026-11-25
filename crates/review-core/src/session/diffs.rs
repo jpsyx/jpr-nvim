@@ -158,10 +158,7 @@ impl ReviewSession {
     /// `HEAD`, unless both still match the cache, and starts a fresh cache
     /// when either commit moves.
     pub(super) fn prepare_base(&mut self) -> Result<()> {
-        let base_sha = self.synced_pr()?.base_sha.clone();
-        if base_sha.is_empty() {
-            bail!("the base commit is not known yet; sync with GitHub first");
-        }
+        let base_sha = self.active_base_sha()?;
         let head_sha = self.ports.workspace.head_commit()?;
         if !self.base_cache.merge_base.is_empty()
             && self.base_cache.base_sha == base_sha

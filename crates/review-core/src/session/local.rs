@@ -80,6 +80,7 @@ impl ReviewSession {
         if body.trim().is_empty() {
             bail!("comment body cannot be empty");
         }
+        let _ = self.require_linked_pr()?;
         let mut anchor = {
             let local_thread = self
                 .find_thread(thread_id)

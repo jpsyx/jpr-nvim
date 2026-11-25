@@ -180,14 +180,7 @@ impl ReviewSession {
         if let Some(previous_digests) = self.disk_digests.as_ref() {
             candidates.extend(previous_digests.keys().cloned());
         }
-        if self
-            .saved
-            .session
-            .pr
-            .as_ref()
-            .is_some_and(|pr| !pr.base_sha.is_empty())
-            && self.prepare_base().is_ok()
-        {
+        if self.has_active_base() && self.prepare_base().is_ok() {
             let merge_base = self.base_cache.merge_base.clone();
             if let Ok(changed_paths) = self.ports.workspace.list_changed_files_since(&merge_base) {
                 candidates.extend(changed_paths);

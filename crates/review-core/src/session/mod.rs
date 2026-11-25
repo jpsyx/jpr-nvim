@@ -7,6 +7,8 @@ mod comments;
 mod diffs;
 mod local;
 mod local_files;
+#[cfg(test)]
+mod local_mode_tests;
 mod push;
 mod submit;
 mod sync;
@@ -21,9 +23,10 @@ pub use local_files::PathRename;
 use std::collections::BTreeMap;
 use std::sync::mpsc::{self, Receiver, Sender};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use review_model::{
-    ChangedFile, Event, Origin, PullRequest, SessionView, SyncState, Thread, WorktreeStatus,
+    ChangedFile, Event, LocalReviewContext, Origin, PullRequest, SessionView, SyncState, Thread,
+    WorktreeStatus,
 };
 
 use crate::ports::{Ports, StoreSnapshot};
@@ -31,17 +34,24 @@ use crate::presenter::session_view;
 use crate::viewed::apply_queued;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+enum SessionTarget {
+    Pr { number: u64 },
+    Local(Box<LocalReviewContext>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 struct PushedHead {
     base_pr_head_sha: String,
     pushed_sha: String,
 }
 
-/// One pull request's review session: the facade every frontend talks to.
+/// One pull request's or local worktree's review session: the facade every
+/// frontend talks to.
 ///
 /// It owns the session state, reaches the outside world only through its
 /// [`Ports`], and announces changes as [`Event`]s to its subscribers.
 pub struct ReviewSession {
-    number: u64,
+    target: SessionTarget,
     ports: Ports,
     saved: StoreSnapshot,
     threads: Vec<Thread>,
@@ -60,6 +70,21 @@ impl ReviewSession {
     /// Opens pull request `number`'s session from what its store saved.
     /// Nothing talks to the forge until [`sync`](Self::sync).
     pub fn open(number: u64, ports: Ports) -> Result<Self> {
+        Self::open_with_target(SessionTarget::Pr { number }, ports)
+    }
+
+    /// Opens an unlinked local worktree review session from what its store
+    /// saved, immediately populating local changed files and disk digests.
+    pub fn open_local(context: LocalReviewContext, ports: Ports) -> Result<Self> {
+        let mut session = Self::open_with_target(SessionTarget::Local(Box::new(context)), ports)?;
+        session.sync = SyncState::Never;
+        session.refresh_local_files();
+        let initial_digests = session.collect_worktree_digests();
+        session.disk_digests = Some(initial_digests);
+        Ok(session)
+    }
+
+    fn open_with_target(target: SessionTarget, ports: Ports) -> Result<Self> {
         let mut saved = ports.store.load()?;
         // The queue is saved before the files, so a crash between the two
         // can leave the files behind a queued mark.
@@ -71,7 +96,7 @@ impl ReviewSession {
         let mut threads = saved.registry.threads.clone();
         threads.extend(saved.local.threads.clone());
         Ok(Self {
-            number,
+            target,
             ports,
             saved,
             threads,
@@ -85,6 +110,64 @@ impl ReviewSession {
             pushed_head: None,
             pending_head_move_from: None,
         })
+    }
+
+    /// Whether this session is linked to a GitHub pull request.
+    #[must_use]
+    pub const fn is_linked(&self) -> bool {
+        matches!(self.target, SessionTarget::Pr { .. })
+    }
+
+    /// Local review context when unlinked, or `None` once linked to a PR.
+    pub(super) fn local_context(&self) -> Option<&LocalReviewContext> {
+        match &self.target {
+            SessionTarget::Local(context) => Some(context),
+            SessionTarget::Pr { .. } => None,
+        }
+    }
+
+    /// Whether a base commit is available for computing local worktree diffs.
+    pub(super) fn has_active_base(&self) -> bool {
+        match &self.target {
+            SessionTarget::Local(context) => {
+                !context.base_sha.is_empty() || !context.base_ref.is_empty()
+            }
+            SessionTarget::Pr { .. } => self
+                .saved
+                .session
+                .pr
+                .as_ref()
+                .is_some_and(|pr| !pr.base_sha.is_empty()),
+        }
+    }
+
+    /// Resolves the active base commit SHA, refreshing `base_ref` in local mode
+    /// if the local base branch moved.
+    pub(super) fn active_base_sha(&mut self) -> Result<String> {
+        match &mut self.target {
+            SessionTarget::Pr { .. } => {
+                let base_sha = self.synced_pr()?.base_sha.clone();
+                if base_sha.is_empty() {
+                    bail!("the base commit is not known yet; sync with GitHub first");
+                }
+                Ok(base_sha)
+            }
+            SessionTarget::Local(context) => {
+                if let Ok(resolved) = self.ports.workspace.resolve_ref(&context.base_ref)
+                    && !resolved.is_empty()
+                {
+                    context.base_sha.clone_from(&resolved);
+                    return Ok(resolved);
+                }
+                if context.base_sha.is_empty() {
+                    bail!(
+                        "the local base commit for {} is not known",
+                        context.base_ref
+                    );
+                }
+                Ok(context.base_sha.clone())
+            }
+        }
     }
 
     /// Records the process serving this session, so others can find it.
@@ -125,7 +208,7 @@ impl ReviewSession {
         let effective = self.effective_files();
         session_view(
             self.saved.session.pr.as_ref(),
-            None,
+            self.local_context(),
             &effective,
             &self.threads,
             &self.sync,
@@ -189,6 +272,16 @@ impl ReviewSession {
             .pr
             .as_ref()
             .context("the pull request has not synced with GitHub yet")
+    }
+
+    /// The synced pull request, refusing unlinked local sessions with a clear notice.
+    pub(super) fn require_linked_pr(&self) -> Result<&PullRequest> {
+        if !self.is_linked() {
+            bail!(
+                "this review is not linked to a GitHub pull request yet; run :Jpr sync once a PR is open"
+            );
+        }
+        self.synced_pr()
     }
 
     fn publish(&mut self, event: &Event) {

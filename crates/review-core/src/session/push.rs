@@ -10,7 +10,7 @@ impl ReviewSession {
     /// forge sync. When `git push` succeeds and the follow-up sync fails,
     /// returns `Ok` with `is_pushed: true` and `sync_error: Some(..)`.
     pub fn push(&mut self) -> Result<PushResult> {
-        let pr = self.synced_pr()?.clone();
+        let pr = self.require_linked_pr()?.clone();
         let effective_remote_sha = self
             .effective_remote_head_sha()
             .unwrap_or(&pr.head_sha)

@@ -84,13 +84,7 @@ impl ReviewSession {
     /// Recomputes `local_files` from the worktree delta since `merge_base`,
     /// caching line counts per `(path, disk_digest)`. Returns whether the list changed.
     pub(super) fn refresh_local_files(&mut self) -> bool {
-        let has_base = self
-            .saved
-            .session
-            .pr
-            .as_ref()
-            .is_some_and(|pr| !pr.base_sha.is_empty());
-        if !has_base || self.prepare_base().is_err() {
+        if !self.has_active_base() || self.prepare_base().is_err() {
             return false;
         }
         let merge_base = self.base_cache.merge_base.clone();

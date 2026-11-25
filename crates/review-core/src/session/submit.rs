@@ -45,7 +45,7 @@ impl ReviewSession {
         cursor_line: u64,
         comment_body: Option<&str>,
     ) -> Result<(SuggestedEdit, Thread, SessionView)> {
-        let pr = self.synced_pr()?.clone();
+        let pr = self.require_linked_pr()?.clone();
         self.validate_github_anchor_file(&Anchor::file(path))?;
         let head_bytes = self
             .ports
@@ -68,7 +68,7 @@ impl ReviewSession {
 
     /// Preview of pending draft comments and allowed review actions.
     pub fn submit_preview(&self) -> Result<SubmitPreview> {
-        let pr = self.synced_pr()?;
+        let pr = self.require_linked_pr()?;
         let mut preview = create_submit_preview_from_threads(
             &pr.author,
             self.saved.registry.viewer_login.as_deref(),
@@ -94,7 +94,7 @@ impl ReviewSession {
 
     /// Submits the pending review (or a zero-draft review) with `event` and `body`.
     pub fn submit_review(&mut self, event: ReviewEvent, body: &str) -> Result<SessionView> {
-        let pr = self.synced_pr()?.clone();
+        let pr = self.require_linked_pr()?.clone();
         let preview = self.submit_preview()?;
         if let Some(reason) = preview.blocked_reason {
             bail!("{reason}");

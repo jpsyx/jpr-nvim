@@ -8,10 +8,12 @@ use review_model::{
     ThreadState,
 };
 
-use super::ReviewSession;
+use super::{ReviewSession, SessionTarget};
 use crate::agent::{
-    build_conflict_prompt_from_paths, build_prepass_prompt_from_pr, build_send_prompt_from_threads,
-    build_uuid_v4_from_seed, select_dispatchable_threads,
+    build_conflict_prompt_from_paths, build_local_prepass_prompt_from_context,
+    build_local_send_prompt_from_threads, build_prepass_prompt_from_pr,
+    build_send_prompt_from_threads, build_uuid_v4_from_seed, seed_from_local_context,
+    select_dispatchable_threads,
 };
 use crate::reanchor::{normalize_prepass_anchor, validate_safe_relative_path};
 
@@ -37,8 +39,12 @@ impl ReviewSession {
         }
         let mut updated_saved = self.saved.clone();
         updated_saved.local.next_local_id += 1;
+        let seed = match &self.target {
+            SessionTarget::Pr { number } => *number,
+            SessionTarget::Local(context) => seed_from_local_context(context),
+        };
         let session_id = build_uuid_v4_from_seed(
-            self.number,
+            seed,
             self.ports.clock.now(),
             updated_saved.local.next_local_id,
         );
@@ -66,8 +72,15 @@ impl ReviewSession {
         if selected.is_empty() {
             bail!("no unsent local comments to send");
         }
-        let pr = self.synced_pr()?;
-        let prompt = build_send_prompt_from_threads(pr, &selected);
+        let prompt = match &self.target {
+            SessionTarget::Pr { .. } => {
+                let pr = self.synced_pr()?;
+                build_send_prompt_from_threads(pr, &selected)
+            }
+            SessionTarget::Local(context) => {
+                build_local_send_prompt_from_threads(context, &selected)
+            }
+        };
         Ok(AgentDispatch {
             round: self.saved.local.next_round.max(1),
             kind: AgentRoundKind::Send,
@@ -117,14 +130,18 @@ impl ReviewSession {
         Ok((entry, view))
     }
 
-    /// Prepares a pre-pass review prompt for the currently synced pull request.
+    /// Prepares a pre-pass review prompt for the currently synced pull request
+    /// or unlinked local worktree review.
     pub fn prepare_prepass(&self, kind: AgentKind) -> Result<AgentDispatch> {
-        let pr = self.synced_pr()?;
+        let prompt = match &self.target {
+            SessionTarget::Pr { .. } => build_prepass_prompt_from_pr(self.synced_pr()?),
+            SessionTarget::Local(context) => build_local_prepass_prompt_from_context(context),
+        };
         Ok(AgentDispatch {
             round: self.saved.local.next_round.max(1),
             kind: AgentRoundKind::Prepass,
             thread_ids: Vec::new(),
-            prompt: build_prepass_prompt_from_pr(pr),
+            prompt,
             profile: AgentProfile::from_kind(kind),
         })
     }
@@ -136,7 +153,7 @@ impl ReviewSession {
         conflicted_paths: &[String],
         kind: AgentKind,
     ) -> Result<AgentDispatch> {
-        let pr = self.synced_pr()?;
+        let pr = self.require_linked_pr()?;
         let mut normalized_paths = Vec::with_capacity(conflicted_paths.len());
         for path in conflicted_paths {
             validate_safe_relative_path(path)?;

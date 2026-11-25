@@ -3,7 +3,8 @@
 use std::fmt::Write;
 
 use review_model::{
-    AgentThreadState, Anchor, AnchorKind, Origin, PullRequest, Side, Thread, ThreadState,
+    AgentThreadState, Anchor, AnchorKind, LocalReviewContext, Origin, PullRequest, Side, Thread,
+    ThreadState,
 };
 
 /// Whether `thread` should be sent on `:Jpr send`: local, open, `Unsent`, and
@@ -89,6 +90,62 @@ pub fn build_send_prompt_from_threads(pr: &PullRequest, threads: &[&Thread]) -> 
         "Reply to every item above with `jpr-review reply <thread-id> --body \"...\"`. Never push and never touch GitHub.",
     );
     output
+}
+
+/// Builds the single-item or numbered-batch prompt for `threads` in an unlinked
+/// local worktree review.
+#[must_use]
+pub fn build_local_send_prompt_from_threads(
+    context: &LocalReviewContext,
+    threads: &[&Thread],
+) -> String {
+    let mut output = String::new();
+    let count = threads.len();
+    let noun = if count == 1 { "comment" } else { "comments" };
+    let short_sha = context.base_sha.get(..7).unwrap_or(&context.base_sha);
+    let _ = writeln!(
+        output,
+        "Address {count} local review {noun} on local branch `{}` against `{}` (`{short_sha}`).",
+        context.branch, context.base_ref
+    );
+    output.push_str("First run `jpr-review guide` and follow every rule in that contract.\n\n");
+    for (index, thread) in threads.iter().enumerate() {
+        append_thread_item(&mut output, index + 1, thread);
+    }
+    output.push_str(
+        "Reply to every item above with `jpr-review reply <thread-id> --body \"...\"`. Keep edits unstaged in this worktree for the reviewer to stage and commit. Never commit, never push, and never touch GitHub.",
+    );
+    output
+}
+
+/// Builds the `:Jpr prepass` prompt for an unlinked local worktree review.
+#[must_use]
+pub fn build_local_prepass_prompt_from_context(context: &LocalReviewContext) -> String {
+    let short_sha = context.base_sha.get(..7).unwrap_or(&context.base_sha);
+    format!(
+        "Run a local pre-pass code review of local branch `{}` against `{}` (`{short_sha}`).\n\
+         1. Run `jpr-review guide` first and follow the Pre-pass section.\n\
+         2. Inspect the diff against `{}` in this worktree and verify surrounding callers before flagging anything.\n\
+         3. Write only high-signal findings (`[critical]`, `[high]`, `[medium]`, `[low]`, or `[nit]`) as JSON to `jpr-review prepass-write`.\n\
+         4. Keep edits unstaged in this worktree for the reviewer to stage and commit. Never commit, never push, and never touch GitHub.",
+        context.branch, context.base_ref, context.base_sha
+    )
+}
+
+/// Derives a deterministic 64-bit seed from a local review's branch and base ref.
+#[must_use]
+pub(crate) fn seed_from_local_context(context: &LocalReviewContext) -> u64 {
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for byte in context
+        .branch
+        .bytes()
+        .chain(std::iter::once(0))
+        .chain(context.base_ref.bytes())
+    {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0100_0000_01b3_u64);
+    }
+    hash
 }
 
 fn append_thread_item(output: &mut String, item_number: usize, thread: &Thread) {

@@ -175,18 +175,20 @@ fn run_ticker_tick(
         last_watch.elapsed(),
         guard.has_queued(),
     );
-    match actions.poll {
-        PollStep::Sync => {
-            let _ = guard.sync();
-            let now = Instant::now();
-            *last_sync = now;
-            *last_retry = now;
+    if guard.is_linked() {
+        match actions.poll {
+            PollStep::Sync => {
+                let _ = guard.sync();
+                let now = Instant::now();
+                *last_sync = now;
+                *last_retry = now;
+            }
+            PollStep::Retry => {
+                let _ = guard.flush_queued();
+                *last_retry = Instant::now();
+            }
+            PollStep::Wait => {}
         }
-        PollStep::Retry => {
-            let _ = guard.flush_queued();
-            *last_retry = Instant::now();
-        }
-        PollStep::Wait => {}
     }
     if actions.should_watch {
         let _ = guard.poll_worktree_files();
@@ -303,6 +305,58 @@ mod tests {
                 poll: PollStep::Retry,
                 should_watch: false,
             }
+        );
+    }
+
+    #[test]
+    fn ticker_skips_sync_and_retry_while_unlinked_but_still_watches_worktree() {
+        use review_core::fakes::{
+            FakeForge, FakeWorkspace, FixedClock, MemoryStore, create_fake_ports, sample_pr,
+        };
+        use review_model::LocalReviewContext;
+
+        let forge = FakeForge::new(sample_pr(), review_core::ports::ForgeSnapshot::default());
+        let store = MemoryStore::default();
+        let workspace = FakeWorkspace::default();
+        workspace.put_base("src/a.rs", "old\n");
+        workspace.put_disk("src/a.rs", "new\n");
+        let clock = FixedClock::at(100);
+        let ports = create_fake_ports(&forge, &store, &workspace, &clock);
+        let context = LocalReviewContext {
+            branch: "feat/local".into(),
+            base_ref: "develop".into(),
+            base_sha: "base000".into(),
+            repo: None,
+        };
+        let session = Mutex::new(ReviewSession::open_local(context, ports).expect("local opens"));
+        workspace.put_disk("src/b.rs", "added\n");
+
+        let config = TickerConfig {
+            poll_every: Some(Duration::from_millis(1)),
+            retry_every: Some(Duration::from_millis(1)),
+            watch_every: Some(Duration::from_millis(1)),
+            wake_interval: Duration::from_millis(1),
+        };
+        let past = Instant::now()
+            .checked_sub(Duration::from_secs(1))
+            .expect("past instant");
+        let mut last_sync = past;
+        let mut last_retry = past;
+        let mut last_watch = past;
+
+        run_ticker_tick(
+            &session,
+            config,
+            &mut last_sync,
+            &mut last_retry,
+            &mut last_watch,
+        );
+
+        assert_eq!(forge.fetches(), 0, "unlinked ticker must not sync forge");
+        let files = session.lock().expect("lock").view().files;
+        assert!(
+            files.iter().any(|row| row.path == "src/b.rs"),
+            "worktree watch must still refresh local files"
         );
     }
 }
