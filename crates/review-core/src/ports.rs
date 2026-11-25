@@ -167,6 +167,13 @@ pub trait Forge: Send {
     /// The open pull request numbered `number`. The session asks for it at the
     /// start of every sync.
     fn pull_request(&self, number: u64) -> Result<PullRequest>;
+    /// Looks up the open pull request associated with the checked-out branch in
+    /// the current worktree (`gh pr view --json ...`), returning `Ok(None)` when
+    /// no open pull request exists for this branch.
+    fn current_branch_pr(&self) -> Result<Option<PullRequest>>;
+    /// Pins subsequent forge queries to `owner`/`repo` after linking a local
+    /// review to a discovered pull request.
+    fn pin_repo(&self, _owner: &str, _repo: &str) {}
     /// The pull request's threads, changed files and viewed state, in one
     /// snapshot.
     fn fetch(&self, pr: &PullRequest) -> Result<ForgeSnapshot>;
@@ -302,6 +309,8 @@ pub trait Workspace: Send {
     fn list_changed_files_since(&self, commit: &str) -> Result<Vec<String>>;
     /// Current `HEAD` commit identifier of the checkout.
     fn head_commit(&self) -> Result<String>;
+    /// Resolves a branch name, tag, or commit reference to its full commit SHA.
+    fn resolve_ref(&self, reference: &str) -> Result<String>;
     /// Dirty paths and ahead/behind counts relative to `remote_head_sha` (when known).
     fn worktree_status(&self, remote_head_sha: Option<&str>) -> Result<WorktreeStatus>;
     /// Pushes `HEAD` to `pr`'s remote branch and returns the pushed `HEAD` commit SHA.

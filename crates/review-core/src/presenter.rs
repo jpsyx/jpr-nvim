@@ -3,19 +3,20 @@
 use std::collections::BTreeSet;
 
 use review_model::{
-    AnchorKind, ChangedFile, FileRow, MessageSync, Origin, PullRequest, SessionView, SyncState,
-    Thread, ViewedState, WorktreeStatus,
+    AnchorKind, ChangedFile, FileRow, LocalReviewContext, MessageSync, Origin, PullRequest,
+    SessionView, SyncState, Thread, ViewedState, WorktreeStatus,
 };
 
 use crate::comments::count_code_threads;
 use crate::tree::create_file_tree_from_paths;
 
-/// The session's status view: the pull request, its files with viewed state
-/// and thread counts, how many viewed marks wait for the forge, and how the
-/// last sync went.
+/// The session's status view: the pull request (or local worktree context),
+/// its files with viewed state and thread counts, how many viewed marks wait
+/// for the forge, and how the last sync went.
 #[must_use]
 pub fn session_view(
     pr: Option<&PullRequest>,
+    local_context: Option<&LocalReviewContext>,
     files: &[(ChangedFile, bool)],
     threads: &[Thread],
     sync: &SyncState,
@@ -24,6 +25,7 @@ pub fn session_view(
 ) -> SessionView {
     SessionView {
         pr: pr.cloned(),
+        local_context: local_context.cloned(),
         files: create_file_rows_from_files(files, threads, worktree_status),
         tree: create_file_tree_from_paths(files.iter().map(|(file, _)| file.path.as_str())),
         viewed_count: files
@@ -149,6 +151,7 @@ mod tests {
         ];
         let view = session_view(
             Some(&sample_pr()),
+            None,
             &files,
             &threads,
             &SyncState::Synced { at: 5 },
@@ -179,6 +182,7 @@ mod tests {
             (changed_file("a.rs", ViewedState::Unviewed), false),
         ];
         let view = session_view(
+            None,
             None,
             &files,
             &[],
@@ -213,6 +217,7 @@ mod tests {
         };
         let view = session_view(
             Some(&sample_pr()),
+            None,
             &files,
             &threads,
             &SyncState::Synced { at: 5 },
@@ -225,5 +230,27 @@ mod tests {
         assert_eq!(view.files[0].threads - view.files[0].local_threads, 1);
         assert!(view.files[1].is_modified);
         assert_eq!((view.files[1].threads, view.files[1].local_threads), (1, 1));
+    }
+
+    #[test]
+    fn session_view_carries_local_context_when_unlinked() {
+        let context = review_model::LocalReviewContext {
+            branch: "feat/local".into(),
+            base_ref: "develop".into(),
+            base_sha: "base000".into(),
+            repo: Some("octo/widgets".into()),
+        };
+        let files = [(changed_file("a.rs", ViewedState::Unviewed), true)];
+        let view = session_view(
+            None,
+            Some(&context),
+            &files,
+            &[],
+            &SyncState::Never,
+            0,
+            &WorktreeStatus::default(),
+        );
+        assert!(view.pr.is_none());
+        assert_eq!(view.local_context, Some(context));
     }
 }

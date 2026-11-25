@@ -110,4 +110,19 @@ pub trait ReviewStore: Send {
     fn append_round(&self, round: &AgentRound) -> Result<()>;
     /// All persisted agent rounds, in append order.
     fn rounds(&self) -> Result<Vec<AgentRound>>;
+    /// Retargets persistence from a local review directory to the pull request's
+    /// canonical state directory, returning any preexisting PR snapshot to merge.
+    fn retarget_to_pr(
+        &self,
+        _owner: &str,
+        _repo: &str,
+        _number: u64,
+    ) -> Result<Option<StoreSnapshot>> {
+        Ok(None)
+    }
+    /// Retires migrated files from the previous local state directory once the
+    /// upgraded PR state has been durably saved.
+    fn finalize_retarget(&self) -> Result<()> {
+        Ok(())
+    }
 }

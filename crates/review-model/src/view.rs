@@ -98,6 +98,21 @@ pub struct TreeRow {
     pub file: Option<usize>,
 }
 
+/// Context for an unlinked local worktree review session (`SessionView::pr == None`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalReviewContext {
+    /// Checked-out branch name, or `detached-<short-sha>` when HEAD is detached.
+    pub branch: String,
+    /// Base branch or git ref being diffed against (for example `develop` or `main`).
+    pub base_ref: String,
+    /// Resolved full commit SHA of `base_ref`.
+    pub base_sha: String,
+    /// Inferred `owner/name` repository from `origin` remote, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
+}
+
 /// Everything a frontend needs to draw the session's status. The session
 /// returns it for a snapshot or a sync and sends it with every `Synced` event,
 /// so a frontend redraws from it alone.
@@ -106,6 +121,10 @@ pub struct TreeRow {
 pub struct SessionView {
     /// The pull request, or `None` until a sync has ever succeeded for it.
     pub pr: Option<PullRequest>,
+    /// Local worktree review context when unlinked (`pr == None`); omitted once
+    /// linked to a pull request (`pr == Some(..)`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub local_context: Option<LocalReviewContext>,
     /// The changed files, in the forge's order.
     pub files: Vec<FileRow>,
     /// The changed files as a tree, for a file panel.
@@ -244,6 +263,7 @@ mod tests {
     fn create_sample_view() -> SessionView {
         SessionView {
             pr: None,
+            local_context: None,
             files: vec![FileRow {
                 path: "a.rs".into(),
                 additions: 1,
@@ -386,5 +406,34 @@ mod tests {
         assert_eq!(decoded.files[0].local_threads, 0);
         assert!(!decoded.files[0].is_local_only);
         assert_eq!(decoded.worktree_status, WorktreeStatus::default());
+        assert_eq!(decoded.local_context, None);
+    }
+
+    #[test]
+    fn local_context_serializes_camel_case_and_is_omitted_when_none() {
+        let mut view = create_sample_view();
+        let encoded_none = serde_json::to_value(&view).unwrap();
+        assert!(encoded_none.get("localContext").is_none());
+
+        view.local_context = Some(LocalReviewContext {
+            branch: "feat/local".into(),
+            base_ref: "develop".into(),
+            base_sha: "abc1234".into(),
+            repo: Some("octo/widgets".into()),
+        });
+        let encoded_some = serde_json::to_value(&view).unwrap();
+        assert_eq!(
+            encoded_some["localContext"],
+            serde_json::json!({
+                "branch": "feat/local",
+                "baseRef": "develop",
+                "baseSha": "abc1234",
+                "repo": "octo/widgets",
+            })
+        );
+
+        view.local_context.as_mut().unwrap().repo = None;
+        let encoded_no_repo = serde_json::to_value(&view).unwrap();
+        assert!(encoded_no_repo["localContext"].get("repo").is_none());
     }
 }

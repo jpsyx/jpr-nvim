@@ -162,6 +162,21 @@ impl Workspace for GitWorkspace {
         crate::status::read_head_commit(&self.dir)
     }
 
+    fn resolve_ref(&self, reference: &str) -> Result<String> {
+        let stdout = run(
+            "git",
+            &[
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                &format!("{reference}^{{commit}}"),
+            ],
+            &self.dir,
+        )
+        .with_context(|| format!("resolving git ref {reference:?}"))?;
+        Ok(stdout.trim().to_owned())
+    }
+
     fn worktree_status(&self, remote_head_sha: Option<&str>) -> Result<WorktreeStatus> {
         crate::status::read_worktree_status(&self.dir, remote_head_sha)
     }

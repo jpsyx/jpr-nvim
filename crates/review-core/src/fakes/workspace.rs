@@ -25,6 +25,7 @@ struct WorkspaceState {
     disk_read_failures: HashMap<String, String>,
     head_commit: Option<String>,
     head_commit_calls: usize,
+    ref_shas: HashMap<String, String>,
     status_remote_shas: Vec<Option<String>>,
     status_override: Option<WorktreeStatus>,
     push_failure: Option<String>,
@@ -89,6 +90,13 @@ impl FakeWorkspace {
     /// Sets the `HEAD` commit SHA reported by [`Workspace::head_commit`].
     pub fn set_head_commit(&self, sha: &str) {
         self.lock().head_commit = Some(sha.to_owned());
+    }
+
+    /// Sets the commit SHA reported by [`Workspace::resolve_ref`] for `reference`.
+    pub fn set_ref_sha(&self, reference: &str, sha: &str) {
+        self.lock()
+            .ref_shas
+            .insert(reference.to_owned(), sha.to_owned());
     }
 
     /// Overrides what [`Workspace::worktree_status`] returns, or clears the
@@ -251,6 +259,18 @@ impl Workspace for FakeWorkspace {
         let mut state = self.lock();
         state.head_commit_calls += 1;
         Ok(state.current_head_commit())
+    }
+
+    fn resolve_ref(&self, reference: &str) -> Result<String> {
+        let state = self.lock();
+        if let Some(message) = &state.failure {
+            return Err(anyhow!("{message}"));
+        }
+        Ok(state
+            .ref_shas
+            .get(reference)
+            .cloned()
+            .unwrap_or_else(|| "base000".to_owned()))
     }
 
     fn worktree_status(&self, remote_head_sha: Option<&str>) -> Result<WorktreeStatus> {

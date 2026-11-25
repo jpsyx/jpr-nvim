@@ -125,6 +125,7 @@ impl ReviewSession {
         let effective = self.effective_files();
         session_view(
             self.saved.session.pr.as_ref(),
+            None,
             &effective,
             &self.threads,
             &self.sync,

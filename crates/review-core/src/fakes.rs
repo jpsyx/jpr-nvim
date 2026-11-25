@@ -78,6 +78,8 @@ pub fn github_thread(id: &str, path: &str) -> Thread {
 #[derive(Debug, Default)]
 struct ForgeState {
     pr: Option<PullRequest>,
+    current_branch_pr_override: Option<Option<PullRequest>>,
+    pinned_repo: Option<String>,
     snapshot: ForgeSnapshot,
     failure: Option<String>,
     fetches: usize,
@@ -117,6 +119,24 @@ impl FakeForge {
     /// Replaces what `pull_request` reports.
     pub fn set_pr(&self, pr: PullRequest) {
         self.lock().pr = Some(pr);
+    }
+
+    /// Clears the pull request reported by `pull_request` and `current_branch_pr`.
+    pub fn clear_pr(&self) {
+        let mut state = self.lock();
+        state.pr = None;
+        state.current_branch_pr_override = Some(None);
+    }
+
+    /// Overrides what `current_branch_pr` returns.
+    pub fn set_current_branch_pr(&self, pr: Option<PullRequest>) {
+        self.lock().current_branch_pr_override = Some(pr);
+    }
+
+    /// Repository pinned via [`Forge::pin_repo`], if any.
+    #[must_use]
+    pub fn pinned_repo(&self) -> Option<String> {
+        self.lock().pinned_repo.clone()
     }
 
     /// Replaces what `fetch` reports.
@@ -172,6 +192,21 @@ impl Forge for FakeForge {
             .clone()
             .filter(|pr| pr.number == number)
             .ok_or_else(|| anyhow!("no pull request #{number}"))
+    }
+
+    fn current_branch_pr(&self) -> Result<Option<PullRequest>> {
+        let state = self.lock();
+        if let Some(message) = state.failure.as_ref().or(state.read_failure.as_ref()) {
+            return Err(anyhow!("{message}"));
+        }
+        Ok(match &state.current_branch_pr_override {
+            Some(overridden) => overridden.clone(),
+            None => state.pr.clone(),
+        })
+    }
+
+    fn pin_repo(&self, owner: &str, repo: &str) {
+        self.lock().pinned_repo = Some(format!("{owner}/{repo}"));
     }
 
     fn fetch(&self, _pr: &PullRequest) -> Result<ForgeSnapshot> {
@@ -275,6 +310,10 @@ struct MemoryStoreState {
     snapshot: StoreSnapshot,
     rounds: Vec<AgentRound>,
     save_failure: Option<String>,
+    retarget_snapshot: Option<StoreSnapshot>,
+    retarget_failure: Option<String>,
+    retargeted_prs: Vec<(String, String, u64)>,
+    finalized_retarget_count: usize,
 }
 
 /// A store that keeps the snapshot and rounds in memory, for tests that open a
@@ -295,6 +334,28 @@ impl MemoryStore {
     /// Makes later `save` calls fail with `message`, or succeed again with `None`.
     pub fn fail_saves_with(&self, message: Option<&str>) {
         self.lock().save_failure = message.map(str::to_owned);
+    }
+
+    /// Preloads an existing PR snapshot returned by [`ReviewStore::retarget_to_pr`].
+    pub fn set_retarget_snapshot(&self, snapshot: Option<StoreSnapshot>) {
+        self.lock().retarget_snapshot = snapshot;
+    }
+
+    /// Makes later `retarget_to_pr` calls fail with `message`, or succeed again with `None`.
+    pub fn fail_retarget_with(&self, message: Option<&str>) {
+        self.lock().retarget_failure = message.map(str::to_owned);
+    }
+
+    /// Every `(owner, repo, number)` passed to [`ReviewStore::retarget_to_pr`].
+    #[must_use]
+    pub fn retargeted_prs(&self) -> Vec<(String, String, u64)> {
+        self.lock().retargeted_prs.clone()
+    }
+
+    /// How many times [`ReviewStore::finalize_retarget`] succeeded.
+    #[must_use]
+    pub fn finalized_retarget_count(&self) -> usize {
+        self.lock().finalized_retarget_count
     }
 
     fn lock(&self) -> MutexGuard<'_, MemoryStoreState> {
@@ -326,6 +387,27 @@ impl ReviewStore for MemoryStore {
 
     fn rounds(&self) -> Result<Vec<AgentRound>> {
         Ok(self.lock().rounds.clone())
+    }
+
+    fn retarget_to_pr(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u64,
+    ) -> Result<Option<StoreSnapshot>> {
+        let mut state = self.lock();
+        if let Some(message) = &state.retarget_failure {
+            return Err(anyhow!("{message}"));
+        }
+        state
+            .retargeted_prs
+            .push((owner.to_owned(), repo.to_owned(), number));
+        Ok(state.retarget_snapshot.take())
+    }
+
+    fn finalize_retarget(&self) -> Result<()> {
+        self.lock().finalized_retarget_count += 1;
+        Ok(())
     }
 }
 

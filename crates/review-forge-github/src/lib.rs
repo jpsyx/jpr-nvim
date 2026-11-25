@@ -123,6 +123,10 @@ impl Forge for GhForge {
         pr::parse_pr(&self.gh.run(&args, None)?)
     }
 
+    fn current_branch_pr(&self) -> Result<Option<PullRequest>> {
+        bail!("current_branch_pr not yet wired")
+    }
+
     fn fetch(&self, pr: &PullRequest) -> Result<ForgeSnapshot> {
         let mut head_sha = pr.head_sha.clone();
         let mut threads = self.paged(graphql::THREADS, pr, |data| {
