@@ -349,9 +349,9 @@ mod tests {
 
     #[test]
     fn exit_code_for_error_returns_three_only_for_auth_errors() {
-        let auth_err =
+        let auth_error =
             anyhow::Error::new(review_core::ForgeAuthError::new("gh auth login")).context("prs");
-        assert_eq!(exit_code_for_error(&auth_err), 3);
+        assert_eq!(exit_code_for_error(&auth_error), 3);
         assert_eq!(exit_code_for_error(&anyhow::anyhow!("network down")), 1);
     }
 }

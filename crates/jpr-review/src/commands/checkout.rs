@@ -54,7 +54,7 @@ fn resolve_managed_checkout_root(
         theme,
         &format!("Looking up pull request #{number} in {slug}..."),
     );
-    let pr = GhForge::new(cwd.to_path_buf(), Some(slug.clone())).pull_request(number)?;
+    let pr = GhForge::new(cwd.to_path_buf(), Some(slug)).pull_request(number)?;
     let home = env::var_os("HOME")
         .map(PathBuf::from)
         .context("HOME is not set")?;
@@ -63,13 +63,16 @@ fn resolve_managed_checkout_root(
         xdg_cache_home.as_deref(),
         &home,
         crate::STATE_APP,
-        &owner,
-        &repo,
+        &pr.owner,
+        &pr.repo,
     )?;
     if !cache_dir.exists() {
-        super::narrate(theme, &format!("Cloning {slug} into cache..."));
+        super::narrate(
+            theme,
+            &format!("Cloning {}/{} into cache...", pr.owner, pr.repo),
+        );
     }
-    let root = ensure_managed_clone(&cache_dir, &owner, &repo)?;
+    let root = ensure_managed_clone(&cache_dir, &pr.owner, &pr.repo)?;
     Ok((pr, root))
 }
 

@@ -4,6 +4,7 @@ local crash = require("jpr.session.crash")
 local wizard = require("jpr.tui.wizard")
 
 local M = {}
+local pick_generation = 0
 
 local function jpr()
     return require("jpr")
@@ -16,20 +17,46 @@ local function format_updated_date(iso_timestamp)
     return iso_timestamp:match("^(%d%d%d%d%-%d%d%-%d%d)") or "unknown"
 end
 
---- Synchronously checks whether `cwd` is inside a git repository or linked
---- worktree by walking upward for a `.git` directory or file.
+--- Returns whether `cwd` (defaulting to the current working directory) is
+--- inside a git repository or linked worktree.
 function M.is_git_repo(cwd)
     local target = (type(cwd) == "string" and cwd ~= "") and cwd or vim.fn.getcwd()
     local found = vim.fs.find(".git", { path = target, upward = true, limit = 1 })
     return #found > 0
 end
 
---- Detects whether `cwd` is inside a git repository and invokes `callback(is_git_repo)`.
-function M.detect_git_repo(cwd, callback)
-    callback(M.is_git_repo(cwd))
+local function handle_discovery_exit(result, error_label, on_result, on_error, opts, retry_fn)
+    if type(opts.is_active) == "function" and not opts.is_active() then
+        return
+    end
+    if result.code ~= 0 then
+        if auth.is_cli_auth_error(result) then
+            return auth.prompt_and_resume({
+                is_background = false,
+                on_authenticated = function()
+                    if type(opts.on_reopen) == "function" then
+                        opts.on_reopen()
+                    else
+                        retry_fn()
+                    end
+                end,
+                on_cancel = function()
+                    on_error("GitHub authentication is required to " .. error_label)
+                end,
+            })
+        end
+        local stderr = crash.build_clean_text_from_raw(result.stderr)
+        return on_error(stderr ~= "" and stderr or ("failed to " .. error_label))
+    end
+    local is_decoded, decoded = pcall(vim.json.decode, result.stdout or "")
+    if not is_decoded or not vim.islist(decoded) then
+        return on_error("failed to parse " .. error_label .. " response")
+    end
+    on_result(decoded)
 end
 
-local function run_discovery_cli(subcommand_args, error_label, on_result, on_error, on_reopen)
+local function run_discovery_cli(subcommand_args, error_label, on_result, on_error, opts)
+    local options = type(opts) == "function" and { on_reopen = opts } or (opts or {})
     local binary_path = jpr().binary_path()
     if vim.fn.executable(binary_path) ~= 1 then
         return on_error("jpr-review binary is missing; run :Lazy build jpr-nvim")
@@ -41,30 +68,9 @@ local function run_discovery_cli(subcommand_args, error_label, on_result, on_err
         args,
         { cwd = vim.fn.getcwd(), text = true },
         vim.schedule_wrap(function(result)
-            if result.code ~= 0 then
-                if auth.is_cli_auth_error(result) then
-                    return auth.prompt_and_resume({
-                        is_background = false,
-                        on_authenticated = function()
-                            if type(on_reopen) == "function" then
-                                on_reopen()
-                            else
-                                run_discovery_cli(subcommand_args, error_label, on_result, on_error, on_reopen)
-                            end
-                        end,
-                        on_cancel = function()
-                            on_error("GitHub authentication is required to " .. error_label)
-                        end,
-                    })
-                end
-                local stderr = crash.build_clean_text_from_raw(result.stderr)
-                return on_error(stderr ~= "" and stderr or ("failed to " .. error_label))
-            end
-            local is_decoded, decoded = pcall(vim.json.decode, result.stdout or "")
-            if not is_decoded or not vim.islist(decoded) then
-                return on_error("failed to parse " .. error_label .. " response")
-            end
-            on_result(decoded)
+            handle_discovery_exit(result, error_label, on_result, on_error, options, function()
+                run_discovery_cli(subcommand_args, error_label, on_result, on_error, options)
+            end)
         end)
     )
     if not is_started then
@@ -73,17 +79,17 @@ local function run_discovery_cli(subcommand_args, error_label, on_result, on_err
 end
 
 --- Lists the authenticated user profile and organizations via `jpr-review owners`.
-function M.list_owners(on_result, on_error, on_reopen)
-    return run_discovery_cli({ "owners" }, "list GitHub accounts", on_result, on_error, on_reopen)
+function M.list_owners(on_result, on_error, opts)
+    return run_discovery_cli({ "owners" }, "list GitHub accounts", on_result, on_error, opts)
 end
 
 --- Lists repositories for `owner` via `jpr-review repos --owner <owner>`.
-function M.list_repos(owner, on_result, on_error, on_reopen)
-    local subargs = { "repos" }
+function M.list_repos(owner, on_result, on_error, opts)
+    local subcommand_args = { "repos" }
     if type(owner) == "string" and owner ~= "" then
-        vim.list_extend(subargs, { "--owner", owner })
+        vim.list_extend(subcommand_args, { "--owner", owner })
     end
-    return run_discovery_cli(subargs, "list GitHub repositories", on_result, on_error, on_reopen)
+    return run_discovery_cli(subcommand_args, "list GitHub repositories", on_result, on_error, opts)
 end
 
 local function create_owner_options(owners)
@@ -137,7 +143,7 @@ local function create_repo_options(repos)
     return options
 end
 
-local function create_repo_step(owner_count, on_reopen_for_owner)
+local function create_repo_step(owner_count, generation, on_reopen_for_owner)
     return {
         id = "repo",
         label = "Select Repository",
@@ -155,14 +161,21 @@ local function create_repo_step(owner_count, on_reopen_for_owner)
                 on_loaded(create_repo_options(repos))
             end, function(error_message)
                 on_loaded(nil, error_message)
-            end, function()
-                on_reopen_for_owner(selected_owner)
-            end)
+            end, {
+                is_active = function()
+                    return wizard.is_open() and pick_generation == generation
+                end,
+                on_reopen = function()
+                    on_reopen_for_owner(selected_owner)
+                end,
+            })
         end,
     }
 end
 
 local function open_owner_repo_wizard(owners, on_selected, preselected_owner)
+    pick_generation = pick_generation + 1
+    local generation = pick_generation
     local owner_options = create_owner_options(owners)
     local reopen_at_owner = function(owner_login)
         open_owner_repo_wizard(owners, on_selected, owner_login)
@@ -186,7 +199,7 @@ local function open_owner_repo_wizard(owners, on_selected, preselected_owner)
     else
         initial_answers.owner = owner_options[1].value
     end
-    steps[#steps + 1] = create_repo_step(#owner_options, reopen_at_owner)
+    steps[#steps + 1] = create_repo_step(#owner_options, generation, reopen_at_owner)
 
     local command = {
         id = "pick-repo",
@@ -204,6 +217,8 @@ end
 
 --- Runs the GitHub owner -> repository picker wizard and invokes `on_selected("owner/name")`.
 function M.pick(on_selected)
+    pick_generation = pick_generation + 1
+    local generation = pick_generation
     local loader_command = {
         id = "pick-repo-loading",
         label = "Select GitHub Repository",
@@ -216,20 +231,25 @@ function M.pick(on_selected)
                 kind = "async_select",
                 load = function(_answers, _context, on_loaded)
                     M.list_owners(function(owners)
+                        if not wizard.is_open() or pick_generation ~= generation then
+                            return
+                        end
                         local owner_options = create_owner_options(owners)
                         if #owner_options == 0 then
                             on_loaded(nil, "No GitHub account found via gh.")
                             return
                         end
-                        if not wizard.is_open() then
-                            return
-                        end
                         open_owner_repo_wizard(owners, on_selected, nil)
                     end, function(error_message)
                         on_loaded(nil, error_message)
-                    end, function()
-                        M.pick(on_selected)
-                    end)
+                    end, {
+                        is_active = function()
+                            return wizard.is_open() and pick_generation == generation
+                        end,
+                        on_reopen = function()
+                            M.pick(on_selected)
+                        end,
+                    })
                 end,
             },
         },

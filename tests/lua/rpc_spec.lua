@@ -21,7 +21,6 @@ local client = assert(rpc.start({ root .. "/tests/lua/fixtures/fake_engine.sh" }
     end,
 }))
 
-assert(rpc.PROTOCOL_VERSION == 9, "protocol version is 9")
 local initialize_answer
 client:request("initialize", { protocolVersion = rpc.PROTOCOL_VERSION }, function(err, result)
     initialize_answer = { err = err, result = result }

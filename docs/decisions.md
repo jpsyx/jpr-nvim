@@ -953,8 +953,10 @@ controller:
    Rust rather than via ad-hoc Lua string matching. CLI subcommands exit `3`;
    JSON-RPC returns `-32001` (`AUTH_REQUIRED`) and `Event::SyncFailed` carries
    `authRequired` and `isBackground` (with background poller ticks calling
-   `sync_background` / `flush_queued_background` so unsolicited background
-   polls never pop a modal while the reviewer is editing). `lua/jpr/auth`
+   `sync_background` / `flush_queued_background` so the first background auth
+   failure can prompt once and subsequent background ticks stay suppressed
+   after the reviewer declines until an explicit foreground action clears
+   suppression). `lua/jpr/auth`
    coalesces concurrent auth prompts behind a single floating modal (keyboard
    and `<LeftMouse>` clickable), launches `gh auth login` in a floating
    terminal, verifies completion via `gh auth status`, and replays all queued
@@ -963,10 +965,12 @@ controller:
    `jpr.repo_picker.is_git_repo` uses synchronous upward `vim.fs.find(".git")`
    (matching standard repos and linked worktrees with zero subprocess latency).
    Because a reviewer outside a git repo can open PR `#42` in two different
-   repositories simultaneously, `session.buf_key` disambiguates `jpr://` buffer
-   URIs (`<owner>/<repo>#<n>`), `pending_by_key` keys in-flight checkouts by
-   `(repo, number)`, and `jpr.comments.compose` preserves unsaved comment text
-   if authentication is canceled.
+   repositories simultaneously, `session.buf_key` preserves bare `<n>` for the
+   first open PR and disambiguates colliding `jpr://` buffer URIs as
+   `<sanitized-owner-repo>-<n>` (falling back to `<n>-tab<tab>`),
+   `pending_by_key` keys in-flight checkouts by `(repo, number)`, and
+   `jpr.comments.compose` preserves unsaved comment text if authentication is
+   canceled.
 
 **Why.** Keeping GitHub discovery (`jpr-review owners`, `jpr-review repos`) and
 auth error classification in Rust preserves the frontend-neutral dependency
@@ -979,10 +983,13 @@ requests fail simultaneously after a token expires.
 **Consequences.** `PROTOCOL_VERSION` advances to `9` alongside release `0.8.0`.
 In non-repo mode, `:Jpr local` is visually muted in the Command Palette because
 it requires a local git checkout, and pressing `h`/`<Left>`/`<S-Tab>` in the
-scoped Command Palette steps back to the repository picker. Auth failures in
-`setViewed` or comment mutations return `-32001` immediately without queueing
-an optimistic operation, so retrying after `gh auth login` cleanly re-runs the
-action.
+scoped Command Palette steps back to the repository picker. Foreground comment
+and review mutations return `-32001` immediately without queueing an optimistic
+operation or mutating a `Failed` message into `Queued`, so retrying after
+`gh auth login` cleanly re-runs the action; `setViewed` retains its optimistic
+local contract (keeping the mark queued) while emitting
+`Event::SyncFailed { authRequired: true, isBackground: false }` so the user is
+prompted and a post-login sync flushes the queued mark.
 
 **Revisit when.** Reviewers need multi-host GitHub Enterprise support (where
 cache directories and `gh auth login --hostname` would key on forge host) or

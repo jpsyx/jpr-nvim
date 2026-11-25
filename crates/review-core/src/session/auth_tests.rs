@@ -1,11 +1,10 @@
-use review_model::{Anchor, Event, Origin, ReactionContent, ReviewEvent, ViewedState};
+use review_model::{Anchor, Event, MessageSync, Origin, ReactionContent, ReviewEvent, ViewedState};
 
 use super::test_support::Fakes;
-use crate::{AUTH_EXIT_CODE, ForgeAuthError, is_auth_error, is_gh_auth_failure_text};
+use crate::{ForgeAuthError, is_auth_error, is_gh_auth_failure_text};
 
 #[test]
-fn auth_exit_code_is_three_and_classifier_distinguishes_auth_from_other_errors() {
-    assert_eq!(AUTH_EXIT_CODE, 3);
+fn auth_classifier_distinguishes_gh_auth_failures_from_other_errors() {
     for auth_text in [
         "To get started with GitHub CLI, please run:  gh auth login",
         "You are not logged into any GitHub hosts.",
@@ -47,8 +46,8 @@ fn foreground_and_background_sync_auth_failures_emit_structured_flags() {
     fakes.forge.fail_auth_with(Some("gh auth login required"));
     let events = session.subscribe();
 
-    let fg_err = session.sync().unwrap_err();
-    assert!(is_auth_error(&fg_err));
+    let foreground_error = session.sync().unwrap_err();
+    assert!(is_auth_error(&foreground_error));
     assert_eq!(
         events.try_recv().unwrap(),
         Event::SyncFailed {
@@ -58,8 +57,8 @@ fn foreground_and_background_sync_auth_failures_emit_structured_flags() {
         }
     );
 
-    let bg_err = session.sync_background().unwrap_err();
-    assert!(is_auth_error(&bg_err));
+    let background_error = session.sync_background().unwrap_err();
+    assert!(is_auth_error(&background_error));
     assert_eq!(
         events.try_recv().unwrap(),
         Event::SyncFailed {
@@ -108,16 +107,13 @@ fn set_viewed_and_background_flush_emit_auth_required_without_losing_queue() {
 }
 
 #[test]
-fn foreground_mutations_propagate_auth_error_without_queueing_or_marking_failed() {
+fn foreground_comment_mutations_propagate_auth_error_without_queueing() {
     let fakes = Fakes::new(100);
     let mut session = fakes.open_synced();
     let (existing_thread, _) = session
         .comment(Anchor::line("src/a.rs", 1), "existing comment")
         .unwrap();
     let existing_message_id = existing_thread.messages[0].id.clone();
-    let (local_thread, _) = session
-        .comment_with_origin(Anchor::line("src/a.rs", 1), "local note", Origin::Local)
-        .unwrap();
     let before_threads = session.threads().to_vec();
     fakes.forge.fail_auth_with(Some("gh auth login required"));
 
@@ -145,6 +141,20 @@ fn foreground_mutations_propagate_auth_error_without_queueing_or_marking_failed(
             .toggle_reaction(&existing_message_id, ReactionContent::ThumbsUp)
             .unwrap_err()
     ));
+    assert_eq!(session.threads(), before_threads.as_slice());
+    assert!(!session.has_queued());
+}
+
+#[test]
+fn foreground_promote_and_submit_propagate_auth_error_without_queueing() {
+    let fakes = Fakes::new(100);
+    let mut session = fakes.open_synced();
+    let (local_thread, _) = session
+        .comment_with_origin(Anchor::line("src/a.rs", 1), "local note", Origin::Local)
+        .unwrap();
+    let before_threads = session.threads().to_vec();
+    fakes.forge.fail_auth_with(Some("gh auth login required"));
+
     assert!(is_auth_error(
         &session
             .promote_thread(&local_thread.id, "promoted")
@@ -157,4 +167,38 @@ fn foreground_mutations_propagate_auth_error_without_queueing_or_marking_failed(
     ));
     assert_eq!(session.threads(), before_threads.as_slice());
     assert!(!session.has_queued());
+}
+
+#[test]
+fn retry_message_preserves_failed_state_on_auth_error_and_succeeds_after_login() {
+    let fakes = Fakes::new(100);
+    let mut session = fakes.open_synced();
+    fakes.forge.reject_writes_with(Some("line outdated"));
+    let (failed_thread, _) = session
+        .comment(Anchor::line("src/a.rs", 1), "retry me")
+        .unwrap();
+    let failed_message_id = failed_thread.messages[0].id.clone();
+    assert_eq!(failed_thread.messages[0].sync, Some(MessageSync::Failed));
+
+    fakes.forge.reject_writes_with(None);
+    fakes.forge.fail_auth_with(Some("gh auth login required"));
+    let auth_error = session.retry_message(&failed_message_id).unwrap_err();
+    assert!(is_auth_error(&auth_error));
+    assert!(!session.has_queued());
+    let still_failed = session
+        .threads()
+        .iter()
+        .find(|thread| thread.id == failed_thread.id)
+        .unwrap();
+    assert_eq!(still_failed.messages[0].sync, Some(MessageSync::Failed));
+
+    fakes.forge.fail_auth_with(None);
+    let retried_view = session.retry_message(&failed_message_id).unwrap();
+    assert_eq!(retried_view.queued_count, 0);
+    let retried = session
+        .threads()
+        .iter()
+        .find(|thread| thread.messages[0].body == "retry me")
+        .unwrap();
+    assert_eq!(retried.messages[0].sync, Some(MessageSync::Draft));
 }

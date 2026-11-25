@@ -106,6 +106,10 @@ fn delta_and_failure_events_are_tagged_by_type() {
             "isBackground": false
         })
     );
+}
+
+#[test]
+fn sync_failed_event_serializes_auth_and_background_flags_with_legacy_defaults() {
     let auth_failed = serde_json::to_value(Event::SyncFailed {
         message: "bad credentials".into(),
         auth_required: true,

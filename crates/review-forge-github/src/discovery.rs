@@ -201,3 +201,78 @@ impl GhForge {
         parse_repo_list(&self.gh.run(&arg_refs, None)?)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn assemble_owners_places_viewer_first_and_deduplicates_orgs_case_insensitively() {
+        let data: Value = serde_json::from_str(
+            r#"{
+                "viewer": {
+                    "login": "pablo",
+                    "name": "Pablo",
+                    "organizations": {
+                        "pageInfo": { "hasNextPage": true, "endCursor": "CUR1" },
+                        "nodes": [
+                            { "login": "zeta-org", "name": "" },
+                            { "login": "Acme", "name": "Acme Corp" },
+                            { "login": "acme", "name": "Duplicate" }
+                        ]
+                    }
+                }
+            }"#,
+        )
+        .unwrap();
+        let (viewer, orgs, cursor) = parse_owners_page(&data).unwrap();
+        assert_eq!(viewer.login, "pablo");
+        assert_eq!(viewer.kind, OwnerKind::User);
+        assert_eq!(cursor.as_deref(), Some("CUR1"));
+        let combined = assemble_owners(viewer, orgs);
+        assert_eq!(combined.len(), 3);
+        assert_eq!(combined[0].login, "pablo");
+        assert_eq!(combined[1].login, "Acme");
+        assert_eq!(combined[2].login, "zeta-org");
+        assert_eq!(combined[2].name, None);
+    }
+
+    #[test]
+    fn repo_list_args_includes_owner_and_rejects_zero_limit_or_unsafe_logins() {
+        assert_eq!(
+            GhForge::repo_list_args(None, 100).unwrap(),
+            vec!["repo", "list", "--limit", "100", "--json", REPO_LIST_FIELDS,]
+        );
+        assert_eq!(
+            GhForge::repo_list_args(Some("acme"), 50).unwrap(),
+            vec![
+                "repo",
+                "list",
+                "acme",
+                "--limit",
+                "50",
+                "--json",
+                REPO_LIST_FIELDS,
+            ]
+        );
+        assert!(GhForge::repo_list_args(None, 0).is_err());
+        assert!(GhForge::repo_list_args(Some("a/b"), 10).is_err());
+        assert!(GhForge::repo_list_args(Some("-flag"), 10).is_err());
+    }
+
+    #[test]
+    fn parse_repo_list_normalizes_blank_descriptions_and_preserves_flags() {
+        let repos = parse_repo_list(
+            r#"[
+                {"nameWithOwner":"acme/widgets","description":"","isPrivate":true,"isArchived":false,"updatedAt":"2026-11-24T12:00:00Z"},
+                {"nameWithOwner":"acme/docs","description":"Docs","isPrivate":false,"isArchived":true,"updatedAt":"2026-11-20T00:00:00Z"}
+            ]"#,
+        )
+        .unwrap();
+        assert_eq!(repos.len(), 2);
+        assert_eq!(repos[0].description, None);
+        assert!(repos[0].is_private);
+        assert_eq!(repos[1].description.as_deref(), Some("Docs"));
+        assert!(repos[1].is_archived);
+    }
+}

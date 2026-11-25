@@ -37,22 +37,8 @@ function M.close(state)
     close_terminal_handles(state)
 end
 
---- Opens a centered floating terminal running `gh auth login` and invokes
---- `on_finished(exit_code)` exactly once when the login job exits or the window
---- is closed manually.
-function M.open(on_finished)
-    require("jpr").define_highlights()
-    local buf = vim.api.nvim_create_buf(false, true)
-    vim.bo[buf].bufhidden = "wipe"
-    local width, height = get_terminal_dimensions()
-    local win = vim.api.nvim_open_win(
-        buf,
-        true,
-        window.create_window_config(width, height, TERMINAL_TITLE, TERMINAL_FOOTER)
-    )
-    local state = { buf = buf, win = win, job = nil, is_settled = false }
-
-    local function settle(exit_code)
+local function create_terminal_settler(state, on_finished)
+    return function(exit_code)
         if state.is_settled then
             return
         end
@@ -67,6 +53,23 @@ function M.open(on_finished)
             on_finished(exit_code)
         end)
     end
+end
+
+--- Opens a centered floating terminal running `gh auth login` and invokes
+--- `on_finished(exit_code)` exactly once when the login job exits or the window
+--- is closed manually.
+function M.open(on_finished)
+    require("jpr").define_highlights()
+    local buf = vim.api.nvim_create_buf(false, true)
+    vim.bo[buf].bufhidden = "wipe"
+    local width, height = get_terminal_dimensions()
+    local win = vim.api.nvim_open_win(
+        buf,
+        true,
+        window.create_window_config(width, height, TERMINAL_TITLE, TERMINAL_FOOTER)
+    )
+    local state = { buf = buf, win = win, job = nil, is_settled = false }
+    local settle = create_terminal_settler(state, on_finished)
 
     local is_started, job_id = pcall(vim.fn.jobstart, { "gh", "auth", "login" }, {
         term = true,

@@ -86,6 +86,28 @@ impl ReviewSession {
         }
     }
 
+    fn create_queued_thread_op(
+        temp_thread_id: &str,
+        temp_message_id: &str,
+        anchor: &Anchor,
+        body: &str,
+    ) -> QueuedCommentOp {
+        if anchor.kind == AnchorKind::Pr {
+            QueuedCommentOp::CreateConversationComment {
+                temp_thread_id: temp_thread_id.to_owned(),
+                temp_message_id: temp_message_id.to_owned(),
+                body: body.to_owned(),
+            }
+        } else {
+            QueuedCommentOp::CreateReviewThread {
+                temp_thread_id: temp_thread_id.to_owned(),
+                temp_message_id: temp_message_id.to_owned(),
+                anchor: anchor.clone(),
+                body: body.to_owned(),
+            }
+        }
+    }
+
     fn insert_failed_or_queued_thread(
         &mut self,
         anchor: Anchor,
@@ -99,20 +121,8 @@ impl ReviewSession {
         let temp_message_id = self.allocate_temp_id("m");
         let (sync, sync_error) = match error {
             ForgeWriteError::Transient(_) => {
-                let op = if anchor.kind == AnchorKind::Pr {
-                    QueuedCommentOp::CreateConversationComment {
-                        temp_thread_id: temp_thread_id.clone(),
-                        temp_message_id: temp_message_id.clone(),
-                        body: body.to_owned(),
-                    }
-                } else {
-                    QueuedCommentOp::CreateReviewThread {
-                        temp_thread_id: temp_thread_id.clone(),
-                        temp_message_id: temp_message_id.clone(),
-                        anchor: anchor.clone(),
-                        body: body.to_owned(),
-                    }
-                };
+                let op =
+                    Self::create_queued_thread_op(&temp_thread_id, &temp_message_id, &anchor, body);
                 self.saved.registry.queued_ops.push(op);
                 (MessageSync::Queued, None)
             }
@@ -207,6 +217,37 @@ impl ReviewSession {
         Ok((thread, view))
     }
 
+    pub(super) fn retry_failed_message_with_auth_rollback(
+        &mut self,
+        message_id: &str,
+        new_body: Option<&str>,
+    ) -> Result<()> {
+        let (previous_body, previous_sync, previous_sync_error) = {
+            let target = find_message_mut(&mut self.threads, message_id)
+                .with_context(|| format!("unknown message {message_id}"))?;
+            (target.body.clone(), target.sync, target.sync_error.clone())
+        };
+        self.enqueue_failed_message(message_id, new_body)?;
+        let (has_progressed, auth_error) = self.send_queued_comments();
+        if let Some(reason) = auth_error {
+            let is_still_queued = find_message_mut(&mut self.threads, message_id)
+                .is_some_and(|message| message.sync == Some(MessageSync::Queued));
+            if is_still_queued {
+                let _ = self.saved.registry.queued_ops.pop();
+                if let Some(target) = find_message_mut(&mut self.threads, message_id) {
+                    target.body = previous_body;
+                    target.sync = previous_sync;
+                    target.sync_error = previous_sync_error;
+                }
+            }
+            if has_progressed {
+                let _ = self.save_and_announce_threads()?;
+            }
+            return Err(anyhow::Error::new(crate::ForgeAuthError::new(reason)));
+        }
+        Ok(())
+    }
+
     pub(super) fn edit_unflushed_message(
         &mut self,
         thread_id: &str,
@@ -233,8 +274,7 @@ impl ReviewSession {
             return Ok(Some((thread, view)));
         }
         if message_id.starts_with("tmp-") {
-            self.enqueue_failed_message(message_id, Some(body))?;
-            let _ = self.send_queued_comments();
+            self.retry_failed_message_with_auth_rollback(message_id, Some(body))?;
             let canonical_thread_id = self.get_canonical_id_from_id(thread_id);
             let thread = self
                 .find_thread(&canonical_thread_id)

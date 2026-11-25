@@ -38,7 +38,7 @@ local function is_buf_key_taken(session, candidate)
             end
         end
     end
-    return false
+    return type(M.is_pending_buf_key_taken) == "function" and M.is_pending_buf_key_taken(session, candidate)
 end
 
 --- Unique buffer-name suffix for `session`: numeric PR number (disambiguated on
@@ -85,6 +85,36 @@ function M.report_read_only(session)
     )
 end
 
+local function handle_request_error(session, method, params, on_result, on_error, request_error)
+    if session.closing then
+        if on_error then
+            on_error(request_error)
+        end
+        return
+    end
+    local auth = require("jpr.auth")
+    if auth.is_rpc_auth_error(request_error) then
+        return auth.prompt_and_resume({
+            is_background = false,
+            on_authenticated = function()
+                if session.closing or not session.client then
+                    return
+                end
+                M.request(session, method, params, on_result, on_error)
+            end,
+            on_cancel = function()
+                if on_error then
+                    on_error(request_error)
+                end
+            end,
+        })
+    end
+    if on_error then
+        on_error(request_error)
+    end
+    return jpr().error(("%s failed: %s"):format(method, request_error.message))
+end
+
 --- Sends `method` with `params` to `session`'s engine. `on_result(result)`
 --- runs on success; a failure is passed to `on_error`, when given, and
 --- reported to the user unless the session is closing (a request still in
@@ -107,33 +137,7 @@ function M.request(session, method, params, on_result, on_error)
     end
     session.client:request(method, params, function(request_error, result)
         if request_error then
-            if session.closing then
-                if on_error then
-                    on_error(request_error)
-                end
-                return
-            end
-            local auth = require("jpr.auth")
-            if auth.is_rpc_auth_error(request_error) then
-                return auth.prompt_and_resume({
-                    is_background = false,
-                    on_authenticated = function()
-                        if session.closing or not session.client then
-                            return
-                        end
-                        M.request(session, method, params, on_result, on_error)
-                    end,
-                    on_cancel = function()
-                        if on_error then
-                            on_error(request_error)
-                        end
-                    end,
-                })
-            end
-            if on_error then
-                on_error(request_error)
-            end
-            return jpr().error(("%s failed: %s"):format(method, request_error.message))
+            return handle_request_error(session, method, params, on_result, on_error, request_error)
         end
         on_result(result)
     end)

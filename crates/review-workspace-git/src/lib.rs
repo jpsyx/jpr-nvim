@@ -65,7 +65,7 @@ mod cache_tests {
             managed_repo_dir(Some(Path::new("relative")), home, "jpr", "acme", "widgets").unwrap(),
             PathBuf::from("/Users/octo/.cache/jpr/repos/acme/widgets")
         );
-        for bad in ["", ".", "..", "a/b", "a\\b", "has space"] {
+        for bad in ["", ".", "..", "-flag", "a/b", "a\\b", "has space"] {
             assert!(managed_repo_dir(None, home, "jpr", bad, "widgets").is_err());
             assert!(managed_repo_dir(None, home, "jpr", "acme", bad).is_err());
         }
@@ -103,28 +103,46 @@ mod cache_tests {
         let stray = dir.path().join("stray");
         fs::create_dir_all(&stray).unwrap();
         fs::write(stray.join("keep.txt"), "mine").unwrap();
-        let stray_err = ensure_managed_clone_with(&stray, "acme", "widgets", |_, _| {
+        let stray_error = ensure_managed_clone_with(&stray, "acme", "widgets", |_, _| {
             panic!("should refuse non-git directory")
         })
         .unwrap_err();
-        assert!(format!("{stray_err:#}").contains(&stray.display().to_string()));
+        assert!(format!("{stray_error:#}").contains(&stray.display().to_string()));
         assert!(stray.join("keep.txt").exists(), "must not delete stray dir");
     }
 
     #[test]
-    fn ensure_managed_clone_cleans_up_newly_created_partial_dir_on_failure() {
+    fn ensure_managed_clone_cleans_up_staging_dir_on_failure_and_refuses_broken_symlink() {
         let dir = tempfile::tempdir().unwrap();
         let target = dir.path().join("repos").join("acme").join("widgets");
-        let err = ensure_managed_clone_with(&target, "acme", "widgets", |_slug, dest| {
-            fs::create_dir_all(dest)?;
-            fs::write(dest.join("partial"), "junk")?;
+        let error = ensure_managed_clone_with(&target, "acme", "widgets", |_slug, destination| {
+            fs::create_dir_all(destination)?;
+            fs::write(destination.join("partial"), "junk")?;
             anyhow::bail!("simulated clone failure")
         })
         .unwrap_err();
-        assert!(format!("{err:#}").contains("simulated clone failure"));
+        assert!(format!("{error:#}").contains("simulated clone failure"));
         assert!(
             !target.exists(),
-            "partial clone dir must be removed on failure"
+            "partial clone dir must not be published on failure"
         );
+        let remaining_entries: Vec<_> = fs::read_dir(target.parent().unwrap()).unwrap().collect();
+        assert!(
+            remaining_entries.is_empty(),
+            "staging clone dir must be removed on failure"
+        );
+
+        #[cfg(unix)]
+        {
+            let broken_link = dir.path().join("repos").join("acme").join("broken");
+            std::os::unix::fs::symlink(dir.path().join("nonexistent-target"), &broken_link)
+                .unwrap();
+            let symlink_error =
+                ensure_managed_clone_with(&broken_link, "acme", "broken", |_, _| {
+                    panic!("must refuse broken symlink instead of cloning")
+                })
+                .unwrap_err();
+            assert!(format!("{symlink_error:#}").contains("broken"));
+        }
     }
 }

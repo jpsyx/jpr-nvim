@@ -229,6 +229,19 @@ local function submit_with_draft_recovery(session, method, params, reopen_fn)
     end)
 end
 
+local function prefill_suggested_comment(session, anchor, open_with_body)
+    local request_id = next_request_id(session)
+    return require("jpr.session").request(session, "anchoredLines", { anchor = anchor }, function(result)
+        if session.closing or session.compose_request_id ~= request_id then
+            return
+        end
+        if session.tab ~= nil and not vim.api.nvim_tabpage_is_valid(session.tab) then
+            return
+        end
+        open_with_body(("```suggestion\n%s\n```"):format((result and result.text) or ""))
+    end)
+end
+
 --- Opens the floating compose buffer for a new comment at `anchor`, optionally
 --- pre-filling a GitHub suggestion block on line or range anchors (`opts.suggest`).
 function M.open_new(session, anchor, opts)
@@ -266,16 +279,7 @@ function M.open_new(session, anchor, opts)
         })
     end
     if open_opts.suggest and (anchor.kind == "line" or anchor.kind == "range") then
-        local request_id = next_request_id(session)
-        return require("jpr.session").request(session, "anchoredLines", { anchor = anchor }, function(result)
-            if session.closing or session.compose_request_id ~= request_id then
-                return
-            end
-            if session.tab ~= nil and not vim.api.nvim_tabpage_is_valid(session.tab) then
-                return
-            end
-            open_with_body(("```suggestion\n%s\n```"):format((result and result.text) or ""))
-        end)
+        return prefill_suggested_comment(session, anchor, open_with_body)
     end
     open_with_body("")
 end

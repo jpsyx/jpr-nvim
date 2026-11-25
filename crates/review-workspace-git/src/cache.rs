@@ -3,16 +3,20 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context, Result, bail};
 
 use crate::process::run;
 use crate::repo::main_repo_root;
 
+static CLONE_STAGE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
 fn validate_path_segment(label: &str, value: &str) -> Result<()> {
     if value.is_empty()
         || value == "."
         || value == ".."
+        || value.starts_with('-')
         || value.bytes().any(|byte| {
             matches!(byte, b'/' | b'\\') || byte.is_ascii_whitespace() || byte.is_ascii_control()
         })
@@ -103,13 +107,24 @@ fn verify_existing_clone(repo_dir: &Path, owner: &str, repo: &str) -> Result<Pat
 /// `gh repo clone` when absent and verifying existing checkouts without ever
 /// deleting unrelated files.
 pub fn ensure_managed_clone(repo_dir: &Path, owner: &str, repo: &str) -> Result<PathBuf> {
-    ensure_managed_clone_with(repo_dir, owner, repo, |slug, dest| {
-        let parent = dest.parent().context("managed repo path has no parent")?;
-        let dest_text = dest.to_string_lossy().into_owned();
-        run("gh", &["repo", "clone", slug, &dest_text], parent).map(|_| ())
+    ensure_managed_clone_with(repo_dir, owner, repo, |slug, destination| {
+        let parent = destination
+            .parent()
+            .context("managed repo path has no parent")?;
+        let destination_text = destination.to_string_lossy().into_owned();
+        run("gh", &["repo", "clone", slug, &destination_text], parent).map(|_| ())
     })
 }
 
+fn create_staging_clone_dir(parent: &Path, repo: &str) -> PathBuf {
+    let sequence = CLONE_STAGE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let pid = std::process::id();
+    parent.join(format!(".{repo}.cloning-{pid}-{sequence}"))
+}
+
+/// Ensures a validated cached clone of `owner/repo` exists at `repo_dir` using
+/// `clone_fn`, staging fresh clones in a sibling temporary directory so
+/// failures or concurrent checkouts never remove an existing repository.
 pub fn ensure_managed_clone_with(
     repo_dir: &Path,
     owner: &str,
@@ -118,7 +133,7 @@ pub fn ensure_managed_clone_with(
 ) -> Result<PathBuf> {
     validate_path_segment("owner", owner)?;
     validate_path_segment("repository", repo)?;
-    if repo_dir.exists() {
+    if repo_dir.symlink_metadata().is_ok() {
         return verify_existing_clone(repo_dir, owner, repo);
     }
     let parent = repo_dir
@@ -127,11 +142,22 @@ pub fn ensure_managed_clone_with(
     fs::create_dir_all(parent)
         .with_context(|| format!("creating cache directory {}", parent.display()))?;
     let slug = format!("{owner}/{repo}");
-    if let Err(error) = clone_fn(&slug, repo_dir) {
-        if repo_dir.exists() {
-            let _ = fs::remove_dir_all(repo_dir);
+    let staging_dir = create_staging_clone_dir(parent, repo);
+    if let Err(error) = clone_fn(&slug, &staging_dir) {
+        if staging_dir.symlink_metadata().is_ok() {
+            let _ = fs::remove_dir_all(&staging_dir);
         }
         return Err(error.context(format!("cloning {slug} into {}", repo_dir.display())));
+    }
+    if let Err(rename_error) = fs::rename(&staging_dir, repo_dir) {
+        if staging_dir.symlink_metadata().is_ok() {
+            let _ = fs::remove_dir_all(&staging_dir);
+        }
+        if repo_dir.symlink_metadata().is_ok() {
+            return verify_existing_clone(repo_dir, owner, repo);
+        }
+        return Err(anyhow::Error::new(rename_error)
+            .context(format!("moving cloned {slug} into {}", repo_dir.display())));
     }
     Ok(repo_dir.to_path_buf())
 }

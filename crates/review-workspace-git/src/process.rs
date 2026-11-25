@@ -150,15 +150,16 @@ mod tests {
             stdout: Vec::new(),
             stderr: b"To get started with GitHub CLI, please run:  gh auth login\n".to_vec(),
         };
-        let gh_err = get_stdout_from_output("gh", &["pr", "checkout", "7"], gh_output).unwrap_err();
-        assert!(review_core::is_auth_error(&gh_err), "{gh_err:#}");
+        let gh_error =
+            get_stdout_from_output("gh", &["pr", "checkout", "7"], gh_output).unwrap_err();
+        assert!(review_core::is_auth_error(&gh_error), "{gh_error:#}");
         let git_output = Output {
             status,
             stdout: Vec::new(),
             stderr: b"gh auth login\n".to_vec(),
         };
-        let git_err = get_stdout_from_output("git", &["status"], git_output).unwrap_err();
-        assert!(!review_core::is_auth_error(&git_err), "{git_err:#}");
+        let git_error = get_stdout_from_output("git", &["status"], git_output).unwrap_err();
+        assert!(!review_core::is_auth_error(&git_error), "{git_error:#}");
     }
 
     #[test]

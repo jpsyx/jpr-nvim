@@ -4,7 +4,6 @@ package.path = root .. "/lua/?.lua;" .. root .. "/lua/?/init.lua;" .. package.pa
 local helpers = dofile(root .. "/tests/lua/support/helpers.lua")
 local auth = require("jpr.auth")
 local jpr = require("jpr")
-local repo_picker = require("jpr.repo_picker")
 local session = require("jpr.session")
 local wizard = require("jpr.tui.wizard")
 
@@ -126,7 +125,7 @@ end, function()
     assert(opened_call ~= nil and opened_call.number == 12 and opened_call.repo == "pablo/notes", "opened PR #12 in pablo/notes")
 end)
 
--- 2. Multi-org user picks owner first ([you] then [org]), handles empty org repos with h back, and supports manual PR input + local guard.
+-- 2. Multi-org picker lists [you] before [org], steps back on h from empty repos and repo-scoped palette, blocks :Jpr local outside git, and resolves manual PR numbers and URL overrides.
 with_non_git_env(function(cmd, _opts, on_exit)
     vim.schedule(function()
         if cmd[2] == "owners" then
@@ -204,18 +203,42 @@ end, function()
     helpers.press_key("<CR>")
     assert(has_notification("local git checkout", vim.log.levels.ERROR), "local command errors clearly outside git repo")
 
-    -- Pressing h from repo-scoped palette returns to repo picker.
+    -- Pressing h from repo-scoped palette reopens the repository picker.
     jpr.command({})
     assert(vim.wait(2000, function() return wizard.is_open() and helpers.current_text():find("pablo  [you]", 1, true) ~= nil end))
     helpers.press_key("jj<CR>")
     assert(vim.wait(2000, function() return helpers.current_text():find("acme/widgets", 1, true) ~= nil end))
     helpers.press_key("<CR>")
-    -- Manual PR number uses context.repo.
+    assert(helpers.win_title(helpers.current_float_win()):find("acme/widgets", 1, true) ~= nil, "palette opened for acme/widgets")
+    helpers.press_key("h")
+    assert(
+        vim.wait(2000, function()
+            return wizard.is_open() and helpers.current_text():find("pablo  [you]", 1, true) ~= nil
+        end),
+        "pressing h from repo-scoped palette returns to owner/repo picker"
+    )
+    -- Re-select acme/widgets and verify manual PR number inherits context.repo.
+    helpers.press_key("jj<CR>")
+    assert(vim.wait(2000, function() return helpers.current_text():find("acme/widgets", 1, true) ~= nil end))
+    helpers.press_key("<CR>")
     helpers.press_key("<CR>j<CR>i42<CR>")
     assert(opened_call ~= nil and opened_call.number == 42 and opened_call.repo == "acme/widgets", "manual PR number inherits context.repo")
+
+    -- Entering a full PR URL for another repo overrides context.repo.
+    opened_call = nil
+    jpr.command({})
+    assert(vim.wait(2000, function() return wizard.is_open() and helpers.current_text():find("pablo  [you]", 1, true) ~= nil end))
+    helpers.press_key("jj<CR>")
+    assert(vim.wait(2000, function() return helpers.current_text():find("acme/widgets", 1, true) ~= nil end))
+    helpers.press_key("<CR>")
+    helpers.press_key("<CR>j<CR>ihttps://github.com/other/project/pull/99<CR>")
+    assert(
+        opened_call ~= nil and opened_call.number == 99 and opened_call.repo == "other/project",
+        "manual PR URL overrides context.repo: " .. vim.inspect(opened_call)
+    )
 end)
 
--- 3. Auth error (exit code 3) during jpr-review owners prompts auth and resumes into repo-scoped palette.
+-- 3. Auth error (exit code 3) during jpr-review owners prompts auth and resumes into repo picker and repo-scoped palette.
 do
     local owner_attempts = 0
     with_non_git_env(function(cmd, _opts, on_exit)
@@ -255,6 +278,11 @@ do
             "resumed repo picker after owners auth recovery"
         )
         assert(prompted == 1 and owner_attempts == 2, "auth prompted once and owners retried")
+        helpers.press_key("<CR>")
+        assert(
+            helpers.win_title(helpers.current_float_win()):find("pablo/app", 1, true) ~= nil,
+            "selecting resumed repo opens repo-scoped palette"
+        )
     end)
 end
 

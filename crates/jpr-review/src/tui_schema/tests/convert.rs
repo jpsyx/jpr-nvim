@@ -182,6 +182,10 @@ fn assert_converts_state_and_daemon_subcommands() {
         },
     );
     assert_converts("guide", &[], &Command::Guide);
+}
+
+#[test]
+fn answers_to_command_builds_discovery_subcommands() {
     assert_converts("owners", &[], &Command::Owners);
     assert_converts(
         "repos",

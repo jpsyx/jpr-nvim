@@ -38,7 +38,7 @@ local function with_auth_stub(behavior, callback)
     end
 end
 
--- 1. session.list_open_prs passes --repo, intercepts CLI exit code 3, and retries on auth.
+-- 1. session.list_open_prs passes --repo, intercepts CLI exit code 3, and retries (or calls on_reopen when supplied).
 do
     local calls = {}
     local original_system = vim.system
@@ -63,12 +63,25 @@ do
                 error("unexpected error: " .. tostring(err_msg))
             end, {
                 repo = "octo/widgets",
+            })
+            assert(vim.wait(2000, function() return got_prs ~= nil end), "list_open_prs retried directly after auth")
+            assert(#prompt_calls == 1, "prompted auth once on direct retry")
+            assert(vim.tbl_contains(calls[1], "--repo") and vim.tbl_contains(calls[1], "octo/widgets"), "passes --repo to prs")
+            assert(#calls == 2 and got_prs[1].number == 9, "retried jpr-review prs and returned PR #9")
+        end)
+
+        calls = {}
+        with_auth_stub("authenticate", function(prompt_calls)
+            session.list_open_prs(function()
+                error("on_reopen caller must not receive direct result")
+            end, function(err_msg)
+                error("unexpected error: " .. tostring(err_msg))
+            end, {
+                repo = "octo/widgets",
                 on_reopen = function() reopened = true end,
             })
-            assert(vim.wait(2000, function() return got_prs ~= nil or reopened end), "list_open_prs resumed after auth")
-            assert(#prompt_calls == 1, "prompted auth once")
-            assert(vim.tbl_contains(calls[1], "--repo") and vim.tbl_contains(calls[1], "octo/widgets"), "passes --repo to prs")
-            assert(reopened or (#calls == 2 and got_prs[1].number == 9), "either reopened wizard or retried list_open_prs")
+            assert(vim.wait(2000, function() return reopened end), "list_open_prs invoked on_reopen after auth")
+            assert(#prompt_calls == 1 and #calls == 1, "called on_reopen once without direct second spawn")
         end)
     end)
     vim.system = original_system
@@ -245,6 +258,101 @@ do
     assert(session.open_tab_numbers("org-c/widgets")[7] == nil, "open_tab_numbers does not match unrelated repo")
     session.by_tab = original_by_tab
     pcall(vim.cmd, "tabonly!")
+end
+
+-- 7. Concurrent pending checkouts for the same PR number in different repos receive distinct buf_keys and open tabs safely alongside an unlinked local session (repo == nil).
+do
+    local original_by_tab = session.by_tab
+    local original_system = vim.system
+    local original_executable = vim.fn.executable
+    local spawned_cmds = {}
+    vim.fn.executable = function() return 1 end
+    vim.system = function(cmd, _opts, _on_exit)
+        spawned_cmds[#spawned_cmds + 1] = cmd
+        return { kill = function() end }
+    end
+    local local_tab = vim.api.nvim_get_current_tabpage()
+    session.by_tab = { [local_tab] = { tab = local_tab, mode = "local", number = nil, repo = nil } }
+    local is_ok, err = pcall(function()
+        session.open(7, "org-a/widgets")
+        session.open(7, "org-b/widgets")
+        assert(#spawned_cmds == 2, "spawned checkout for both repos without nil-repo crash")
+        assert(vim.fn.bufnr("^jpr://loading/7$") ~= -1, "first checkout claimed jpr://loading/7")
+        assert(
+            vim.fn.bufnr("^jpr://loading/org-b-widgets-7$") ~= -1,
+            "second concurrent checkout disambiguated loading buffer name"
+        )
+    end)
+    for _, tab in ipairs(vim.api.nvim_list_tabpages()) do
+        if tab ~= local_tab then
+            session.close_pending_tab(tab)
+        end
+    end
+    session.by_tab = original_by_tab
+    vim.system = original_system
+    vim.fn.executable = original_executable
+    pcall(vim.cmd, "tabonly!")
+    if not is_ok then error(err, 0) end
+end
+
+-- 8. session.open checkout exit code 3 closes loading tab, prompts auth, and retries; session.open_local exit code 3 prompts auth and retries (or aborts on cancel).
+do
+    local original_system = vim.system
+    local original_executable = vim.fn.executable
+    local original_start = session.start
+    local original_start_local = session.start_local
+    local checkout_attempts = 0
+    local local_attempts = 0
+    local started_pr = nil
+    local started_local = nil
+    vim.fn.executable = function() return 1 end
+    session.start = function(info) started_pr = info end
+    session.start_local = function(info) started_local = info end
+    vim.system = function(cmd, _opts, on_exit)
+        if cmd[2] == "checkout" then
+            checkout_attempts = checkout_attempts + 1
+            local result = checkout_attempts == 1
+                    and { code = 3, stdout = "", stderr = "gh auth login" }
+                or { code = 0, stdout = '{"number":15,"repo":"acme/widgets","worktree":"/tmp/wt-15"}\n', stderr = "" }
+            vim.schedule(function() on_exit(result) end)
+        elseif cmd[2] == "local" then
+            local_attempts = local_attempts + 1
+            local result = local_attempts == 1
+                    and { code = 3, stdout = "", stderr = "gh auth login" }
+                or { code = 0, stdout = '{"mode":"local","worktree":"/tmp/local-wt","baseRef":"main"}\n', stderr = "" }
+            vim.schedule(function() on_exit(result) end)
+        end
+        return { kill = function() end }
+    end
+    local is_ok, err = pcall(function()
+        with_auth_stub("authenticate", function(prompt_calls)
+            session.open(15, "acme/widgets")
+            assert(vim.wait(2000, function() return started_pr ~= nil end), "checkout retried after exit code 3")
+            assert(#prompt_calls == 1 and checkout_attempts == 2, "checkout prompted auth once and retried")
+            assert(started_pr.number == 15 and started_pr.repo == "acme/widgets", "started checked-out PR")
+        end)
+
+        with_auth_stub("authenticate", function(prompt_calls)
+            session.open_local(nil)
+            assert(vim.wait(2000, function() return started_local ~= nil end), "open_local retried after exit code 3")
+            assert(#prompt_calls == 1 and local_attempts == 2, "open_local prompted auth once and retried")
+        end)
+
+        local_attempts = 0
+        started_local = nil
+        with_auth_stub("cancel", function(prompt_calls)
+            session.open_local(nil)
+            assert(vim.wait(2000, function() return #prompt_calls == 1 end), "open_local prompted auth before cancel")
+            vim.wait(30, function() return false end)
+            assert(started_local == nil and local_attempts == 1, "open_local aborts cleanly when auth is canceled")
+        end)
+    end)
+    session.start = original_start
+    session.start_local = original_start_local
+    vim.system = original_system
+    vim.fn.executable = original_executable
+    pcall(vim.cmd, "tabonly!")
+    if not is_ok then error(err, 0) end
 end
 
 print("auth_integration_spec: ok")

@@ -282,12 +282,7 @@ impl ReviewSession {
             bail!("local comments cannot be retried on GitHub");
         }
         let canonical_message_id = self.get_canonical_id_from_id(message_id);
-        self.enqueue_failed_message(&canonical_message_id, None)?;
-        let (_, auth_error) = self.send_queued_comments();
-        let view = self.save_and_announce_threads()?;
-        if let Some(reason) = auth_error {
-            return Err(anyhow::Error::new(crate::ForgeAuthError::new(reason)));
-        }
-        Ok(view)
+        self.retry_failed_message_with_auth_rollback(&canonical_message_id, None)?;
+        self.save_and_announce_threads()
     }
 }

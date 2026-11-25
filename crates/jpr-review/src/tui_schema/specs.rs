@@ -134,9 +134,9 @@ fn create_prs_spec() -> CommandSpec {
 fn create_checkout_spec() -> CommandSpec {
     let mut steps = create_checkout_pr_steps();
     steps.extend(create_custom_repo_steps(
-        "Choose whether to verify the pull request against a specific repository.",
+        "Choose whether to target a specific GitHub repository (required outside a git repo).",
         "Use whichever repository the current directory resolves to.",
-        "Require the pull request to belong to a specific GitHub repository.",
+        "Verify or clone a specific GitHub repository (required outside a local git checkout).",
     ));
     steps.extend(create_custom_worktree_steps());
     CommandSpec::new(

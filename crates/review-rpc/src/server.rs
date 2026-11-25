@@ -337,16 +337,16 @@ mod auth_rpc_tests {
 
     #[test]
     fn engine_result_to_rpc_maps_forge_auth_error_to_auth_required_code() {
-        let auth_err: anyhow::Result<()> = Err(anyhow::Error::new(
+        let auth_error: anyhow::Result<()> = Err(anyhow::Error::new(
             review_core::ForgeAuthError::new("gh auth login"),
         )
         .context("syncing pr"));
-        let rpc_err = engine_result_to_rpc(auth_err).unwrap_err();
-        assert_eq!(rpc_err.code, RpcError::AUTH_REQUIRED);
-        assert_eq!(rpc_err.code, -32001);
+        let rpc_error = engine_result_to_rpc(auth_error).unwrap_err();
+        assert_eq!(rpc_error.code, RpcError::AUTH_REQUIRED);
+        assert_eq!(rpc_error.code, -32001);
 
-        let generic_err: anyhow::Result<()> = Err(anyhow!("offline"));
-        let generic_rpc = engine_result_to_rpc(generic_err).unwrap_err();
+        let generic_error: anyhow::Result<()> = Err(anyhow!("offline"));
+        let generic_rpc = engine_result_to_rpc(generic_error).unwrap_err();
         assert_eq!(generic_rpc.code, RpcError::ENGINE_ERROR);
     }
 }

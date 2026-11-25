@@ -70,7 +70,11 @@ local function create_pr_options_from_list(prs, open_tabs, repo)
     return options
 end
 
+local open_pr_load_generation = 0
+
 local function load_open_pr_options(_answers, context, on_loaded)
+    open_pr_load_generation = open_pr_load_generation + 1
+    local generation = open_pr_load_generation
     local session = session_module()
     local target_repo = type(context) == "table" and type(context.repo) == "string" and context.repo ~= ""
             and context.repo
@@ -93,6 +97,9 @@ local function load_open_pr_options(_answers, context, on_loaded)
         on_loaded(nil, error_message)
     end, {
         repo = target_repo,
+        is_active = function()
+            return require("jpr.tui.wizard").is_open() and open_pr_load_generation == generation
+        end,
         on_reopen = function()
             local open_spec = M.find_command_spec("open")
             require("jpr.tui.wizard").open_command(open_spec, { source = "list" }, context, { start_step_id = "pr" })

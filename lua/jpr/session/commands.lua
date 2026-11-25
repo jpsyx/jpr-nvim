@@ -27,6 +27,9 @@ local function sync_session(session_mod, session)
         )
     end
     session.client:request("sync", nil, function(sync_error, view)
+        if session.closing then
+            return
+        end
         if sync_error then
             if session.loading then
                 require("jpr.views.loading").close(session)

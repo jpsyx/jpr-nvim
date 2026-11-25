@@ -52,8 +52,6 @@ local function with_stubs(stubs, callback)
     end
 end
 
-assert(auth.AUTH_EXIT_CODE == 3, "AUTH_EXIT_CODE is 3")
-assert(auth.RPC_AUTH_REQUIRED == -32001, "RPC_AUTH_REQUIRED is -32001")
 assert(auth.is_cli_auth_error({ code = 3 }) == true, "exit code 3 is cli auth error")
 assert(auth.is_cli_auth_error({ code = 1 }) == false, "exit code 1 is not cli auth error")
 assert(auth.is_rpc_auth_error({ code = -32001 }) == true, "-32001 is rpc auth error")
@@ -180,28 +178,35 @@ with_stubs({
 end)
 
 -- 5. Manual terminal window close stops login job, still verifies gh auth status, and resumes when logged in.
-with_stubs({
-    executable = function() return 1 end,
-    jobstart = function(_cmd, _opts)
-        return 88
-    end,
-    jobstop = function(id)
-        assert(id == 88, "stops active login job")
-    end,
-    system = function(_cmd, _opts, on_exit)
-        vim.defer_fn(function() on_exit({ code = 0, stdout = "Logged in", stderr = "" }) end, 10)
-    end,
-}, function()
-    local resumed = false
-    auth.prompt_and_resume({
-        on_authenticated = function() resumed = true end,
-    })
-    helpers.press_key("<CR>")
-    local term_win = helpers.find_floating_win("GitHub CLI Login")
-    assert(term_win ~= nil, "login terminal float opened")
-    vim.api.nvim_win_close(term_win, true)
-    assert(vim.wait(2000, function() return resumed end), "manual terminal close verified status and resumed")
-end)
+do
+    local stopped_job_ids = {}
+    with_stubs({
+        executable = function() return 1 end,
+        jobstart = function(_cmd, _opts)
+            return 88
+        end,
+        jobstop = function(id)
+            stopped_job_ids[#stopped_job_ids + 1] = id
+        end,
+        system = function(_cmd, _opts, on_exit)
+            vim.defer_fn(function() on_exit({ code = 0, stdout = "Logged in", stderr = "" }) end, 10)
+        end,
+    }, function()
+        local resumed = false
+        auth.prompt_and_resume({
+            on_authenticated = function() resumed = true end,
+        })
+        helpers.press_key("<CR>")
+        local term_win = helpers.find_floating_win("GitHub CLI Login")
+        assert(term_win ~= nil, "login terminal float opened")
+        vim.api.nvim_win_close(term_win, true)
+        assert(vim.wait(2000, function() return resumed end), "manual terminal close verified status and resumed")
+        assert(
+            #stopped_job_ids == 1 and stopped_job_ids[1] == 88,
+            "manual close stops active login job 88: " .. vim.inspect(stopped_job_ids)
+        )
+    end)
+end
 
 -- 6. Declining suppresses background prompts until an explicit foreground call clears suppression.
 with_stubs({

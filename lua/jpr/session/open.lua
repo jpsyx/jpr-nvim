@@ -22,6 +22,37 @@ local function collect_open_tab_numbers(session_mod, repo)
     return open_numbers
 end
 
+local function handle_prs_cli_exit(result, on_result, on_error, options, retry_fn)
+    if type(options.is_active) == "function" and not options.is_active() then
+        return
+    end
+    if result.code ~= 0 then
+        local auth = require("jpr.auth")
+        if auth.is_cli_auth_error(result) then
+            return auth.prompt_and_resume({
+                is_background = false,
+                on_authenticated = function()
+                    if type(options.on_reopen) == "function" then
+                        options.on_reopen()
+                    else
+                        retry_fn()
+                    end
+                end,
+                on_cancel = function()
+                    on_error("GitHub authentication is required to list pull requests")
+                end,
+            })
+        end
+        local stderr = crash.build_clean_text_from_raw(result.stderr)
+        return on_error(stderr ~= "" and stderr or "failed to list open pull requests")
+    end
+    local is_decoded, prs = pcall(vim.json.decode, result.stdout or "")
+    if not is_decoded or not vim.islist(prs) then
+        return on_error("failed to parse open pull requests response")
+    end
+    on_result(prs)
+end
+
 local function list_open_prs_from_cli(on_result, on_error, opts)
     local options = opts or {}
     local binary_path = jpr().binary_path()
@@ -37,31 +68,9 @@ local function list_open_prs_from_cli(on_result, on_error, opts)
         args,
         { cwd = vim.fn.getcwd(), text = true },
         vim.schedule_wrap(function(result)
-            if result.code ~= 0 then
-                local auth = require("jpr.auth")
-                if auth.is_cli_auth_error(result) then
-                    return auth.prompt_and_resume({
-                        is_background = false,
-                        on_authenticated = function()
-                            if type(options.on_reopen) == "function" then
-                                options.on_reopen()
-                            else
-                                list_open_prs_from_cli(on_result, on_error, options)
-                            end
-                        end,
-                        on_cancel = function()
-                            on_error("GitHub authentication is required to list pull requests")
-                        end,
-                    })
-                end
-                local stderr = crash.build_clean_text_from_raw(result.stderr)
-                return on_error(stderr ~= "" and stderr or "failed to list open pull requests")
-            end
-            local is_decoded, prs = pcall(vim.json.decode, result.stdout or "")
-            if not is_decoded or not vim.islist(prs) then
-                return on_error("failed to parse open pull requests response")
-            end
-            on_result(prs)
+            handle_prs_cli_exit(result, on_result, on_error, options, function()
+                list_open_prs_from_cli(on_result, on_error, options)
+            end)
         end)
     )
     if not is_started then
@@ -157,9 +166,12 @@ end
 
 local function find_existing_tab(session_mod, number, repo)
     for tab, existing in pairs(session_mod.by_tab) do
-        local is_same_repo = not repo or existing.repo:lower() == repo:lower()
-        if existing.number == number and is_same_repo and vim.api.nvim_tabpage_is_valid(tab) then
-            return tab
+        if existing.number == number and vim.api.nvim_tabpage_is_valid(tab) then
+            local is_same_repo = not repo
+                or (type(existing.repo) == "string" and existing.repo:lower() == repo:lower())
+            if is_same_repo then
+                return tab
+            end
         end
     end
     for _, pending in pairs(pending_by_key) do
@@ -173,6 +185,19 @@ local function find_existing_tab(session_mod, number, repo)
         end
     end
     return nil
+end
+
+local function is_pending_buf_key_taken(session, candidate)
+    for _, pending in pairs(pending_by_key) do
+        if pending ~= session and vim.api.nvim_tabpage_is_valid(pending.tab) then
+            local pending_key = pending.buf_key_value
+                or (type(pending.number) == "number" and tostring(pending.number) or nil)
+            if pending_key == candidate then
+                return true
+            end
+        end
+    end
+    return false
 end
 
 local function close_pending_tab(tab)
@@ -306,6 +331,11 @@ function M.attach(session_mod)
     --- Cancels and closes an in-flight loading checkout tab if `tab` is one.
     function session_mod.close_pending_tab(tab)
         return close_pending_tab(tab)
+    end
+
+    --- Returns whether another in-flight checkout already claims `candidate` as its buffer key.
+    function session_mod.is_pending_buf_key_taken(session, candidate)
+        return is_pending_buf_key_taken(session, candidate)
     end
 
     --- Cancels any in-flight checkouts whose loading tabs have been closed.

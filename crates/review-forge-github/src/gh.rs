@@ -168,17 +168,17 @@ mod tests {
 
     #[test]
     fn gh_failure_to_error_wraps_auth_failures_as_forge_auth_error() {
-        let login_err = gh_failure_to_error(
+        let login_error = gh_failure_to_error(
             "",
             "To get started with GitHub CLI, please run:  gh auth login\n",
         );
-        assert!(review_core::is_auth_error(&login_err));
-        let unauth_err = gh_failure_to_error(
+        assert!(review_core::is_auth_error(&login_error));
+        let unauthenticated_error = gh_failure_to_error(
             r#"{"message":"Bad credentials"}"#,
             "gh: HTTP 401 Unauthorized\n",
         );
-        assert!(review_core::is_auth_error(&unauth_err));
-        let server_err = gh_failure_to_error("", "gh: HTTP 502 Bad Gateway\n");
-        assert!(!review_core::is_auth_error(&server_err));
+        assert!(review_core::is_auth_error(&unauthenticated_error));
+        let server_error = gh_failure_to_error("", "gh: HTTP 502 Bad Gateway\n");
+        assert!(!review_core::is_auth_error(&server_error));
     }
 }
