@@ -1,0 +1,118 @@
+local root = vim.fs.dirname(vim.fs.dirname(vim.fs.dirname(vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p"))))
+package.path = root .. "/lua/?.lua;" .. root .. "/lua/?/init.lua;" .. package.path
+
+local contrast = require("jpr.highlights.contrast")
+
+local function rgb_to_channels(rgb)
+    return math.floor(rgb / 0x10000) % 256, math.floor(rgb / 0x100) % 256, rgb % 256
+end
+
+local function angular_diff_deg(hue_a, hue_b)
+    local delta = math.abs(hue_a - hue_b) % (2 * math.pi)
+    if delta > math.pi then
+        delta = 2 * math.pi - delta
+    end
+    return math.deg(delta)
+end
+
+-- WCAG luminance and contrast ratio endpoints.
+assert(contrast.relative_luminance(0x000000) == 0, "black luminance is 0")
+assert(math.abs(contrast.relative_luminance(0xffffff) - 1) < 1e-6, "white luminance is 1")
+assert(math.abs(contrast.contrast_ratio(0x000000, 0xffffff) - 21.0) < 0.01, "black/white ratio is 21:1")
+assert(math.abs(contrast.contrast_ratio(0xffffff, 0x000000) - 21.0) < 0.01, "contrast ratio is symmetric")
+
+-- OKLCH round-trip accuracy across dark, light, saturated, and neutral samples.
+for _, sample_rgb in ipairs({ 0x000000, 0xffffff, 0x282c34, 0x98c379, 0xe06c75, 0x61afef, 0xc678dd, 0x116329 }) do
+    local lightness, chroma, hue = contrast.rgb_to_oklch(sample_rgb)
+    local round_tripped = contrast.oklch_to_rgb_clamped(lightness, chroma, hue)
+    local sr, sg, sb = rgb_to_channels(sample_rgb)
+    local rr, rg, rb = rgb_to_channels(round_tripped)
+    assert(
+        math.abs(sr - rr) <= 1 and math.abs(sg - rg) <= 1 and math.abs(sb - rb) <= 1,
+        ("OKLCH round-trip drift for #%06x -> #%06x"):format(sample_rgb, round_tripped)
+    )
+end
+
+-- Dark theme (onedark) contrast lifting, hue lock, chroma retention, and same-hue guard.
+local onedark_bg = 0x282c34
+local dark_add_bg = 0x2d4e3b
+local dark_del_bg = 0x5a3539
+local dark_tokens = {
+    { name = "Normal", rgb = 0xabb2bf, chromatic = false },
+    { name = "Comment", rgb = 0x5c6370, chromatic = false },
+    { name = "String", rgb = 0x98c379, chromatic = true },
+    { name = "Error", rgb = 0xe06c75, chromatic = true },
+    { name = "Keyword", rgb = 0xc678dd, chromatic = true },
+    { name = "Func", rgb = 0x61afef, chromatic = true },
+}
+
+for _, token in ipairs(dark_tokens) do
+    local fg_lightness, _, fg_hue = contrast.rgb_to_oklch(token.rgb)
+    for label, diff_bg in pairs({ add = dark_add_bg, delete = dark_del_bg }) do
+        local adjusted = contrast.adjust_fg_for_diff_bg(token.rgb, onedark_bg, diff_bg, true)
+        local orig_ratio = contrast.contrast_ratio(token.rgb, diff_bg)
+        local next_ratio = contrast.contrast_ratio(adjusted, diff_bg)
+        assert(next_ratio > orig_ratio, ("%s contrast must increase on %s"):format(token.name, label))
+        local out_lightness, out_chroma, out_hue = contrast.rgb_to_oklch(adjusted)
+        assert(out_lightness > fg_lightness, ("%s must lighten on dark %s"):format(token.name, label))
+        if token.chromatic then
+            assert(angular_diff_deg(fg_hue, out_hue) < 2.0, ("%s hue drifted on %s"):format(token.name, label))
+            assert(out_chroma > 0.05, ("%s lost chroma on %s"):format(token.name, label))
+        end
+    end
+end
+
+local dark_comment_add = contrast.adjust_fg_for_diff_bg(0x5c6370, onedark_bg, dark_add_bg, true)
+local dark_normal_add = contrast.adjust_fg_for_diff_bg(0xabb2bf, onedark_bg, dark_add_bg, true)
+assert(contrast.contrast_ratio(dark_comment_add, dark_add_bg) > 3.5, "dim comment lifts above 3.5:1 on dark add")
+assert(
+    contrast.relative_luminance(dark_comment_add) < contrast.relative_luminance(dark_normal_add),
+    "comment stays quieter than Normal on dark add"
+)
+
+local green_on_add = contrast.adjust_fg_for_diff_bg(0x98c379, onedark_bg, dark_add_bg, true)
+local green_on_del = contrast.adjust_fg_for_diff_bg(0x98c379, onedark_bg, dark_del_bg, true)
+assert(
+    select(1, contrast.rgb_to_oklch(green_on_add)) > select(1, contrast.rgb_to_oklch(green_on_del)),
+    "same-hue green string lifts higher on green add bg than red delete bg"
+)
+
+local red_on_add = contrast.adjust_fg_for_diff_bg(0xe06c75, onedark_bg, dark_add_bg, true)
+local red_on_del = contrast.adjust_fg_for_diff_bg(0xe06c75, onedark_bg, dark_del_bg, true)
+assert(
+    select(1, contrast.rgb_to_oklch(red_on_del)) > select(1, contrast.rgb_to_oklch(red_on_add)),
+    "same-hue red error lifts higher on red delete bg than green add bg"
+)
+
+-- Light theme (github-light) darkens tokens to increase contrast and triggers same-hue guard.
+local light_bg = 0xfafafa
+local light_add_bg = 0xc9e5cf
+local light_del_bg = 0xf4ced1
+for _, rgb in ipairs({ 0x24292f, 0x6e7781, 0x116329, 0xcf222e }) do
+    local fg_lightness = select(1, contrast.rgb_to_oklch(rgb))
+    for _, diff_bg in ipairs({ light_add_bg, light_del_bg }) do
+        local adjusted = contrast.adjust_fg_for_diff_bg(rgb, light_bg, diff_bg, false)
+        assert(contrast.contrast_ratio(adjusted, diff_bg) > contrast.contrast_ratio(rgb, diff_bg), "light contrast increases")
+        assert(select(1, contrast.rgb_to_oklch(adjusted)) < fg_lightness, "light theme darkens foreground")
+    end
+end
+local light_green_add = contrast.adjust_fg_for_diff_bg(0x116329, light_bg, light_add_bg, false)
+local light_green_del = contrast.adjust_fg_for_diff_bg(0x116329, light_bg, light_del_bg, false)
+assert(
+    select(1, contrast.rgb_to_oklch(light_green_add)) < select(1, contrast.rgb_to_oklch(light_green_del)),
+    "light green string darkens more on light green add bg than red delete bg"
+)
+
+-- Nil Normal.bg fallback and extreme background boundaries remain valid 24-bit RGB without NaN.
+for _, case in ipairs({
+    { 0xabb2bf, nil, dark_add_bg, true },
+    { 0x24292f, nil, light_add_bg, false },
+    { 0x808080, 0x000000, 0x000000, true },
+    { 0x808080, 0xffffff, 0xffffff, false },
+}) do
+    local adjusted = contrast.adjust_fg_for_diff_bg(case[1], case[2], case[3], case[4])
+    assert(type(adjusted) == "number" and adjusted == adjusted, "adjusted RGB is not NaN")
+    assert(adjusted >= 0 and adjusted <= 0xffffff and adjusted == math.floor(adjusted), "valid 24-bit integer RGB")
+end
+
+print("highlights_contrast_spec: ok")
