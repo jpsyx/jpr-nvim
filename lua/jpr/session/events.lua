@@ -148,6 +148,17 @@ local function handle_event_notification(session, params, show_session)
         if session.loading then
             require("jpr.views.loading").close(session)
         end
+        if params.authRequired == true then
+            require("jpr.auth").prompt_and_resume({
+                key = "sync:" .. tostring(session.tab),
+                is_background = params.isBackground == true,
+                on_authenticated = function()
+                    if not session.closing and session.client then
+                        require("jpr.session").sync(session)
+                    end
+                end,
+            })
+        end
     end
 end
 

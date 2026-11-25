@@ -100,6 +100,15 @@ local function open_local_worktree(session_mod, base_ref)
         { cwd = vim.fn.getcwd(), text = true },
         vim.schedule_wrap(function(result)
             if result.code ~= 0 then
+                local auth = require("jpr.auth")
+                if auth.is_cli_auth_error(result) then
+                    return auth.prompt_and_resume({
+                        is_background = false,
+                        on_authenticated = function()
+                            open_local_worktree(session_mod, base_ref)
+                        end,
+                    })
+                end
                 local stderr = crash.build_clean_text_from_raw(result.stderr)
                 return jpr().error(stderr ~= "" and stderr or "failed to inspect current worktree")
             end

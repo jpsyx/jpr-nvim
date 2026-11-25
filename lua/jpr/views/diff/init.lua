@@ -138,7 +138,8 @@ function M.open_base(session, win, buf, diff)
     local base_buf = vim.api.nvim_create_buf(false, true)
     -- A second window on the same file makes a second base; the name is only
     -- for display, so a clash is harmless.
-    pcall(vim.api.nvim_buf_set_name, base_buf, ("jpr://base/%d/%s"):format(session.number, diff.path))
+    local buf_key = require("jpr.session").buf_key(session)
+    pcall(vim.api.nvim_buf_set_name, base_buf, ("jpr://base/%s/%s"):format(buf_key, diff.path))
     vim.api.nvim_buf_set_lines(base_buf, 0, -1, false, overlay.text_to_lines(diff.baseText))
     vim.bo[base_buf].bufhidden = "wipe"
     vim.bo[base_buf].modifiable = false
