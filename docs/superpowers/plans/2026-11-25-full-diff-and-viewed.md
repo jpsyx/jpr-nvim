@@ -489,7 +489,7 @@ git commit -m "docs: document full diff navigation, single-line folds, and direc
 
 ## Final Review
 
-help-me-pick: bug-hunting-and-code-review L3 (use=final cause=unknown material=familiar stakes=high verified=yes)
+help-me-pick: bug-hunting-and-code-review L3 (hours=3 cause=unknown material=familiar stakes=high verified=yes)
 
 After Task 7 passes `just check`, run the repository's mandatory completion sequence on `feat/full-diff-and-viewed`:
 1. Run `/avandar-code-review`, fix any findings, re-verify with `just check`, and commit.
