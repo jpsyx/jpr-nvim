@@ -162,20 +162,37 @@ local function resolve_active_diff_bg(kind, normal_bg)
     return fallback[diff_group].bg
 end
 
-local function apply_contrast_highlight(source_group, kind, derived_name)
-    local source_hl = vim.api.nvim_get_hl(0, { name = source_group, link = false })
-    if type(source_hl.fg) ~= "number" or source_hl.reverse == true then
+local function create_theme_context()
+    local normal_highlight = vim.api.nvim_get_hl(0, { name = "Normal", link = false })
+    local add_bg = resolve_active_diff_bg("add", normal_highlight.bg)
+    local delete_bg = resolve_active_diff_bg("delete", normal_highlight.bg)
+    return {
+        normal_bg = normal_highlight.bg,
+        diff_bg = { add = add_bg, delete = delete_bg },
+        is_dark = {
+            add = M.is_dark_background(add_bg, vim.o.background),
+            delete = M.is_dark_background(delete_bg, vim.o.background),
+        },
+    }
+end
+
+local function apply_contrast_highlight(source_group, kind, derived_name, theme_context)
+    local source_highlight = vim.api.nvim_get_hl(0, { name = source_group, link = false })
+    if type(source_highlight.fg) ~= "number" or source_highlight.reverse == true then
         return false
     end
-    local normal_hl = vim.api.nvim_get_hl(0, { name = "Normal", link = false })
-    local diff_bg = resolve_active_diff_bg(kind, normal_hl.bg)
-    local is_dark = M.is_dark_background(diff_bg, vim.o.background)
+    local context = theme_context or create_theme_context()
     local spec = {
-        fg = contrast.adjust_fg_for_diff_bg(source_hl.fg, normal_hl.bg, diff_bg, is_dark),
+        fg = contrast.adjust_fg_for_diff_bg(
+            source_highlight.fg,
+            context.normal_bg,
+            context.diff_bg[kind],
+            context.is_dark[kind]
+        ),
     }
     for _, attr in ipairs(PRESERVED_STYLE_ATTRS) do
-        if source_hl[attr] ~= nil then
-            spec[attr] = source_hl[attr]
+        if source_highlight[attr] ~= nil then
+            spec[attr] = source_highlight[attr]
         end
     end
     vim.api.nvim_set_hl(0, derived_name, spec)
@@ -194,7 +211,7 @@ function M.get_contrast_group(source_group, kind)
     if cached ~= nil then
         return cached or source_group
     end
-    if apply_contrast_highlight(source_group, kind, derived_name) then
+    if apply_contrast_highlight(source_group, kind, derived_name, nil) then
         contrast_cache[derived_name] = derived_name
         registered_derived[derived_name] = { source = source_group, kind = kind }
         return derived_name
@@ -211,8 +228,12 @@ end
 
 local function refresh_contrast_highlights()
     contrast_cache = {}
+    if next(registered_derived) == nil then
+        return
+    end
+    local theme_context = create_theme_context()
     for derived_name, entry in pairs(registered_derived) do
-        if apply_contrast_highlight(entry.source, entry.kind, derived_name) then
+        if apply_contrast_highlight(entry.source, entry.kind, derived_name, theme_context) then
             contrast_cache[derived_name] = derived_name
         else
             vim.api.nvim_set_hl(0, derived_name, { link = entry.source })

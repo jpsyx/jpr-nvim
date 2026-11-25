@@ -41,6 +41,19 @@ function M.get_highlight_group_from_capture(capture_name, language, has_highligh
     return nil
 end
 
+--- Resolves the Treesitter language name for a Neovim `filetype`, or nil when
+--- `filetype` is empty. Used by stream and file-diff syntax helpers.
+function M.get_language_from_filetype(filetype)
+    if type(filetype) ~= "string" or filetype == "" then
+        return nil
+    end
+    local has_language, language = pcall(vim.treesitter.language.get_lang, filetype)
+    if has_language and type(language) == "string" and language ~= "" then
+        return language
+    end
+    return filetype
+end
+
 --- Looks up the Treesitter language name for a repository file `path`, or nil
 --- when Neovim does not recognize the filetype. Used to pick a parser per file
 --- section in the diff stream.
@@ -49,14 +62,10 @@ function M.get_language_from_path(path)
         return nil
     end
     local has_filetype, filetype = pcall(vim.filetype.match, { filename = path })
-    if not has_filetype or type(filetype) ~= "string" or filetype == "" then
+    if not has_filetype then
         return nil
     end
-    local has_language, language = pcall(vim.treesitter.language.get_lang, filetype)
-    if has_language and type(language) == "string" and language ~= "" then
-        return language
-    end
-    return filetype
+    return M.get_language_from_filetype(filetype)
 end
 
 local function group_code_rows_by_path(code_rows)
@@ -126,7 +135,7 @@ function M.collect_line_spans(lines, language)
     end
     local spans_by_line = {}
     local highlight_groups_by_capture = {}
-    for capture_id, node in query:iter_captures(root, source, 0, -1) do
+    for capture_id, node, metadata in query:iter_captures(root, source, 0, -1) do
         local capture_name = query.captures[capture_id]
         if capture_name and not IGNORED_CAPTURES[capture_name] and capture_name:sub(1, 1) ~= "_" then
             local highlight_group = highlight_groups_by_capture[capture_name]
@@ -135,7 +144,14 @@ function M.collect_line_spans(lines, language)
                 highlight_groups_by_capture[capture_name] = highlight_group
             end
             if highlight_group then
-                local start_row, start_col, end_row, end_col = node:range()
+                local capture_meta = metadata and metadata[capture_id]
+                local start_row, start_col, end_row, end_col
+                if capture_meta and capture_meta.range then
+                    local range = vim.treesitter.get_range(node, source, capture_meta)
+                    start_row, start_col, end_row, end_col = range[1], range[2], range[4], range[5]
+                else
+                    start_row, start_col, end_row, end_col = node:range()
+                end
                 append_capture_spans(spans_by_line, lines, highlight_group, start_row, start_col, end_row, end_col)
             end
         end

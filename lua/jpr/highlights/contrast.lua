@@ -82,13 +82,15 @@ local function compute_target_lightness(fg_lightness, bg_lightness, bg_shift, sa
     local lift = bg_shift * 0.85 + 0.04 + 0.06 * same_hue
     local min_separation = 0.34 + 0.08 * same_hue
     if is_dark then
+        local ceiling = math.max(0.96, fg_lightness)
         local headroom = math.max(0, 0.95 - fg_lightness)
         local lifted = fg_lightness + headroom * (1 - math.exp(-lift / math.max(0.08, headroom)))
-        return math.min(0.96, math.max(lifted, math.min(0.94, bg_lightness + min_separation)))
+        return math.min(ceiling, math.max(lifted, math.min(0.94, bg_lightness + min_separation)))
     end
+    local floor = math.min(0.10, fg_lightness)
     local headroom = math.max(0, fg_lightness - 0.12)
     local darkened = fg_lightness - headroom * (1 - math.exp(-lift / math.max(0.08, headroom)))
-    return math.max(0.10, math.min(darkened, math.max(0.14, bg_lightness - min_separation)))
+    return math.max(floor, math.min(darkened, math.max(0.14, bg_lightness - min_separation)))
 end
 
 --- Returns the WCAG 2.1 relative luminance in `[0, 1]` for a 24-bit sRGB integer.
@@ -100,12 +102,12 @@ end
 --- Returns the symmetric WCAG 2.1 contrast ratio in `[1, 21]` between two
 --- 24-bit sRGB integers.
 function M.contrast_ratio(rgb_a, rgb_b)
-    local lum_a = M.relative_luminance(rgb_a)
-    local lum_b = M.relative_luminance(rgb_b)
-    if lum_a < lum_b then
-        lum_a, lum_b = lum_b, lum_a
+    local luminance_a = M.relative_luminance(rgb_a)
+    local luminance_b = M.relative_luminance(rgb_b)
+    if luminance_a < luminance_b then
+        luminance_a, luminance_b = luminance_b, luminance_a
     end
-    return (lum_a + 0.05) / (lum_b + 0.05)
+    return (luminance_a + 0.05) / (luminance_b + 0.05)
 end
 
 --- Converts a 24-bit sRGB integer to perceptual OKLCH `(lightness, chroma, hue)`
@@ -150,9 +152,10 @@ end
 function M.adjust_fg_for_diff_bg(fg_rgb, normal_bg_rgb, diff_bg_rgb, is_dark)
     local fg_lightness, fg_chroma, fg_hue = M.rgb_to_oklch(fg_rgb)
     local bg_lightness, bg_chroma, bg_hue = M.rgb_to_oklch(diff_bg_rgb)
-    local orig_bg_lightness = type(normal_bg_rgb) == "number" and select(1, M.rgb_to_oklch(normal_bg_rgb))
+    local original_background_lightness = type(normal_bg_rgb) == "number" and select(1, M.rgb_to_oklch(normal_bg_rgb))
         or (is_dark and DEFAULT_DARK_BG_LIGHTNESS or DEFAULT_LIGHT_BG_LIGHTNESS)
-    local bg_shift = is_dark and math.max(0, bg_lightness - orig_bg_lightness) or math.max(0, orig_bg_lightness - bg_lightness)
+    local bg_shift = is_dark and math.max(0, bg_lightness - original_background_lightness)
+        or math.max(0, original_background_lightness - bg_lightness)
     local is_both_chromatic = fg_chroma > CHROMATIC_CHROMA_FLOOR and bg_chroma > CHROMATIC_CHROMA_FLOOR
     local same_hue = is_both_chromatic and compute_hue_proximity(fg_hue, bg_hue) or 0
     local desired_lightness = compute_target_lightness(fg_lightness, bg_lightness, bg_shift, same_hue, is_dark)

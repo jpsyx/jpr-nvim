@@ -163,7 +163,7 @@ assert(has_line_priority, "JprDiffAdd line extmark has priority 100")
 assert(has_word_priority, "JprDiffAddText word extmark has priority 110")
 
 local add_bg = vim.api.nvim_get_hl(0, { name = "JprDiffAdd", link = false }).bg
-local del_bg = vim.api.nvim_get_hl(0, { name = "JprDiffDelete", link = false }).bg
+local delete_bg = vim.api.nvim_get_hl(0, { name = "JprDiffDelete", link = false }).bg
 local raw_keyword_fg = vim.api.nvim_get_hl(0, { name = "@keyword", link = false }).fg
 local syntax_marks = vim.api.nvim_buf_get_extmarks(buf, syntax_namespace, 0, -1, { details = true })
 assert(#syntax_marks > 0, "Lua stream rows receive Treesitter syntax extmarks")
@@ -176,54 +176,54 @@ local has_added_keyword = false
 local has_added_fallback = false
 local has_added_number = false
 local has_multiline_second_row = false
-local has_unknown_ts_mark = false
+local has_unknown_treesitter_mark = false
 local has_unknown_normal_fallback = false
 
 for _, mark in ipairs(syntax_marks) do
     local row, col_start, details = mark[2], mark[3], mark[4]
-    local hl_group = details.hl_group
+    local highlight_group = details.hl_group
     if row == 2 and details.priority == 85 then
         has_context_fallback = true
     end
     if row == 2 and col_start == gutter_length and details.end_col == gutter_length + 5 and details.priority == 90 then
-        if type(hl_group) == "string" and vim.startswith(hl_group, "@keyword") then
+        if type(highlight_group) == "string" and vim.startswith(highlight_group, "@keyword") then
             has_context_keyword = true
         end
     end
-    if row == 3 and details.priority == 85 and type(hl_group) == "string" and vim.startswith(hl_group, "JprDiffDeleteFg_") then
+    if row == 3 and details.priority == 85 and type(highlight_group) == "string" and vim.startswith(highlight_group, "JprDiffDeleteFg_") then
         has_removed_fallback = true
     end
     if row == 3 and col_start == gutter_length and details.end_col == gutter_length + 5 and details.priority == 90 then
-        if type(hl_group) == "string" and vim.startswith(hl_group, "JprDiffDeleteFg_") then
-            local fg = vim.api.nvim_get_hl(0, { name = hl_group, link = false }).fg
-            assert(contrast.contrast_ratio(fg, del_bg) > contrast.contrast_ratio(raw_keyword_fg, del_bg), "removed keyword contrast lifted")
+        if type(highlight_group) == "string" and vim.startswith(highlight_group, "JprDiffDeleteFg_") then
+            local fg = vim.api.nvim_get_hl(0, { name = highlight_group, link = false }).fg
+            assert(contrast.contrast_ratio(fg, delete_bg) > contrast.contrast_ratio(raw_keyword_fg, delete_bg), "removed keyword contrast lifted")
             has_removed_keyword = true
         end
     end
-    if row == 4 and details.priority == 85 and type(hl_group) == "string" and vim.startswith(hl_group, "JprDiffAddFg_") then
+    if row == 4 and details.priority == 85 and type(highlight_group) == "string" and vim.startswith(highlight_group, "JprDiffAddFg_") then
         has_added_fallback = true
     end
     if row == 4 and col_start == gutter_length and details.end_col == gutter_length + 5 and details.priority == 90 then
-        if type(hl_group) == "string" and vim.startswith(hl_group, "JprDiffAddFg_") then
-            local fg = vim.api.nvim_get_hl(0, { name = hl_group, link = false }).fg
+        if type(highlight_group) == "string" and vim.startswith(highlight_group, "JprDiffAddFg_") then
+            local fg = vim.api.nvim_get_hl(0, { name = highlight_group, link = false }).fg
             assert(contrast.contrast_ratio(fg, add_bg) > contrast.contrast_ratio(raw_keyword_fg, add_bg), "added keyword contrast lifted")
             has_added_keyword = true
         end
     end
     if row == 4 and col_start == gutter_length + 15 and details.end_col == gutter_length + 17 and details.priority == 90 then
-        if type(hl_group) == "string" and vim.startswith(hl_group, "JprDiffAddFg_") then
+        if type(highlight_group) == "string" and vim.startswith(highlight_group, "JprDiffAddFg_") then
             has_added_number = true
         end
     end
     if row == 6 and col_start == gutter_length and details.end_col == gutter_length + 8 and details.priority == 90 then
-        if type(hl_group) == "string" and vim.startswith(hl_group, "JprDiffAddFg_") then
+        if type(highlight_group) == "string" and vim.startswith(highlight_group, "JprDiffAddFg_") then
             has_multiline_second_row = true
         end
     end
     if row == 9 and details.priority == 90 then
-        has_unknown_ts_mark = true
+        has_unknown_treesitter_mark = true
     end
-    if row == 9 and details.priority == 85 and type(hl_group) == "string" and vim.startswith(hl_group, "JprDiffAddFg_") then
+    if row == 9 and details.priority == 85 and type(highlight_group) == "string" and vim.startswith(highlight_group, "JprDiffAddFg_") then
         has_unknown_normal_fallback = true
     end
 end
@@ -232,7 +232,7 @@ assert(has_context_keyword and not has_context_fallback, "context row keeps raw 
 assert(has_removed_keyword and has_removed_fallback, "removed row receives contrast-lifted keyword and Normal fallback")
 assert(has_added_keyword and has_added_fallback and has_added_number, "added row receives contrast-lifted keyword, number, and Normal fallback")
 assert(has_multiline_second_row, "multi-line Lua string spans onto second row with contrast-lifted group")
-assert(not has_unknown_ts_mark and has_unknown_normal_fallback, "unknown extension gets Normal fallback only, zero Treesitter marks")
+assert(not has_unknown_treesitter_mark and has_unknown_normal_fallback, "unknown extension gets Normal fallback only, zero Treesitter marks")
 
 -- Oversized files (> 5000 rows) are skipped gracefully without throwing or adding marks.
 local huge_code_rows = {}

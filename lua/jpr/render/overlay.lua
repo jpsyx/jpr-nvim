@@ -75,31 +75,81 @@ local function collect_sorted_boundaries(text_length, words, syntax_spans)
     return points
 end
 
-local function resolve_segment_highlight(seg_start, seg_end, words, syntax_spans, fg_group)
-    local bg_group = "JprDiffDelete"
-    for _, word in ipairs(words or {}) do
-        if word.start <= seg_start and word["end"] >= seg_end then
-            bg_group = "JprDiffDeleteText"
-            break
+local function sort_words_by_start(words)
+    local sorted = {}
+    for index, word in ipairs(words or {}) do
+        sorted[index] = word
+    end
+    table.sort(sorted, function(left, right)
+        return left.start < right.start
+    end)
+    return sorted
+end
+
+local function sort_syntax_spans(syntax_spans)
+    local indexed = {}
+    for index, span in ipairs(syntax_spans or {}) do
+        indexed[index] = {
+            col_start = span.col_start,
+            col_end = span.col_end,
+            hl_group = span.hl_group,
+            order = index,
+        }
+    end
+    table.sort(indexed, function(left, right)
+        if left.col_start ~= right.col_start then
+            return left.col_start < right.col_start
+        end
+        return left.order < right.order
+    end)
+    return indexed
+end
+
+local function pick_active_syntax_fg(active_spans, segment_start, fallback_fg)
+    local write_index = 1
+    local best_order = -1
+    local resolved_fg = fallback_fg
+    for read_index = 1, #active_spans do
+        local span = active_spans[read_index]
+        if span.col_end > segment_start then
+            active_spans[write_index] = span
+            write_index = write_index + 1
+            if span.order > best_order then
+                best_order = span.order
+                resolved_fg = span.hl_group
+            end
         end
     end
-    local resolved_fg = fg_group
-    for _, span in ipairs(syntax_spans or {}) do
-        if span.col_start <= seg_start and span.col_end >= seg_end then
-            resolved_fg = span.hl_group
-        end
+    for clear_index = write_index, #active_spans do
+        active_spans[clear_index] = nil
     end
-    return resolved_fg and { bg_group, resolved_fg } or bg_group
+    return resolved_fg
 end
 
 local function append_styled_removed_chunks(removed, opts, add_chunk)
     local boundaries = collect_sorted_boundaries(#removed.text, removed.words, opts.syntax_spans)
+    local sorted_words = sort_words_by_start(removed.words)
+    local sorted_spans = sort_syntax_spans(opts.syntax_spans)
+    local word_index, span_index, active_spans = 1, 1, {}
     for index = 1, #boundaries - 1 do
-        local seg_start = boundaries[index]
-        local seg_end = boundaries[index + 1]
-        if seg_end > seg_start then
-            local highlight = resolve_segment_highlight(seg_start, seg_end, removed.words, opts.syntax_spans, opts.fg_group)
-            add_chunk(removed.text:sub(seg_start + 1, seg_end), highlight)
+        local segment_start = boundaries[index]
+        local segment_end = boundaries[index + 1]
+        if segment_end > segment_start then
+            while word_index <= #sorted_words and sorted_words[word_index]["end"] <= segment_start do
+                word_index = word_index + 1
+            end
+            local current_word = sorted_words[word_index]
+            local is_changed_word = current_word ~= nil and current_word.start <= segment_start and current_word["end"] >= segment_end
+            while span_index <= #sorted_spans and sorted_spans[span_index].col_start <= segment_start do
+                if sorted_spans[span_index].col_end > segment_start then
+                    active_spans[#active_spans + 1] = sorted_spans[span_index]
+                end
+                span_index = span_index + 1
+            end
+            local bg_group = is_changed_word and "JprDiffDeleteText" or "JprDiffDelete"
+            local resolved_fg = pick_active_syntax_fg(active_spans, segment_start, opts.fg_group)
+            local highlight = resolved_fg and { bg_group, resolved_fg } or bg_group
+            add_chunk(removed.text:sub(segment_start + 1, segment_end), highlight)
         end
     end
 end

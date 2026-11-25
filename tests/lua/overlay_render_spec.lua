@@ -116,4 +116,24 @@ assert(vim.deep_equal(styled_marks[1].opts.virt_lines[1], {
     { " x = 1", { "JprDiffDelete", "JprDiffDeleteFg_Normal" } },
 }), vim.inspect(styled_marks[1].opts.virt_lines[1]))
 
+-- Nested syntax spans preserve later-span precedence inside the inner span and
+-- restore the outer span afterward without quadratic blowup.
+local nested_chunks = overlay.removed_line_to_chunks(
+    { text = "foo(bar, 1)", words = { { start = 4, ["end"] = 7 } } },
+    {
+        width = 0,
+        tabstop = 4,
+        fg_group = "JprDiffDeleteFg_Normal",
+        syntax_spans = {
+            { col_start = 0, col_end = 11, hl_group = "JprDiffDeleteFg_Outer" },
+            { col_start = 4, col_end = 7, hl_group = "JprDiffDeleteFg_Inner" },
+        },
+    }
+)
+assert(vim.deep_equal(nested_chunks, {
+    { "foo(", { "JprDiffDelete", "JprDiffDeleteFg_Outer" } },
+    { "bar", { "JprDiffDeleteText", "JprDiffDeleteFg_Inner" } },
+    { ", 1)", { "JprDiffDelete", "JprDiffDeleteFg_Outer" } },
+}), vim.inspect(nested_chunks))
+
 print("overlay_render_spec: ok")

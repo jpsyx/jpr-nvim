@@ -6,7 +6,6 @@ local diff_contrast = require("jpr.views.diff.contrast")
 local diff_threads = require("jpr.views.diff.threads")
 local highlights = require("jpr.highlights")
 local overlay = require("jpr.render.overlay")
-local stream_syntax = require("jpr.views.stream.syntax")
 local view_mode = require("jpr.view_mode")
 
 local M = {}
@@ -103,51 +102,6 @@ local function reveal_lines_above_first(buf, count)
     end
 end
 
-local MAX_REMOVED_SYNTAX_LINES = 500
-
-local function get_language_from_buffer(buf)
-    local filetype = vim.bo[buf].filetype
-    if type(filetype) ~= "string" or filetype == "" then
-        return nil
-    end
-    local has_language, language = pcall(vim.treesitter.language.get_lang, filetype)
-    if has_language and type(language) == "string" and language ~= "" then
-        return language
-    end
-    return filetype
-end
-
-local function build_removed_syntax_by_block(buf, diff)
-    local language = get_language_from_buffer(buf)
-    if not language then
-        return nil
-    end
-    local syntax_by_block = {}
-    for block_index, block in ipairs(diff.removed or {}) do
-        if #block.lines > 0 and #block.lines <= MAX_REMOVED_SYNTAX_LINES then
-            local block_lines = {}
-            for line_index, removed in ipairs(block.lines) do
-                block_lines[line_index] = removed.text
-            end
-            local spans_by_line = stream_syntax.collect_line_spans(block_lines, language)
-            local contrast_block = {}
-            for line_index, spans in pairs(spans_by_line) do
-                local mapped = {}
-                for span_index, span in ipairs(spans) do
-                    mapped[span_index] = {
-                        col_start = span.col_start,
-                        col_end = span.col_end,
-                        hl_group = highlights.get_contrast_group(span.hl_group, "delete"),
-                    }
-                end
-                contrast_block[line_index] = mapped
-            end
-            syntax_by_block[block_index] = contrast_block
-        end
-    end
-    return syntax_by_block
-end
-
 --- Draws `diff` on `buf` as extmarks: added lines, changed words, and the
 --- removed lines as virtual lines, and attaches viewport foreground contrast.
 function M.draw_overlay(buf, diff, win)
@@ -158,7 +112,7 @@ function M.draw_overlay(buf, diff, win)
         width = vim.api.nvim_win_get_width(win),
         tabstop = vim.bo[buf].tabstop,
         removed_fg_group = normal_delete_fg ~= "Normal" and normal_delete_fg or nil,
-        removed_syntax_by_block = build_removed_syntax_by_block(buf, diff),
+        removed_syntax_by_block = diff_contrast.build_removed_syntax_by_block(buf, diff),
     }
     local marks = overlay.create_extmarks_from_diff(diff, line_count, opts)
     for _, mark in ipairs(marks) do
