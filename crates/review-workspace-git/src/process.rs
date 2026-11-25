@@ -98,10 +98,16 @@ pub fn get_stdout_from_output(program: &str, args: &[&str], output: Output) -> R
         return Ok(output.stdout);
     }
     let stderr = String::from_utf8_lossy(&output.stderr);
-    if stderr.trim().is_empty() {
+    let trimmed = stderr.trim();
+    if trimmed.is_empty() {
         bail!("{program} {} failed with {}", args.join(" "), output.status);
     }
-    bail!("{program} failed: {}", stderr.trim())
+    if program == "gh" && review_core::is_gh_auth_failure_text(trimmed) {
+        return Err(anyhow::Error::new(review_core::ForgeAuthError::new(
+            format!("{program} failed: {trimmed}"),
+        )));
+    }
+    bail!("{program} failed: {trimmed}")
 }
 
 #[cfg(test)]
@@ -129,6 +135,30 @@ mod tests {
         let message = format!("{error:#}");
         assert!(message.contains("sh -c exit 3"), "{message}");
         assert!(message.contains("exit status: 3"), "{message}");
+    }
+
+    #[test]
+    fn gh_auth_stderr_produces_forge_auth_error_while_git_does_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let status = Command::new("sh")
+            .args(["-c", "exit 1"])
+            .current_dir(dir.path())
+            .status()
+            .unwrap();
+        let gh_output = Output {
+            status,
+            stdout: Vec::new(),
+            stderr: b"To get started with GitHub CLI, please run:  gh auth login\n".to_vec(),
+        };
+        let gh_err = get_stdout_from_output("gh", &["pr", "checkout", "7"], gh_output).unwrap_err();
+        assert!(review_core::is_auth_error(&gh_err), "{gh_err:#}");
+        let git_output = Output {
+            status,
+            stdout: Vec::new(),
+            stderr: b"gh auth login\n".to_vec(),
+        };
+        let git_err = get_stdout_from_output("git", &["status"], git_output).unwrap_err();
+        assert!(!review_core::is_auth_error(&git_err), "{git_err:#}");
     }
 
     #[test]
