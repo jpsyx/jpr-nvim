@@ -2,7 +2,9 @@
 -- (unified), or Neovim's diff mode beside a read-only base buffer (split).
 -- The engine computes every diff; this only draws it and manages the base
 -- windows.
+local diff_contrast = require("jpr.views.diff.contrast")
 local diff_threads = require("jpr.views.diff.threads")
+local highlights = require("jpr.highlights")
 local overlay = require("jpr.render.overlay")
 local view_mode = require("jpr.view_mode")
 
@@ -101,16 +103,31 @@ local function reveal_lines_above_first(buf, count)
 end
 
 --- Draws `diff` on `buf` as extmarks: added lines, changed words, and the
---- removed lines as virtual lines.
+--- removed lines as virtual lines, and attaches viewport foreground contrast.
 function M.draw_overlay(buf, diff, win)
     vim.api.nvim_buf_clear_namespace(buf, namespace, 0, -1)
-    local opts = { width = vim.api.nvim_win_get_width(win), tabstop = vim.bo[buf].tabstop }
-    local marks = overlay.create_extmarks_from_diff(diff, vim.api.nvim_buf_line_count(buf), opts)
+    local line_count = vim.api.nvim_buf_line_count(buf)
+    local normal_delete_fg = highlights.get_contrast_group("Normal", "delete")
+    local opts = {
+        width = vim.api.nvim_win_get_width(win),
+        tabstop = vim.bo[buf].tabstop,
+        removed_fg_group = normal_delete_fg ~= "Normal" and normal_delete_fg or nil,
+        removed_syntax_by_block = diff_contrast.build_removed_syntax_by_block(buf, diff),
+    }
+    local marks = overlay.create_extmarks_from_diff(diff, line_count, opts)
     for _, mark in ipairs(marks) do
         -- A buffer edited since its last save can be shorter than the diff.
         local mark_opts = vim.tbl_extend("force", mark.opts, { strict = false })
         pcall(vim.api.nvim_buf_set_extmark, buf, namespace, mark.line, mark.col, mark_opts)
     end
+    local added_lines = {}
+    for _, added in ipairs(diff.added or {}) do
+        local row = added.line - 1
+        if row >= 0 and row < line_count then
+            added_lines[row] = "add"
+        end
+    end
+    diff_contrast.attach_unified(win, buf, added_lines)
     reveal_lines_above_first(buf, count_lines_above_first(marks))
 end
 
@@ -163,6 +180,7 @@ function M.open_base(session, win, buf, diff)
         vim.api.nvim_win_call(diff_win, function()
             vim.cmd("diffthis")
         end)
+        diff_contrast.attach_split(diff_win)
     end
     diff_threads.draw_split_threads(session, base_win, win, base_buf, buf, diff)
 end
@@ -187,12 +205,14 @@ function M.clear(session, win)
     local threads = require("jpr.views.threads")
     local applied = session.diff.applied[win]
     session.diff.applied[win] = nil
+    diff_contrast.detach_window(win)
     diff_threads.set_window_signcolumn(session, win, false)
     session.diff.saved_signcolumn[win] = nil
     if applied and not is_buffer_drawn(session, applied.buf) then
         if vim.api.nvim_buf_is_valid(applied.buf) then
             vim.api.nvim_buf_clear_namespace(applied.buf, namespace, 0, -1)
         end
+        diff_contrast.clear_buffer(applied.buf)
         threads.clear_buffer(session, applied.buf)
     end
     local base_split = session.diff.splits[win]
@@ -200,6 +220,7 @@ function M.clear(session, win)
     if not base_split then
         return
     end
+    diff_contrast.detach_window(base_split.base_win)
     if base_split.base_buf then
         threads.clear_buffer(session, base_split.base_buf)
     end

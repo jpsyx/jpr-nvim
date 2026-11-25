@@ -1,5 +1,8 @@
--- Highlight group definitions for jpr: semantic UI links plus soft
--- background-only diff tints blended from the active colorscheme's Normal.bg.
+-- Highlight group definitions for jpr: semantic UI links, soft background-only
+-- diff tints blended from the active colorscheme's Normal.bg, and lazy
+-- OKLCH contrast-adjusted foreground companion groups.
+local contrast = require("jpr.highlights.contrast")
+
 local M = {}
 
 local SEMANTIC_LINKS = {
@@ -55,7 +58,34 @@ local LIGHT_FALLBACK_DIFF_HIGHLIGHTS = {
     JprDiffDeleteText = { bg = 0xefb4b8 },
 }
 
+local CONTRAST_PREFIX = {
+    add = "JprDiffAddFg_",
+    delete = "JprDiffDeleteFg_",
+}
+
+local KIND_TO_DIFF_GROUP = {
+    add = "JprDiffAdd",
+    delete = "JprDiffDelete",
+}
+
+local PRESERVED_STYLE_ATTRS = {
+    "bold",
+    "italic",
+    "underline",
+    "undercurl",
+    "underdouble",
+    "underdotted",
+    "underdashed",
+    "strikethrough",
+    "sp",
+    "blend",
+    "standout",
+    "nocombine",
+}
+
 local last_applied_diff_bg = {}
+local contrast_cache = {}
+local registered_derived = {}
 
 local function rgb_to_channels(rgb)
     local red = math.floor(rgb / 0x10000) % 256
@@ -109,6 +139,109 @@ function M.create_diff_highlights(normal_bg, background_option)
     }
 end
 
+--- Builds an injective, Neovim-safe companion highlight group name for
+--- `source_group` under diff `kind` (`"add"` or `"delete"`).
+function M.build_contrast_group_name(source_group, kind)
+    local prefix = CONTRAST_PREFIX[kind]
+    if not prefix or type(source_group) ~= "string" or source_group == "" then
+        return nil
+    end
+    local encoded = source_group:gsub("([^%w])", function(character)
+        return ("_%02x"):format(character:byte())
+    end)
+    return prefix .. encoded
+end
+
+local function resolve_active_diff_bg(kind, normal_bg)
+    local diff_group = KIND_TO_DIFF_GROUP[kind]
+    local active_diff = vim.api.nvim_get_hl(0, { name = diff_group, link = false })
+    if type(active_diff.bg) == "number" then
+        return active_diff.bg
+    end
+    local fallback = M.create_diff_highlights(normal_bg, vim.o.background)
+    return fallback[diff_group].bg
+end
+
+local function create_theme_context()
+    local normal_highlight = vim.api.nvim_get_hl(0, { name = "Normal", link = false })
+    local add_bg = resolve_active_diff_bg("add", normal_highlight.bg)
+    local delete_bg = resolve_active_diff_bg("delete", normal_highlight.bg)
+    return {
+        normal_bg = normal_highlight.bg,
+        diff_bg = { add = add_bg, delete = delete_bg },
+        is_dark = {
+            add = M.is_dark_background(add_bg, vim.o.background),
+            delete = M.is_dark_background(delete_bg, vim.o.background),
+        },
+    }
+end
+
+local function apply_contrast_highlight(source_group, kind, derived_name, theme_context)
+    local source_highlight = vim.api.nvim_get_hl(0, { name = source_group, link = false })
+    if type(source_highlight.fg) ~= "number" or source_highlight.reverse == true then
+        return false
+    end
+    local context = theme_context or create_theme_context()
+    local spec = {
+        fg = contrast.adjust_fg_for_diff_bg(
+            source_highlight.fg,
+            context.normal_bg,
+            context.diff_bg[kind],
+            context.is_dark[kind]
+        ),
+    }
+    for _, attr in ipairs(PRESERVED_STYLE_ATTRS) do
+        if source_highlight[attr] ~= nil then
+            spec[attr] = source_highlight[attr]
+        end
+    end
+    vim.api.nvim_set_hl(0, derived_name, spec)
+    return true
+end
+
+--- Returns the lazily derived contrast-adjusted highlight group for
+--- `source_group` on diff `kind` (`"add"` or `"delete"`), or `source_group`
+--- unchanged when the source group has no numeric `fg` or sets `reverse = true`.
+function M.get_contrast_group(source_group, kind)
+    local derived_name = M.build_contrast_group_name(source_group, kind)
+    if not derived_name then
+        return source_group
+    end
+    local cached = contrast_cache[derived_name]
+    if cached ~= nil then
+        return cached or source_group
+    end
+    if apply_contrast_highlight(source_group, kind, derived_name, nil) then
+        contrast_cache[derived_name] = derived_name
+        registered_derived[derived_name] = { source = source_group, kind = kind }
+        return derived_name
+    end
+    contrast_cache[derived_name] = false
+    return source_group
+end
+
+--- Clears the in-memory contrast lookup cache and registered derived entries.
+function M.reset_contrast_cache()
+    contrast_cache = {}
+    registered_derived = {}
+end
+
+local function refresh_contrast_highlights()
+    contrast_cache = {}
+    if next(registered_derived) == nil then
+        return
+    end
+    local theme_context = create_theme_context()
+    for derived_name, entry in pairs(registered_derived) do
+        if apply_contrast_highlight(entry.source, entry.kind, derived_name, theme_context) then
+            contrast_cache[derived_name] = derived_name
+        else
+            vim.api.nvim_set_hl(0, derived_name, { link = entry.source })
+            contrast_cache[derived_name] = false
+        end
+    end
+end
+
 local function should_update_diff_highlight(group_name)
     local previous_bg = last_applied_diff_bg[group_name]
     if previous_bg == nil then
@@ -131,10 +264,11 @@ local function apply_diff_highlights()
             last_applied_diff_bg[group_name] = nil
         end
     end
+    refresh_contrast_highlights()
 end
 
---- Defines jpr's semantic highlight links and soft background-only diff tints,
---- refreshing them automatically whenever the colorscheme changes.
+--- Defines jpr's semantic highlight links, soft background-only diff tints, and
+--- refreshes any derived contrast foreground groups whenever the colorscheme changes.
 function M.define_highlights()
     for group_name, target in pairs(SEMANTIC_LINKS) do
         vim.api.nvim_set_hl(0, group_name, { link = target, default = true })
