@@ -49,23 +49,28 @@ impl ReviewSession {
     ) -> Result<Thread> {
         let pr = self.require_linked_pr()?.clone();
         if anchor.kind == AnchorKind::Pr {
-            return Ok(self.insert_pr_comment(&pr, body));
+            return self.insert_pr_comment(&pr, body);
         }
         self.validate_github_anchor_file(&anchor)?;
-        Ok(self.insert_code_thread(&pr, anchor, body))
+        self.insert_code_thread(&pr, anchor, body)
     }
 
-    fn insert_pr_comment(&mut self, pr: &PullRequest, body: &str) -> Thread {
+    fn insert_pr_comment(&mut self, pr: &PullRequest, body: &str) -> Result<Thread> {
         match self.ports.forge.create_conversation_comment(pr, body) {
             Ok(thread) => {
                 self.threads.push(thread.clone());
-                thread
+                Ok(thread)
             }
             Err(error) => self.insert_failed_or_queued_thread(Anchor::pr(), body, error),
         }
     }
 
-    fn insert_code_thread(&mut self, pr: &PullRequest, anchor: Anchor, body: &str) -> Thread {
+    fn insert_code_thread(
+        &mut self,
+        pr: &PullRequest,
+        anchor: Anchor,
+        body: &str,
+    ) -> Result<Thread> {
         let pending_id = self.saved.registry.pending_review_id.clone();
         match self
             .ports
@@ -75,7 +80,7 @@ impl ReviewSession {
             Ok(created) => {
                 self.saved.registry.pending_review_id = Some(created.pending_review_id);
                 self.threads.push(created.thread.clone());
-                created.thread
+                Ok(created.thread)
             }
             Err(error) => self.insert_failed_or_queued_thread(anchor, body, error),
         }
@@ -86,7 +91,10 @@ impl ReviewSession {
         anchor: Anchor,
         body: &str,
         error: ForgeWriteError,
-    ) -> Thread {
+    ) -> Result<Thread> {
+        if let ForgeWriteError::AuthRequired(reason) = error {
+            return Err(anyhow::Error::new(crate::ForgeAuthError::new(reason)));
+        }
         let temp_thread_id = self.allocate_temp_id("t");
         let temp_message_id = self.allocate_temp_id("m");
         let (sync, sync_error) = match error {
@@ -109,6 +117,7 @@ impl ReviewSession {
                 (MessageSync::Queued, None)
             }
             ForgeWriteError::Rejected(reason) => (MessageSync::Failed, Some(reason)),
+            ForgeWriteError::AuthRequired(_) => unreachable!("handled above"),
         };
         let message = self.create_optimistic_message(&temp_message_id, body, sync, sync_error);
         let thread = Thread {
@@ -122,7 +131,7 @@ impl ReviewSession {
             promoted_to: None,
         };
         self.threads.push(thread.clone());
-        thread
+        Ok(thread)
     }
 
     pub(super) fn record_failed_or_queued_reply(
@@ -132,6 +141,9 @@ impl ReviewSession {
         body: &str,
         error: ForgeWriteError,
     ) -> Result<(Thread, SessionView)> {
+        if let ForgeWriteError::AuthRequired(reason) = error {
+            return Err(anyhow::Error::new(crate::ForgeAuthError::new(reason)));
+        }
         let temp_message_id = self.allocate_temp_id("m");
         let (sync, sync_error) = match error {
             ForgeWriteError::Transient(_) => {
@@ -147,6 +159,7 @@ impl ReviewSession {
                 (MessageSync::Queued, None)
             }
             ForgeWriteError::Rejected(reason) => (MessageSync::Failed, Some(reason)),
+            ForgeWriteError::AuthRequired(_) => unreachable!("handled above"),
         };
         let message = self.create_optimistic_message(&temp_message_id, body, sync, sync_error);
         let thread = self.push_reply_message(thread_id, message)?;
@@ -162,6 +175,9 @@ impl ReviewSession {
         body: &str,
         error: ForgeWriteError,
     ) -> Result<(Thread, SessionView)> {
+        if let ForgeWriteError::AuthRequired(reason) = error {
+            return Err(anyhow::Error::new(crate::ForgeAuthError::new(reason)));
+        }
         let (sync, sync_error) = match error {
             ForgeWriteError::Transient(_) => {
                 self.saved
@@ -176,6 +192,7 @@ impl ReviewSession {
                 (MessageSync::Queued, None)
             }
             ForgeWriteError::Rejected(reason) => (MessageSync::Failed, Some(reason)),
+            ForgeWriteError::AuthRequired(_) => unreachable!("handled above"),
         };
         let target = find_message_mut(&mut self.threads, message_id)
             .with_context(|| format!("unknown message {message_id}"))?;
@@ -322,6 +339,12 @@ impl ReviewSession {
                     target.reactions = previous_reactions;
                 }
                 bail!("{reason}");
+            }
+            Err(ForgeWriteError::AuthRequired(reason)) => {
+                if let Some(target) = find_message_mut(&mut self.threads, message_id) {
+                    target.reactions = previous_reactions;
+                }
+                Err(anyhow::Error::new(crate::ForgeAuthError::new(reason)))
             }
         }
     }

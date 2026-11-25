@@ -186,6 +186,13 @@ pub enum Event {
     SyncFailed {
         /// What went wrong, for a person to read.
         message: String,
+        /// Whether the failure was caused by missing or invalid `gh` authentication.
+        #[serde(default)]
+        auth_required: bool,
+        /// Whether this failure came from the background poller rather than an
+        /// explicit user-initiated request (`sync`, `setViewed`, `push`).
+        #[serde(default)]
+        is_background: bool,
     },
     /// A file was marked viewed or unviewed, or a queued mark reached the
     /// forge.

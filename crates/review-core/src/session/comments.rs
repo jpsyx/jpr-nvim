@@ -166,6 +166,9 @@ impl ReviewSession {
                 self.save_and_announce_threads()
             }
             Err(ForgeWriteError::Rejected(reason)) => bail!("{reason}"),
+            Err(ForgeWriteError::AuthRequired(reason)) => {
+                Err(anyhow::Error::new(crate::ForgeAuthError::new(reason)))
+            }
         }
     }
 
@@ -227,6 +230,12 @@ impl ReviewSession {
                 }
                 bail!("{reason}");
             }
+            Err(ForgeWriteError::AuthRequired(reason)) => {
+                if let Some(target) = self.find_thread_mut(canonical_thread_id) {
+                    target.state = previous_state;
+                }
+                Err(anyhow::Error::new(crate::ForgeAuthError::new(reason)))
+            }
         }
     }
 
@@ -274,7 +283,11 @@ impl ReviewSession {
         }
         let canonical_message_id = self.get_canonical_id_from_id(message_id);
         self.enqueue_failed_message(&canonical_message_id, None)?;
-        let _ = self.send_queued_comments();
-        self.save_and_announce_threads()
+        let (_, auth_error) = self.send_queued_comments();
+        let view = self.save_and_announce_threads()?;
+        if let Some(reason) = auth_error {
+            return Err(anyhow::Error::new(crate::ForgeAuthError::new(reason)));
+        }
+        Ok(view)
     }
 }

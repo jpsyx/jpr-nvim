@@ -93,11 +93,75 @@ fn delta_and_failure_events_are_tagged_by_type() {
     assert_eq!(agent_round["round"]["round"], 1);
     let failed = serde_json::to_value(Event::SyncFailed {
         message: "offline".into(),
+        auth_required: false,
+        is_background: false,
     })
     .unwrap();
     assert_eq!(
         failed,
-        serde_json::json!({ "type": "syncFailed", "message": "offline" })
+        serde_json::json!({
+            "type": "syncFailed",
+            "message": "offline",
+            "authRequired": false,
+            "isBackground": false
+        })
+    );
+    let auth_failed = serde_json::to_value(Event::SyncFailed {
+        message: "bad credentials".into(),
+        auth_required: true,
+        is_background: true,
+    })
+    .unwrap();
+    assert_eq!(auth_failed["authRequired"], true);
+    assert_eq!(auth_failed["isBackground"], true);
+    let legacy: Event =
+        serde_json::from_value(serde_json::json!({ "type": "syncFailed", "message": "old" }))
+            .unwrap();
+    assert_eq!(
+        legacy,
+        Event::SyncFailed {
+            message: "old".into(),
+            auth_required: false,
+            is_background: false,
+        }
+    );
+}
+
+#[test]
+fn forge_owner_and_repo_use_camel_case_wire_format() {
+    let user = crate::ForgeOwner {
+        login: "octo".into(),
+        name: Some("Octocat".into()),
+        kind: crate::OwnerKind::User,
+    };
+    let org = crate::ForgeOwner {
+        login: "acme".into(),
+        name: None,
+        kind: crate::OwnerKind::Organization,
+    };
+    assert_eq!(
+        serde_json::to_value(&user).unwrap(),
+        serde_json::json!({ "login": "octo", "name": "Octocat", "kind": "user" })
+    );
+    assert_eq!(
+        serde_json::to_value(&org).unwrap(),
+        serde_json::json!({ "login": "acme", "kind": "organization" })
+    );
+    let repo = crate::ForgeRepo {
+        name_with_owner: "acme/widgets".into(),
+        description: None,
+        is_private: true,
+        is_archived: false,
+        updated_at: "2026-11-24T12:00:00Z".into(),
+    };
+    assert_eq!(
+        serde_json::to_value(&repo).unwrap(),
+        serde_json::json!({
+            "nameWithOwner": "acme/widgets",
+            "isPrivate": true,
+            "isArchived": false,
+            "updatedAt": "2026-11-24T12:00:00Z"
+        })
     );
 }
 

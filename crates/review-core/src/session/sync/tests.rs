@@ -102,7 +102,9 @@ fn a_failed_sync_keeps_the_last_view_and_announces_the_failure() {
     assert_eq!(
         events.try_recv().expect("an event was sent"),
         Event::SyncFailed {
-            message: "gh timed out after 30s".into()
+            message: "gh timed out after 30s".into(),
+            auth_required: false,
+            is_background: false,
         }
     );
     assert_eq!(

@@ -3,6 +3,7 @@
 //! docs/architecture.md.
 
 pub mod agent;
+pub mod auth;
 mod comments;
 pub mod guide;
 pub mod ports;
@@ -17,6 +18,7 @@ pub mod contract;
 #[cfg(any(test, feature = "fakes"))]
 pub mod fakes;
 
+pub use auth::{AUTH_EXIT_CODE, ForgeAuthError, is_auth_error, is_gh_auth_failure_text};
 pub use guide::build_agent_guide;
 pub use presenter::session_view;
 pub use session::{PathRename, ReviewSession};

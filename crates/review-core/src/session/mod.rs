@@ -312,6 +312,8 @@ const fn get_view_from_event(event: &Event) -> Option<&SessionView> {
 }
 
 #[cfg(test)]
+mod auth_tests;
+#[cfg(test)]
 mod tests {
     use review_model::SyncState;
 

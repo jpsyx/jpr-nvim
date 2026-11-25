@@ -16,12 +16,25 @@ impl ReviewSession {
             if let Some(file) = self.saved.files.iter_mut().find(|file| file.path == path) {
                 file.viewed = viewed_flag_to_state(viewed);
                 let queue = &mut self.saved.registry.queued_viewed;
-                if self.ports.forge.set_viewed(&pr, path, viewed).is_ok() {
-                    queue.remove(path);
-                } else {
-                    queue.insert(path.to_owned(), viewed);
+                let auth_message = match self.ports.forge.set_viewed(&pr, path, viewed) {
+                    Ok(()) => {
+                        queue.remove(path);
+                        None
+                    }
+                    Err(error) => {
+                        queue.insert(path.to_owned(), viewed);
+                        crate::is_auth_error(&error).then(|| format!("{error:#}"))
+                    }
+                };
+                let view = self.save_and_announce_viewed()?;
+                if let Some(message) = auth_message {
+                    self.publish(&Event::SyncFailed {
+                        message,
+                        auth_required: true,
+                        is_background: false,
+                    });
                 }
-                return self.save_and_announce_viewed();
+                return Ok(view);
             }
         }
         if let Some(local_file) = self.local_files.iter_mut().find(|file| file.path == path) {
@@ -43,34 +56,58 @@ impl ReviewSession {
     /// Sends the queued viewed marks and comment operations again, saving and
     /// announcing whichever progressed. Returns whether anything changed.
     pub fn flush_queued(&mut self) -> Result<bool> {
-        let has_viewed_landed = self.send_queued();
-        let has_comments_progressed = self.send_queued_comments();
+        self.flush_queued_with_background(false)
+    }
+
+    /// Background poller variant of [`Self::flush_queued`], marking any
+    /// resulting auth [`Event::SyncFailed`] with `is_background = true`.
+    pub fn flush_queued_background(&mut self) -> Result<bool> {
+        self.flush_queued_with_background(true)
+    }
+
+    fn flush_queued_with_background(&mut self, is_background: bool) -> Result<bool> {
+        let (has_viewed_landed, viewed_auth_error) = self.send_queued();
+        let (has_comments_progressed, comments_auth_error) = if viewed_auth_error.is_some() {
+            (false, None)
+        } else {
+            self.send_queued_comments()
+        };
         if has_comments_progressed {
             self.save_and_announce_threads()?;
         }
         if has_viewed_landed {
             self.save_and_announce_viewed()?;
         }
+        if let Some(message) = viewed_auth_error.or(comments_auth_error) {
+            self.publish(&Event::SyncFailed {
+                message,
+                auth_required: true,
+                is_background,
+            });
+        }
         Ok(has_viewed_landed || has_comments_progressed)
     }
 
     /// Sends the queued marks in path order until one fails, dropping each
-    /// one that lands, and returns whether any landed. It stops at the
-    /// first failure because the rest would most likely time out the same
-    /// way.
-    pub(super) fn send_queued(&mut self) -> bool {
+    /// one that lands, and returns `(has_landed, auth_error_message)`. It
+    /// stops at the first failure because the rest would fail the same way.
+    pub(super) fn send_queued(&mut self) -> (bool, Option<String>) {
         let Some(pr) = self.saved.session.pr.clone() else {
-            return false;
+            return (false, None);
         };
         let mut has_landed = false;
+        let mut auth_error = None;
         for (path, viewed) in self.saved.registry.queued_viewed.clone() {
-            if self.ports.forge.set_viewed(&pr, &path, viewed).is_err() {
+            if let Err(error) = self.ports.forge.set_viewed(&pr, &path, viewed) {
+                if crate::is_auth_error(&error) {
+                    auth_error = Some(format!("{error:#}"));
+                }
                 break;
             }
             self.saved.registry.queued_viewed.remove(&path);
             has_landed = true;
         }
-        has_landed
+        (has_landed, auth_error)
     }
 
     /// Saves the session and announces the viewed state as it now stands.

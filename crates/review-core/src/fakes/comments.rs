@@ -12,6 +12,9 @@ use crate::ports::{CreatedReviewThread, ForgeWriteError, ReplyRequest};
 const FAKE_TIMESTAMP: &str = "2026-11-20T00:00:00Z";
 
 fn check_write(state: &ForgeState) -> std::result::Result<(), ForgeWriteError> {
+    if let Some(message) = &state.auth_failure {
+        return Err(ForgeWriteError::AuthRequired(message.clone()));
+    }
     if let Some(message) = &state.rejected_write_failure {
         return Err(ForgeWriteError::Rejected(message.clone()));
     }

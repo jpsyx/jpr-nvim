@@ -109,15 +109,15 @@ impl ReviewSession {
     }
 
     /// Replays queued comment operations in FIFO order (stopping on transient
-    /// errors while marking rejected operations failed without wedging later
-    /// ops) and returns `true` when at least one queued operation landed or was
-    /// retired, for example during `sync`, `flush_queued`, or `retry_message`.
-    pub(in super::super) fn send_queued_comments(&mut self) -> bool {
+    /// or auth errors while marking rejected operations failed without wedging
+    /// later ops) and returns `(has_progressed, auth_error_message)`.
+    pub(in super::super) fn send_queued_comments(&mut self) -> (bool, Option<String>) {
         let Some(pr) = self.saved.session.pr.clone() else {
-            return false;
+            return (false, None);
         };
         let mut queue = VecDeque::from(std::mem::take(&mut self.saved.registry.queued_ops));
         let mut has_progressed = false;
+        let mut auth_error = None;
         while let Some(op) = queue.pop_front() {
             match self.replay_queued_op(&pr, &op, queue.make_contiguous()) {
                 ReplayOutcome::Landed | ReplayOutcome::Rejected => has_progressed = true,
@@ -125,10 +125,15 @@ impl ReviewSession {
                     queue.push_front(op);
                     break;
                 }
+                ReplayOutcome::AuthRequired(message) => {
+                    queue.push_front(op);
+                    auth_error = Some(message);
+                    break;
+                }
             }
         }
         self.saved.registry.queued_ops = queue.into();
-        has_progressed
+        (has_progressed, auth_error)
     }
 
     pub(super) fn finish_created_thread(
@@ -154,6 +159,7 @@ impl ReviewSession {
     ) -> ReplayOutcome {
         match error {
             ForgeWriteError::Transient(_) => ReplayOutcome::Transient,
+            ForgeWriteError::AuthRequired(reason) => ReplayOutcome::AuthRequired(reason),
             ForgeWriteError::Rejected(reason) => {
                 if let Some(message) = find_message_mut(&mut self.threads, message_id) {
                     message.sync = Some(MessageSync::Failed);
