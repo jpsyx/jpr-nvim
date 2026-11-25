@@ -121,7 +121,7 @@ local function append_wrapped_lines(layout, text, indent, max_width, group, item
     end
 end
 
-local function append_palette_command(layout, command, command_index, is_selected, has_session, is_git_repo, max_width)
+local function append_palette_command(layout, command, command_index, is_selected, max_width)
     local prefix = is_selected and SELECTED_PREFIX or UNSELECTED_PREFIX
     local label = M.to_single_line(command.label)
     local id_tag = "[" .. M.to_single_line(command.id) .. "]"
@@ -130,13 +130,9 @@ local function append_palette_command(layout, command, command_index, is_selecte
     local line_index = row_number - 1
 
     layout.item_for_line[row_number] = command_index
-    local is_unavailable = (command.requires_session and not has_session)
-        or (command.requires_git_repo and not is_git_repo)
     if is_selected then
         layout.cursor_line = row_number
         append_highlight(layout.highlights, line_index, 0, #prefix + #label, "JprTitle")
-    elseif is_unavailable then
-        append_highlight(layout.highlights, line_index, #prefix, #prefix + #label, "JprMuted")
     end
     local id_col_start = #prefix + #label + 2
     append_highlight(layout.highlights, line_index, id_col_start, id_col_start + #id_tag, "JprMuted")
@@ -147,7 +143,7 @@ local function append_palette_command(layout, command, command_index, is_selecte
 end
 
 --- Creates lines, byte-range highlights, cursor row, and line-to-item map for the command palette.
---- Emits 1-sentence helper text strictly underneath the currently selected command.
+--- Includes only commands executable in `context` and emits 1-sentence helper text strictly underneath the selected command.
 --- @param commands table[]
 --- @param selected_index integer
 --- @param max_width integer
@@ -155,10 +151,8 @@ end
 --- @return table { lines: string[], highlights: table[], cursor_line: integer, item_for_line: table<integer, integer> }
 function M.create_palette_layout_from_commands(commands, selected_index, max_width, context)
     local layout = { lines = {}, highlights = {}, cursor_line = 1, item_for_line = {} }
-    local command_list = commands or {}
+    local command_list = schema.get_active_commands(commands, context)
     local width = math.max(1, tonumber(max_width) or 80)
-    local has_session = (context and context.has_session) == true
-    local is_git_repo = not (context and context.is_git_repo == false)
     local has_back = type(context and context.on_back) == "function"
 
     if #command_list == 0 then
@@ -166,7 +160,7 @@ function M.create_palette_layout_from_commands(commands, selected_index, max_wid
     else
         local clamped_selected = clamp_index(selected_index, #command_list)
         for command_index, command in ipairs(command_list) do
-            append_palette_command(layout, command, command_index, command_index == clamped_selected, has_session, is_git_repo, width)
+            append_palette_command(layout, command, command_index, command_index == clamped_selected, width)
         end
     end
 

@@ -38,7 +38,7 @@ assert(vim.deep_equal(cjk_split, { "中文", "测试" }), "double-width chars wr
 local cjk_tiny = render.wrap_text("中文", 1)
 assert(vim.deep_equal(cjk_tiny, { "中", "文" }), "double-width char with max_width=1 makes forward progress")
 
--- 2. create_palette_layout_from_commands renders labels, [id], hover-only helper text, session dimming, and wrapping.
+-- 2. create_palette_layout_from_commands filters to executable commands and renders labels, [id], hover-only helper text, and wrapping.
 local commands = {
     {
         id = "open",
@@ -47,72 +47,103 @@ local commands = {
         requires_session = false,
     },
     {
+        id = "local",
+        label = "Review Current Worktree",
+        help = "Review the current git checkout against its base branch.",
+        requires_session = false,
+        requires_git_repo = true,
+    },
+    {
         id = "sync",
         label = "Sync with GitHub",
         help = "Fetch the latest pull request commits and review threads.",
         requires_session = true,
     },
+    {
+        id = "submit",
+        label = "Submit Review",
+        help = "Publish pending draft comments to GitHub.",
+        requires_session = true,
+        when = function(context)
+            return context.is_linked_pr == true
+        end,
+    },
 }
 
-local palette_first = render.create_palette_layout_from_commands(commands, 1, 44, { has_session = false })
-assert_no_em_dash(palette_first.lines, "palette_first")
-assert(palette_first.lines[1] == "▸ Open Pull Request  [open]", "selected command row: " .. tostring(palette_first.lines[1]))
-assert(palette_first.cursor_line == 1, "cursor_line points to command 1")
-assert(palette_first.item_for_line[1] == 1, "item_for_line maps command 1 primary line")
+local palette_no_session = render.create_palette_layout_from_commands(commands, 1, 44, { has_session = false, is_git_repo = true })
+assert_no_em_dash(palette_no_session.lines, "palette_no_session")
+assert(palette_no_session.lines[1] == "▸ Open Pull Request  [open]", "selected command row: " .. tostring(palette_no_session.lines[1]))
+assert(palette_no_session.cursor_line == 1, "cursor_line points to command 1")
+assert(palette_no_session.item_for_line[1] == 1, "item_for_line maps command 1 primary line")
 
-local joined_first = table.concat(palette_first.lines, "\n")
-assert(joined_first:find("Pick an open pull request", 1, true) ~= nil, "selected command help appears")
-assert(joined_first:find("Fetch the latest pull request", 1, true) == nil, "unselected command help MUST NOT appear")
+local joined_no_session = table.concat(palette_no_session.lines, "\n")
+assert(joined_no_session:find("Pick an open pull request", 1, true) ~= nil, "selected command help appears")
+assert(joined_no_session:find("Review the current git checkout", 1, true) == nil, "unselected command help MUST NOT appear")
+assert(joined_no_session:find("Sync with GitHub", 1, true) == nil, "requires_session command omitted when has_session == false")
+assert(joined_no_session:find("Submit Review", 1, true) == nil, "when-gated command omitted when has_session == false")
 
 -- Verify wrapped hover helper lines fit max_width and carry 4-space indent + item_for_line.
-local sync_row_index
-for line_index, line_text in ipairs(palette_first.lines) do
-    if line_text == "  Sync with GitHub  [sync]" then
-        sync_row_index = line_index
+local local_row_index
+for line_index, line_text in ipairs(palette_no_session.lines) do
+    if line_text == "  Review Current Worktree  [local]" then
+        local_row_index = line_index
         break
     end
 end
-assert(sync_row_index ~= nil and sync_row_index > 2, "hover helper lines placed between command 1 and command 2")
-for help_row = 2, sync_row_index - 1 do
-    local help_line = palette_first.lines[help_row]
+assert(local_row_index ~= nil and local_row_index > 2, "hover helper lines placed between command 1 and command 2")
+for help_row = 2, local_row_index - 1 do
+    local help_line = palette_no_session.lines[help_row]
     assert(help_line:sub(1, 4) == "    ", "helper continuation indented by 4 spaces: " .. help_line)
     assert(vim.fn.strdisplaywidth(help_line) <= 44, "helper line fits max_width: " .. help_line)
-    assert(palette_first.item_for_line[help_row] == 1, "helper line maps back to command 1")
+    assert(palette_no_session.item_for_line[help_row] == 1, "helper line maps back to command 1")
 end
-assert(palette_first.item_for_line[sync_row_index] == 2, "item_for_line maps command 2 primary line")
+assert(palette_no_session.item_for_line[local_row_index] == 2, "item_for_line maps command 2 primary line")
 
--- Verify highlights: "▸ Open Pull Request" in JprTitle, [open]/[sync] and unselected Sync with GitHub (no session) in JprMuted.
+-- Verify highlights: "▸ Open Pull Request" in JprTitle, only [open]/[local] tags, hover help, and footer in JprMuted (never visible labels).
 assert(
-    vim.deep_equal(collect_highlighted_texts(palette_first, "JprTitle"), { "▸ Open Pull Request" }),
-    "selected pointer and label highlighted in JprTitle: " .. vim.inspect(collect_highlighted_texts(palette_first, "JprTitle"))
+    vim.deep_equal(collect_highlighted_texts(palette_no_session, "JprTitle"), { "▸ Open Pull Request" }),
+    "selected pointer and label highlighted in JprTitle: " .. vim.inspect(collect_highlighted_texts(palette_no_session, "JprTitle"))
 )
-local muted_first = collect_highlighted_texts(palette_first, "JprMuted")
-assert(vim.tbl_contains(muted_first, "[open]"), "[open] muted")
-assert(vim.tbl_contains(muted_first, "[sync]"), "[sync] muted")
-assert(vim.tbl_contains(muted_first, "Sync with GitHub"), "unselected requires_session label dimmed when has_session == false")
+local muted_no_session = collect_highlighted_texts(palette_no_session, "JprMuted")
+assert(vim.tbl_contains(muted_no_session, "[open]"), "[open] muted")
+assert(vim.tbl_contains(muted_no_session, "[local]"), "[local] muted")
+assert(not vim.tbl_contains(muted_no_session, "Review Current Worktree"), "visible unselected command label is never muted")
 assert(
-    palette_first.lines[#palette_first.lines] == "[j/k] move  [Enter/l] select  [q/Esc] close",
+    palette_no_session.lines[#palette_no_session.lines] == "[j/k] move  [Enter/l] select  [q/Esc] close",
     "palette footer rendered"
 )
 
--- Moving selected_index from 1 to 2 updates cursor_line and swaps hover helper text.
-local palette_second = render.create_palette_layout_from_commands(commands, 2, 80, { has_session = true })
+-- Outside a git repo, requires_git_repo commands are omitted too.
+local palette_non_git = render.create_palette_layout_from_commands(commands, 1, 80, { has_session = false, is_git_repo = false })
+local joined_non_git = table.concat(palette_non_git.lines, "\n")
+assert(joined_non_git:find("Open Pull Request", 1, true) ~= nil, "open remains visible outside git repo")
+assert(joined_non_git:find("Review Current Worktree", 1, true) == nil, "requires_git_repo command omitted outside git repo")
+
+-- Inside an active unlinked session, requires_session commands appear while when-false submit stays hidden.
+local palette_second = render.create_palette_layout_from_commands(commands, 3, 80, { has_session = true, is_git_repo = true, is_linked_pr = false })
 assert(palette_second.lines[1] == "  Open Pull Request  [open]", "command 1 unselected")
-assert(palette_second.lines[2] == "▸ Sync with GitHub  [sync]", "command 2 selected")
-assert(palette_second.cursor_line == 2, "cursor_line moves to command 2")
+assert(palette_second.lines[2] == "  Review Current Worktree  [local]", "command 2 unselected")
+assert(palette_second.lines[3] == "▸ Sync with GitHub  [sync]", "command 3 selected")
+assert(palette_second.cursor_line == 3, "cursor_line moves to command 3")
 local joined_second = table.concat(palette_second.lines, "\n")
 assert(joined_second:find("Pick an open pull request", 1, true) == nil, "command 1 help removed on hover move")
-assert(joined_second:find("Fetch the latest pull request", 1, true) ~= nil, "command 2 help shown on hover move")
+assert(joined_second:find("Fetch the latest pull request", 1, true) ~= nil, "command 3 help shown on hover move")
+assert(joined_second:find("Submit Review", 1, true) == nil, "command with when() == false omitted")
 local muted_second = collect_highlighted_texts(palette_second, "JprMuted")
 assert(
-    not vim.tbl_contains(muted_second, "Sync with GitHub"),
-    "requires_session label not dimmed when has_session == true"
+    not vim.tbl_contains(muted_second, "Open Pull Request") and not vim.tbl_contains(muted_second, "Review Current Worktree"),
+    "no visible command label is muted"
 )
 
--- Empty command list handled safely without crashing.
+-- Empty command list and all-filtered-out command list handled safely without crashing.
 local palette_empty = render.create_palette_layout_from_commands({}, 1, 60, { has_session = false })
 assert(#palette_empty.lines >= 3, "empty palette renders fallback and footer")
 assert(palette_empty.cursor_line == 1, "empty palette sets safe cursor_line")
+local palette_all_filtered = render.create_palette_layout_from_commands({ commands[3], commands[4] }, 1, 60, { has_session = false })
+assert(
+    table.concat(palette_all_filtered.lines, "\n"):find("(no commands available)", 1, true) ~= nil,
+    "all-filtered-out palette renders fallback message"
+)
 
 -- 3. create_step_layout_from_state renders header with dots, 1-sentence help, hover-only option help, and footers.
 local active_steps = {
@@ -246,36 +277,17 @@ assert(
     "text footer single direct step without palette"
 )
 
--- 6. Edge cases: clamping, hovered requires_session command without session, toggle step options, empty state, and option swap.
-local clamped_high = render.create_palette_layout_from_commands(commands, 99, 80, { has_session = false })
-assert(clamped_high.cursor_line == 2, "out-of-range selected_index clamps to last command")
+-- 6. Edge cases: clamping against filtered commands, toggle step options, empty state, and option swap.
+local clamped_high = render.create_palette_layout_from_commands(commands, 99, 80, { has_session = false, is_git_repo = true })
+assert(clamped_high.cursor_line == 2, "out-of-range selected_index clamps to last visible command")
 assert(
-    vim.tbl_contains(collect_highlighted_texts(clamped_high, "JprTitle"), "▸ Sync with GitHub"),
-    "hovered requires_session command highlights pointer and label in JprTitle even when has_session == false"
+    vim.tbl_contains(collect_highlighted_texts(clamped_high, "JprTitle"), "▸ Review Current Worktree"),
+    "clamped selection highlights last visible command in JprTitle"
 )
 assert(
-    not vim.tbl_contains(collect_highlighted_texts(clamped_high, "JprMuted"), "Sync with GitHub"),
-    "hovered requires_session command must not mute its label when has_session == false"
+    not vim.tbl_contains(collect_highlighted_texts(clamped_high, "JprMuted"), "Review Current Worktree"),
+    "selected command label is never muted"
 )
-
-local multi_session_commands = {
-    commands[1],
-    commands[2],
-    {
-        id = "submit",
-        label = "Submit Review",
-        help = "Publish pending draft comments to GitHub.",
-        requires_session = true,
-    },
-}
-local palette_hover_session = render.create_palette_layout_from_commands(multi_session_commands, 2, 80, { has_session = false })
-assert(
-    vim.tbl_contains(collect_highlighted_texts(palette_hover_session, "JprTitle"), "▸ Sync with GitHub"),
-    "hovered session command gets JprTitle"
-)
-local hover_session_muted = collect_highlighted_texts(palette_hover_session, "JprMuted")
-assert(not vim.tbl_contains(hover_session_muted, "Sync with GitHub"), "hovered session command is not muted")
-assert(vim.tbl_contains(hover_session_muted, "Submit Review"), "unselected session command remains muted")
 
 local step_one_option_two = render.create_step_layout_from_state(commands[1], active_steps, 1, {
     selected_option_index = 2,

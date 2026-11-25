@@ -40,7 +40,7 @@ local function create_menu_step_state(controller, step, answers, context, is_pal
             can_return_to_palette = is_palette_returnable,
         }
     end
-    local options = step.options or {}
+    local options = schema.get_active_options_from_step(step, answers, context)
     return {
         is_loading = false,
         options = options,

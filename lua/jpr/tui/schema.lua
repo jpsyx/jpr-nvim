@@ -41,6 +41,14 @@ local function validate_select_options(command_id, step)
             return false,
                 ("command %q step %q option %d: missing non-empty label"):format(command_id, step.id, option_index)
         end
+        if option.when ~= nil and type(option.when) ~= "function" then
+            return false,
+                ("command %q step %q option %d: when predicate must be a function"):format(
+                    command_id,
+                    step.id,
+                    option_index
+                )
+        end
     end
     return true, nil
 end
@@ -105,6 +113,9 @@ local function validate_command_spec(command, command_index, seen_command_ids)
     end
     if not M.is_non_blank_string(command.help) then
         return false, ("command %q: missing non-empty help"):format(command.id)
+    end
+    if command.when ~= nil and type(command.when) ~= "function" then
+        return false, ("command %q: when predicate must be a function"):format(command.id)
     end
     if command.steps == nil then
         return true, nil
@@ -217,6 +228,62 @@ function M.create_toggle_options_from_step(step)
         { value = false, label = step.no_label, help = step.no_help },
         { value = true, label = step.yes_label, help = step.yes_help },
     }
+end
+
+--- Returns `true` when `command` is executable in `context`, honoring
+--- `requires_session`, `requires_git_repo`, and optional `command.when(context)`.
+--- @param command table|nil
+--- @param context table|nil
+--- @return boolean
+function M.is_command_executable(command, context)
+    if type(command) ~= "table" then
+        return false
+    end
+    local current_context = context or {}
+    if command.requires_session == true and current_context.has_session ~= true then
+        return false
+    end
+    if command.requires_git_repo == true and current_context.is_git_repo == false then
+        return false
+    end
+    if type(command.when) == "function" and command.when(current_context) ~= true then
+        return false
+    end
+    return true
+end
+
+--- Returns the ordered subset of `commands` that are executable in `context`.
+--- @param commands table[]|nil
+--- @param context table|nil
+--- @return table[]
+function M.get_active_commands(commands, context)
+    local active_commands = {}
+    local current_context = context or {}
+    for _, command in ipairs(commands or {}) do
+        if M.is_command_executable(command, current_context) then
+            active_commands[#active_commands + 1] = command
+        end
+    end
+    return active_commands
+end
+
+--- Returns the ordered subset of select options in `step` whose optional
+--- `when(answers, context)` predicate is absent or evaluates to `true`.
+--- @param step table|nil
+--- @param answers table|nil
+--- @param context table|nil
+--- @return table[]
+function M.get_active_options_from_step(step, answers, context)
+    local active_options = {}
+    local current_answers = answers or {}
+    local current_context = context or {}
+    local options = (step and step.options) or {}
+    for _, option in ipairs(options) do
+        if option.when == nil or option.when(current_answers, current_context) == true then
+            active_options[#active_options + 1] = option
+        end
+    end
+    return active_options
 end
 
 return M
