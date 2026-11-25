@@ -93,7 +93,10 @@ fn set_viewed_and_background_flush_emit_auth_required_without_losing_queue() {
     );
 
     assert!(!session.flush_queued_background().unwrap());
-    assert!(session.has_queued(), "queued mark must stay queued on auth error");
+    assert!(
+        session.has_queued(),
+        "queued mark must stay queued on auth error"
+    );
     assert_eq!(
         events.try_recv().unwrap(),
         Event::SyncFailed {

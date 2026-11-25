@@ -43,13 +43,13 @@ read models the engine returns.
 
 | Crate | Responsibility |
 | --- | --- |
-| `review-model` | Domain types (pull requests, changed files, threads, local/GitHub origin, anchors, messages, reactions, review events, mention candidates, submit previews, agent rounds/profiles/plans) and read models (`SessionView` with its file tree and `WorktreeStatus`, `PushResult`, `HeadMoveOutcome`, `FileDiffView`, `StreamView`, `SuggestedEdit`, `ThreadPreview`, `Event`). Pure data. |
+| `review-model` | Domain types (pull requests, changed files, threads, local/GitHub origin, anchors, messages, reactions, review events, mention candidates, submit previews, agent rounds/profiles/plans, forge owner/repo discovery) and read models (`SessionView` with its file tree and `WorktreeStatus`, `PushResult`, `HeadMoveOutcome`, `FileDiffView`, `StreamView`, `SuggestedEdit`, `ThreadPreview`, `Event`). Pure data. |
 | `review-diff` | Line diffs (Histogram) and word diffs (Myers) between two texts through `similar`, suggestion extraction from local edits (`suggest.rs`), and the builders of `FileDiffView` and `StreamView` (with attached `ThreadPreview`s). Pure functions. |
-| `review-core` | The ports (`Forge`, `ReviewStore`, `Workspace`, `Clock`), bundled as one `Ports` value a session opens on, the `ReviewSession` facade (one module per use case under `session/`), pure viewed, comment, re-anchoring, and agent prompt/guide rules, and the presenter that builds `SessionView`. The `fakes` feature adds in-memory fakes, `create_fake_ports`, and the port contract tests. |
+| `review-core` | The ports (`Forge`, `ReviewStore`, `Workspace`, `Clock`), bundled as one `Ports` value a session opens on, structured auth classification (`auth.rs`: `ForgeAuthError`, `AUTH_EXIT_CODE = 3`), the `ReviewSession` facade (one module per use case under `session/`), pure viewed, comment, re-anchoring, and agent prompt/guide rules, and the presenter that builds `SessionView`. The `fakes` feature adds in-memory fakes, `create_fake_ports`, and the port contract tests. |
 | `review-store-fs` | The `ReviewStore` adapter: one directory per PR, four versioned JSON files written atomically (`session.json`, `viewed.json`, `github.json`, `local.json`) plus `rounds.jsonl` and `local.lock` (see "State on disk"). |
-| `review-forge-github` | The `Forge` adapter: `gh pr view`, `gh api graphql` (queries and mutations for viewed marks, pending reviews, review threads, PR comments, edits, deletions, resolution, reactions, and review submission), and `gh api` REST immediate thread replies with pending-review GraphQL fallback, with a 30 second timeout per call. Adapted from dif. |
-| `review-workspace-git` | Checks a PR out into a worktree: the default (`git worktree add` plus `gh pr checkout`) or a custom command that prints the path. `GitWorkspace` is the `Workspace` adapter, opened at the worktree's root (`git rev-parse --show-toplevel`) so paths stay root-relative even when `serve` starts in a subdirectory: the merge base, `HEAD` and unlocked worktree dirty/ahead/behind status, a file at a commit (`git cat-file --batch`), a file on disk, renames (`git diff-index`), changed worktree files since base/commit, branch-safe `HEAD:refs/heads/<head_ref>` push, and auto-stash `--ff-only` fast-forward. Missing commits and pushes run unattended with a 90 second deadline. |
-| `review-rpc` | The JSON-RPC protocol (`PROTOCOL_VERSION = 8`), stdio server (including `refreshWorktree`, `serve --local`, and `streamProgress` notifications during `stream`), allowlisted Unix domain socket listener, and background poller that syncs and retries linked PR sessions while always watching worktree files and git status for re-anchoring and live refresh. |
+| `review-forge-github` | The `Forge` adapter: `gh pr view`, `gh api graphql` (queries and mutations for viewed marks, pending reviews, review threads, PR comments, edits, deletions, resolution, reactions, and review submission), `gh api` REST immediate thread replies with pending-review GraphQL fallback, owner/repository discovery (`discovery.rs`), and structured `ForgeAuthError` classification, with a 30 second timeout per call. Adapted from dif. |
+| `review-workspace-git` | Checks a PR out into a worktree: the default (`git worktree add` plus `gh pr checkout`) or a custom command that prints the path, plus on-demand managed repository clones under `$XDG_CACHE_HOME/jpr/repos/<owner>/<repo>` (`cache.rs`) when checking out outside any local git repository. `GitWorkspace` is the `Workspace` adapter, opened at the worktree's root (`git rev-parse --show-toplevel`) so paths stay root-relative even when `serve` starts in a subdirectory: the merge base, `HEAD` and unlocked worktree dirty/ahead/behind status, a file at a commit (`git cat-file --batch`), a file on disk, renames (`git diff-index`), changed worktree files since base/commit, branch-safe `HEAD:refs/heads/<head_ref>` push, and auto-stash `--ff-only` fast-forward. Missing commits and pushes run unattended with a 90 second deadline. |
+| `review-rpc` | The JSON-RPC protocol (`PROTOCOL_VERSION = 9`, including `-32001` `AUTH_REQUIRED` and `syncFailed.{authRequired, isBackground}`), stdio server (including `refreshWorktree`, `serve --local`, and `streamProgress` notifications during `stream`), allowlisted Unix domain socket listener, and background poller that syncs and retries linked PR sessions (`sync_background`, `flush_queued_background`) while always watching worktree files and git status for re-anchoring and live refresh. |
 
 ### Inside the crates
 
@@ -58,7 +58,7 @@ The modules worth knowing before changing a crate. Test fixtures
 
 | Module | Responsibility |
 | --- | --- |
-| `review-model` `pr.rs`, `thread.rs`, `review.rs` | The pull request (with its base and head commits), changed files with viewed state, review threads (`Origin`, `Anchor`, `Message`, `MessageSync`, `ThreadPreview`, `promotedTo`), and review metadata (`Reaction`, `ReactionContent`, `ReviewEvent`, `MentionCandidate`, `SubmitPreview`) |
+| `review-model` `pr.rs`, `thread.rs`, `review.rs`, `forge.rs` | The pull request (with its base and head commits), changed files with viewed state, review threads (`Origin`, `Anchor`, `Message`, `MessageSync`, `ThreadPreview`, `promotedTo`), review metadata (`Reaction`, `ReactionContent`, `ReviewEvent`, `MentionCandidate`, `SubmitPreview`), and forge discovery records (`OwnerKind`, `ForgeOwner`, `ForgeRepo`) |
 | `review-model` `agent.rs` | Local agent types: `AgentThreadState` (`unsent`, `sent`, `answered`), `AgentKind` (`claude`, `codex`), `AgentProfile`, `AgentLaunchPlan`, `AgentRoundKind` (`send`, `prepass`, `conflict`), `AgentRound`, `AgentDispatch`, `PrepassFinding`, and `LocalAnchorUpdate` |
 | `review-model` `view.rs` | `SessionView` (`FileRow` with `isModified`, `localThreads`, and `isLocalOnly`, file tree, viewed/thread/draft/conversation/local-unsent/queue counts, sync state, `WorktreeStatus`), `PushResult`, `HeadMoveOutcome`, and the `Event`s (`Synced`, `SyncFailed`, `ViewedChanged`, `ThreadsChanged`, `FilesChanged`, `AgentRound`, `WorktreeStatusChanged`, `HeadMoved`) |
 | `review-model` `diff.rs` | The diff read models: `FileDiffView` (with `threads`), `StreamView` (with `StreamRow::Thread` and per-line `threads`), `SuggestedEdit`, and `ViewMode` |
@@ -68,7 +68,8 @@ The modules worth knowing before changing a crate. Test fixtures
 | `review-diff` `overlay.rs` | `create_file_diff_view_from_texts` and `create_file_diff_view_with_threads`: added lines, removed blocks above them, and `ThreadPreview`s placed at `display_line` |
 | `review-diff` `stream.rs` | `create_stream_view_from_inputs`: each file's header, unplaced/file `StreamRow::Thread` banners, then hunks with 3 lines of context (and line-attached `ThreadPreview`s) or a note, as unified or split rows |
 | `review-diff` `suggest.rs` | `create_suggestion_from_edit`: diffs local edits around the cursor against `head_sha` to build a fenced GitHub `suggestion` block and `reverted_text` for only that hunk |
-| `review-core` `ports.rs` | The port traits (`Forge`, `Workspace`, `ReviewStore`, `Clock`), `FastForwardOutcome`, `QueuedCommentOp`, `ForgeWriteError`, and what the store keeps (`SessionRecord` with socket/agent fields, `SyncRegistry`, `LocalStoreState`, `StoreSnapshot`) |
+| `review-core` `auth.rs` | Structured `gh` auth-failure classification (`AUTH_EXIT_CODE = 3`, `ForgeAuthError`, `is_auth_error`, `is_gh_auth_failure_text`) shared across `review-forge-github`, `review-workspace-git`, `review-rpc`, and `jpr-review` |
+| `review-core` `ports.rs` | The port traits (`Forge`, `Workspace`, `ReviewStore`, `Clock`), `FastForwardOutcome`, `QueuedCommentOp`, `ForgeWriteError` (including `AuthRequired`), and what the store keeps (`SessionRecord` with socket/agent fields, `SyncRegistry`, `LocalStoreState`, `StoreSnapshot`) |
 | `review-core` `session/mod.rs` | `ReviewSession`: opening on `Ports` in PR (`open`) or unlinked local worktree (`open_local`) mode via `SessionTarget::{Pr, Local}`, shared state (`pushed_head`, `last_worktree_status`, `pending_head_move_from`), and the event channel |
 | `review-core` `session/link.rs` | Mid-session local-to-PR upgrade (`sync_or_link_local`): probes `current_branch_pr`, fetches snapshot before retargeting, merges preexisting PR state (renumbering colliding `loc-*` IDs and keeping live daemon/agent fields and authoritative local `VIEWED` state), pins forge repo, switches `SessionTarget::Pr`, runs `apply_pull` (promoting local `VIEWED` to GitHub), and calls `finalize_retarget()` |
 | `review-core` `session/sync.rs` | `sync`: resend queued viewed marks, pull, reconcile concurrent edits and unflushed threads, replay queued comment ops, save, fast-forward and re-anchor non-conflicted local threads when `pr.head_sha` moves (`HeadMoved` before `Synced`, retaining `pending_head_move_from` to self-heal failed fast-forwards or saves on the next sync), and announce |
@@ -90,8 +91,8 @@ The modules worth knowing before changing a crate. Test fixtures
 | `review-core` `presenter.rs` | `session_view`: the `SessionView` (including `is_modified` and `local_threads` per file, `local_unsent_count`, and `worktree_status`) every frontend draws |
 | `review-core` `fakes.rs` (with `fakes/workspace.rs`, `fakes/comments.rs`), `contract.rs` | The `fakes` feature: in-memory fakes of every port, `create_fake_ports`, and the contract every `ReviewStore` adapter passes |
 | `review-store-fs` `format.rs`, `atomic.rs`, `lock.rs`, `paths.rs`, `retarget.rs` | The versioned on-disk shapes (`session.json` v3 with v1/v2 compat, `viewed.json` v1, `github.json` v2 with v1 compat, `local.json` v1), append-only `rounds.jsonl`, advisory exclusive `local.lock` (`mutate_local_locked`), crash-safe replaces, PR and local state directories (`state_dir`, `local_state_dir`), and two-phase crash-safe `retarget_to_pr` / `finalize_retarget` |
-| `review-forge-github` `gh.rs`, `pr.rs`, `graphql.rs`, `mutations.rs` (with `mutations/documents.rs`) | Running `gh` with a timeout, reading `gh pr view` (including `current_branch_pr` auto-detection and dynamic `pin_repo`), GraphQL queries/mutations (threads, PR comments, pending reviews, mentions, reactions, review submission), REST immediate replies with 422 GraphQL fallback, and transient vs rejected error classification |
-| `review-workspace-git` `checkout.rs`, `default_checkout.rs`, `custom.rs`, `repo.rs`, `local_ref.rs`, `worktree_reuse.rs` | Checking a pull request out (reusing an already checked-out worktree via `git worktree list --porcelain` and `session.json` before invoking default or custom checkout), finding the main checkout, and inspecting the current worktree (`inspect_local_worktree`, `resolve_default_base_branch`, `validate_git_ref`, `read_current_branch`) |
+| `review-forge-github` `gh.rs`, `pr.rs`, `graphql.rs`, `discovery.rs`, `mutations.rs` (with `mutations/documents.rs`) | Running `gh` with a timeout and wrapping unauthenticated failures as `ForgeAuthError`, reading `gh pr view` (including `current_branch_pr` auto-detection and dynamic `pin_repo`), paginated viewer/org and repository discovery (`list_owners`, `list_repos`), GraphQL queries/mutations (threads, PR comments, pending reviews, mentions, reactions, review submission), REST immediate replies with 422 GraphQL fallback, and transient vs rejected vs `AuthRequired` error classification |
+| `review-workspace-git` `checkout.rs`, `default_checkout.rs`, `cache.rs`, `custom.rs`, `repo.rs`, `local_ref.rs`, `worktree_reuse.rs` | Checking a pull request out (reusing an already checked-out worktree via `git worktree list --porcelain` and `session.json` before invoking default or custom checkout), on-demand managed clones under `$XDG_CACHE_HOME/jpr/repos/<owner>/<repo>` (`ensure_managed_clone`) for out-of-repo checkouts, finding the main checkout, and inspecting the current worktree (`inspect_local_worktree`, `resolve_default_base_branch`, `validate_git_ref`, `read_current_branch`) |
 | `review-workspace-git` `workspace.rs` | `GitWorkspace`, the `Workspace` adapter (`merge_base`, `head_commit`, `file_at`, `file_on_disk`, `renames`, `list_changed_files_since`, `worktree_status`, `push_head`, and `fast_forward_to`) |
 | `review-workspace-git` `status.rs` | Unlocked (`GIT_OPTIONAL_LOCKS=0`) `read_head_commit` and `read_worktree_status` (`git status --porcelain=v1 -z --untracked-files=all` plus `git rev-list --left-right --count` against the remote PR head or `@{upstream}`) |
 | `review-workspace-git` `push.rs` | Branch-safe `push_head_to_pr_branch`: validates `head_ref`, resolves `branch.<local>.pushRemote`/`remote` (or `origin`), rejects mismatched `branch.<local>.merge` targets, and pushes `HEAD:refs/heads/<head_ref>` unattended |
@@ -100,7 +101,7 @@ The modules worth knowing before changing a crate. Test fixtures
 | `review-workspace-git` `git_output.rs` | Pure guards for what reaches git (commit ids, batch requests) and readers of its output (`cat-file --batch`, renames, NUL-delimited porcelain/diff paths) |
 | `review-workspace-git` `process.rs` | Running git (`run`, unlocked `run_bytes_unlocked`), gh and custom commands, optionally with input on stdin, with git's repository variables cleared |
 | `review-workspace-git` `unattended.rs` | Running a command nobody watches (base/head fetches and `git push`): no prompts, a deadline, a process group when there is a terminal, and a bounded wait for its output |
-| `review-rpc` `protocol.rs` | The wire format and the protocol version (`PROTOCOL_VERSION = 7`) |
+| `review-rpc` `protocol.rs` | The wire format, `RpcError::AUTH_REQUIRED` (`-32001`), and the protocol version (`PROTOCOL_VERSION = 9`) |
 | `review-rpc` `params.rs` | Reading request params (`path`, `paths`, `viewed`, `mode`, `anchor`, `origin`, `content`, `agent`, `kind`, `round`, `findings`, `updates`, `renames`, etc.); a missing or mistyped one is an invalid-params error |
 | `review-rpc` `socket.rs`, `socket/io.rs` | Unix domain socket listener with `0600` permissions, 64-client cap, bounded 1 MiB framing, and method allowlist (`snapshot`, `threads`, `agentReply`, `prepassWrite`) |
 | `review-rpc` `server.rs`, `server/comments.rs`, `server/agent.rs`, `server/ticker.rs` | Routing requests to the session (including `push`, `refreshWorktree`, comment, suggestion, review submission, agent launch/dispatch, pre-pass, conflict resolution, and anchor update methods), handling `stream` via `ReviewSession::stream_with_progress` to write `streamProgress` JSON-RPC notifications directly to stdio per file before the `stream` response arrives, writing events immediately to stdio, and the poller (`get_poll_step_from_elapsed` + 2 second worktree file and git status watch) |
@@ -160,12 +161,18 @@ and only then answers `shutdown`.
 
 The default checkout puts PR `n` at `<repo>-worktrees/pr-<n>` beside the main
 checkout: `git worktree add --detach`, then `gh pr checkout <n> -b pr-<n>`
-inside it. If that path already exists, it is reused only when it is a
-worktree of this repository on branch `pr-<n>`. Anything else there is an
-error and is never removed, because it may hold work git cannot see. The only
-forced removal is of a worktree the same call just created, when
-`gh pr checkout` fails in it. A custom `worktree_cmd` (`{n}` is the number)
-replaces all of this: it must print an existing directory as its last line.
+inside it. When `jpr-review checkout --pr <n> --repo <owner/name>` runs outside
+any local git repository, `ensure_managed_clone` clones `<owner>/<repo>` once
+on demand into `$XDG_CACHE_HOME/jpr/repos/<owner>/<repo>` (default
+`~/.cache/jpr/repos/<owner>/<repo>`) using `gh repo clone` and reuses that
+managed clone as the main checkout (putting PR worktrees beside it at
+`$XDG_CACHE_HOME/jpr/repos/<owner>/<repo>-worktrees/pr-<n>`). If that worktree
+path already exists, it is reused only when it is a worktree of this repository
+on branch `pr-<n>`. Anything else there is an error and is never removed,
+because it may hold work git cannot see. The only forced removal is of a
+worktree the same call just created, when `gh pr checkout` fails in it. A
+custom `worktree_cmd` (`{n}` is the number) replaces all of this: it must print
+an existing directory as its last line.
 
 ### Session lifecycle in the plugin
 
@@ -285,9 +292,17 @@ rejected.
 invoked bare on a TTY (or prints help to stderr with exit code `2` without a
 TTY), launches a command's stepper when invoked on a TTY with missing required
 inputs, calls `commands::run_command`, and turns any error into a stderr line
-and exit code `1`. Its subcommands are `checkout`, `prs`, `serve`,
-`state-path`, `guide`, `threads`, `reply`, and `prepass-write`:
+with exit code `3` when `is_auth_error` detects missing/expired `gh`
+authentication or exit code `1` otherwise. Its subcommands are `checkout`,
+`local`, `prs`, `owners`, `repos`, `serve`, `state-path`, `guide`, `threads`,
+`reply`, and `prepass-write`:
 
+- `owners` (`crates/jpr-review/src/commands/owners.rs`) lists the authenticated
+  viewer followed by their GitHub organizations as a JSON array, backing the
+  non-repo owner picker.
+- `repos` (`crates/jpr-review/src/commands/repos.rs`) lists repositories for an
+  owner (or the authenticated viewer when `--owner` is omitted) as a JSON array
+  (`--owner`, `--limit`), backing the non-repo repository picker.
 - `prs` (`crates/jpr-review/src/commands/prs.rs`) lists open pull requests in a
   repository as a JSON array (`--repo`, `--limit`), backing both scripting and
   interactive open-PR pickers.
@@ -318,8 +333,10 @@ and exit code `1`. Its subcommands are `checkout`, `prs`, `serve`,
 | `jpr.binary` (`lua/jpr/binary.lua`) | Resolves the plugin checkout root, the bundled `target/release/jpr-review` binary path (`.exe` on Windows), `config.binary` overrides, and `:Jpr agent` terminal `PATH` prepending (`create_agent_env_from_session`) |
 | `jpr.build` (`lua/jpr/build.lua`) | Finds `cargo` across `PATH`, `$CARGO_HOME/bin`, and `~/.cargo/bin`, yields build progress only inside `lazy.nvim`'s `lazy.async` coroutine, compiles `target/release/jpr-review` in the plugin root via `vim.system`, and verifies the resulting executable |
 | `jpr.health` (`lua/jpr/health.lua`) | `:checkhealth jpr` diagnostics checking Neovim `>= 0.11`, the bundled or configured `jpr-review` binary and version lockstep against `jpr.VERSION`, `git`, `gh` (including `gh auth status`), and `cargo` |
-| `jpr.rpc` | JSON-RPC client over `jobstart` (`M.PROTOCOL_VERSION = 7`) |
-| `jpr.session` (`lua/jpr/session/init.lua`, `open.lua`, `commands.lua`, `comments.lua`, `events.lua`, `crash.lua`) | One review per tab: open-PR listing via `jpr-review prs`, immediate loading tab with cancelable checkout and streamed stderr (`open.lua`), engine process, protocol + release version handshake check, requests, redraws of the panel, the stream, the diffs, and the PR conversation view, `:Jpr toggle`, `:Jpr stream`, `:Jpr comment`, `:Jpr suggest`, `:Jpr expand`, `:Jpr conversation`, `:Jpr submit`, `:Jpr push`, `:Jpr agent`, `:Jpr send`, `:Jpr prepass`, `streamProgress` and `threadsChanged`/`filesChanged`/`agentRound`/`worktreeStatusChanged`/`headMoved` handling (including the `Resolve myself` vs `Ask agent to resolve` restore-conflict prompt), and the one teardown path |
+| `jpr.auth` (`lua/jpr/auth/`: `init.lua`, `modal.lua`, `terminal.lua`) | Global single-flight `gh` authentication recovery across all CLI (`exit code 3`), JSON-RPC (`-32001`), and `syncFailed` (`authRequired = true`) auth failures: shows a keyboard-selectable and mouse-clickable (`<LeftMouse>`) floating modal, runs `gh auth login` in a floating terminal, verifies via `gh auth status`, and automatically resumes queued callers (or re-prompts on failure and notifies callers on cancel) |
+| `jpr.repo_picker` (`lua/jpr/repo_picker.lua`) | Non-git-repository detection (`is_git_repo` via synchronous upward `.git` lookup) and pre-palette GitHub discovery flow: lists viewer + organizations via `jpr-review owners` (skipping the owner step when the viewer has zero orgs), lists repositories via `jpr-review repos`, integrates with `jpr.auth`, and opens the scoped Command Palette or `:Jpr open` PR picker with `h`/`<Left>`/`<S-Tab>` back-navigation to switch repositories |
+| `jpr.rpc` | JSON-RPC client over `jobstart` (`M.PROTOCOL_VERSION = 9`, `M.ERROR_AUTH_REQUIRED = -32001`) |
+| `jpr.session` (`lua/jpr/session/init.lua`, `open.lua`, `open_local.lua`, `commands.lua`, `comments.lua`, `events.lua`, `crash.lua`) | One review per tab: open-PR listing via `jpr-review prs`, immediate loading tab with cancelable checkout and streamed stderr (`open.lua`, keyed by `repo#number` and using collision-safe `buf_key` for multi-repo buffer names), local worktree review startup (`open_local.lua`), engine process, protocol + release version handshake check, requests wrapped with `jpr.auth` recovery (preserving compose drafts when auth is canceled), redraws of the panel, the stream, the diffs, and the PR conversation view, `:Jpr toggle`, `:Jpr stream`, `:Jpr comment`, `:Jpr suggest`, `:Jpr expand`, `:Jpr conversation`, `:Jpr submit`, `:Jpr push`, `:Jpr agent`, `:Jpr send`, `:Jpr prepass`, `streamProgress` and `threadsChanged`/`filesChanged`/`agentRound`/`worktreeStatusChanged`/`headMoved` handling (including the `Resolve myself` vs `Ask agent to resolve` restore-conflict prompt), and the one teardown path |
 | `jpr.session.crash` (`lua/jpr/session/crash.lua`) | Mid-review crash recovery: single automatic engine restart, `0600` timestamped crash log at `stdpath("state")/jpr/engine-pr-<n>.log` (inside a `0700` state directory), `[read-only]` fallback on a second crash or failed restart handshake, and control-character sanitization for error messages |
 | `jpr.agent` | Right-hand interactive coding-agent terminal split (`claude` or `codex` with `JPR_SOCKET`, `JPR_PR`, and the bundled binary directory prepended to `PATH` in its environment), session resume detection, bracketed-paste prompt dispatch (`confirmSend` after `submitDelayMs` for `send`, `prepass`, and `resolve_conflicts`), and hide/show toggling without killing the live process |
 | `jpr.view_mode` | The global view mode (unified or split): the one remembered in `stdpath("state")/jpr/view-mode`, else `setup({ view = ... })`'s |
@@ -375,8 +392,8 @@ own, so a callback that raises cannot swallow the messages after it.
   dependency rule (`crates/jpr-review/tests/dependency_rule.rs`).
 - `./scripts/test-lua.sh`: headless Neovim specs against
   `tests/lua/fixtures/fake_engine.sh` (and `crashing_engine.sh`, an engine
-  that dies at startup). The fake engine speaks protocol 7, emits
-  `streamProgress` during `stream`, answers plugin-issued v7 requests (`push`,
+  that dies at startup). The fake engine speaks protocol 9, emits
+  `streamProgress` during `stream`, answers plugin-issued v9 requests (`push`,
   `fileDiff`, `stream`, `setViewed`, `threads`, `mentions`, `comment`, `reply`,
   `editMessage`, `deleteMessage`, `setResolved`, `toggleReaction`,
   `retryMessage`, `anchoredLines`, `suggestFromEdit`, `submitPreview`,
@@ -394,9 +411,12 @@ own, so a callback that raises cannot swallow the messages after it.
   `tests/lua/session_lifecycle_spec.lua`, `tests/lua/statusline_spec.lua`,
   `tests/lua/panel_render_spec.lua`, `tests/lua/panel_view_spec.lua`,
   `tests/lua/panel_paths_spec.lua`, `tests/lua/panel_input_spec.lua`,
-  `tests/lua/lsp_files_spec.lua`, `tests/lua/compose_spec.lua`, and
-  `tests/lua/rpc_spec.lua` cover the declarative TUI engine, Command Palette,
-  `:Jpr open` PR picker, blended diff highlights, stream Treesitter syntax,
+  `tests/lua/lsp_files_spec.lua`, `tests/lua/compose_spec.lua`,
+  `tests/lua/auth_spec.lua`, `tests/lua/auth_integration_spec.lua`,
+  `tests/lua/repo_picker_spec.lua`, and `tests/lua/rpc_spec.lua` cover the
+  declarative TUI engine, Command Palette, non-repo owner/repository picker,
+  global `gh` authentication recovery, `:Jpr open` PR picker, blended diff
+  highlights, stream Treesitter syntax,
   `:Jpr keys` cheatsheet, live 4-stage loading view, agent dispatch, bundled
   binary discovery/`build.lua`/`:checkhealth jpr`, push, head-move conflict
   prompts, crash auto-restart/read-only fallback, `statusline()`, collapsible

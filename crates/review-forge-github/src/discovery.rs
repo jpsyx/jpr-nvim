@@ -51,9 +51,7 @@ pub fn validate_owner_login(owner: &str) -> Result<()> {
 }
 
 /// Parses one GraphQL `viewer` page into `(viewer_owner, org_owners, next_cursor)`.
-pub fn parse_owners_page(
-    data: &Value,
-) -> Result<(ForgeOwner, Vec<ForgeOwner>, Option<String>)> {
+pub fn parse_owners_page(data: &Value) -> Result<(ForgeOwner, Vec<ForgeOwner>, Option<String>)> {
     let viewer = data
         .get("viewer")
         .context("GitHub GraphQL response did not report viewer")?;
@@ -67,7 +65,10 @@ pub fn parse_owners_page(
         kind: OwnerKind::User,
     };
     let mut orgs = Vec::new();
-    if let Some(nodes) = viewer.pointer("/organizations/nodes").and_then(Value::as_array) {
+    if let Some(nodes) = viewer
+        .pointer("/organizations/nodes")
+        .and_then(Value::as_array)
+    {
         for node in nodes {
             let Some(login) = node["login"].as_str().filter(|text| !text.is_empty()) else {
                 continue;

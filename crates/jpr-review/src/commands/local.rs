@@ -247,7 +247,11 @@ mod tests {
             None,
             None,
             false,
-            || Err(anyhow::Error::new(review_core::ForgeAuthError::new("gh auth login"))),
+            || {
+                Err(anyhow::Error::new(review_core::ForgeAuthError::new(
+                    "gh auth login",
+                )))
+            },
             |_| panic!("must not warn and fall back on auth error"),
         )
         .unwrap_err();

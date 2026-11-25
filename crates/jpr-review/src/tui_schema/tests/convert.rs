@@ -193,11 +193,7 @@ fn assert_converts_state_and_daemon_subcommands() {
     );
     assert_converts(
         "repos",
-        &[
-            ("owner_scope", "true"),
-            ("owner", "acme"),
-            ("limit", "25"),
-        ],
+        &[("owner_scope", "true"), ("owner", "acme"), ("limit", "25")],
         &Command::Repos {
             owner: Some("acme".into()),
             limit: 25,

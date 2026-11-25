@@ -47,8 +47,14 @@ mod cache_tests {
     fn managed_repo_dir_uses_absolute_xdg_or_home_cache_and_rejects_unsafe_segments() {
         let home = Path::new("/Users/octo");
         assert_eq!(
-            managed_repo_dir(Some(Path::new("/var/cache")), home, "jpr", "acme", "widgets")
-                .unwrap(),
+            managed_repo_dir(
+                Some(Path::new("/var/cache")),
+                home,
+                "jpr",
+                "acme",
+                "widgets"
+            )
+            .unwrap(),
             PathBuf::from("/var/cache/jpr/repos/acme/widgets")
         );
         assert_eq!(
@@ -71,7 +77,12 @@ mod cache_tests {
         let root = dir.path().join("widgets");
         git(
             &root,
-            &["remote", "add", "origin", "https://github.com/Acme/Widgets.git"],
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/Acme/Widgets.git",
+            ],
         );
         let reused = ensure_managed_clone_with(&root, "acme", "widgets", |_, _| {
             panic!("should reuse existing clone without cloning")
@@ -84,7 +95,10 @@ mod cache_tests {
         })
         .unwrap_err();
         assert!(format!("{wrong:#}").contains("other/widgets"));
-        assert!(root.join("a.txt").exists(), "must not delete wrong-remote repo");
+        assert!(
+            root.join("a.txt").exists(),
+            "must not delete wrong-remote repo"
+        );
 
         let stray = dir.path().join("stray");
         fs::create_dir_all(&stray).unwrap();
@@ -108,6 +122,9 @@ mod cache_tests {
         })
         .unwrap_err();
         assert!(format!("{err:#}").contains("simulated clone failure"));
-        assert!(!target.exists(), "partial clone dir must be removed on failure");
+        assert!(
+            !target.exists(),
+            "partial clone dir must be removed on failure"
+        );
     }
 }

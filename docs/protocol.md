@@ -1,4 +1,4 @@
-# Engine protocol (version 8)
+# Engine protocol (version 9)
 
 `jpr-review serve` speaks JSON-RPC 2.0, one JSON message per line, UTF-8.
 Requests from the primary frontend arrive on stdin. Responses and notifications
@@ -51,9 +51,9 @@ with `:Lazy build jpr-nvim`.
 
 | Method | Params | Result |
 | --- | --- | --- |
-| `initialize` | `{ "protocolVersion": 8, "client": "..." }` (the server reads neither) | `{ "protocolVersion": 8, "version": "0.7.0" }` |
+| `initialize` | `{ "protocolVersion": 9, "client": "..." }` (the server reads neither) | `{ "protocolVersion": 9, "version": "0.8.0" }` |
 | `snapshot` | none | `SessionView` (carries `localContext` when unlinked, `pr` when linked) |
-| `sync` | none | `SessionView`; in PR mode, error `-32000` when GitHub fails after a `syncFailed` event (announces `headMoved` before `synced` when `pr.headSha` changes); in local mode, probes `gh pr view` and upgrades the live session in-place if an open PR exists (promoting locally `VIEWED` files to GitHub), or returns an informational `-32000` error without `syncFailed` when no open PR exists yet |
+| `sync` | none | `SessionView`; in PR mode, error `-32001` (`AUTH_REQUIRED`) when `gh` is unauthenticated or `-32000` when GitHub fails otherwise, after a `syncFailed` event (announces `headMoved` before `synced` when `pr.headSha` changes); in local mode, probes `gh pr view` and upgrades the live session in-place if an open PR exists (promoting locally `VIEWED` files to GitHub), returns `-32001` when `gh` is unauthenticated, or returns an informational `-32000` error without `syncFailed` when no open PR exists yet |
 | `push` | none | `PushResult`; pushes `HEAD` to `refs/heads/<headRef>` (stdio-only; refused over `JPR_SOCKET` with `-32600`); error `-32000` before the first sync, when local `HEAD` is behind or already at the remote head, when a cross-repository (`pr.isCrossRepository`) pull request lacks explicit fork tracking or targets the base repository, or when `git push` fails |
 | `fileDiff` | `{ "path": "src/a.rs" }` | `FileDiffView`; error `-32000` for a file the pull request does not change, a side over 4 MiB, or before the first sync |
 | `stream` | `{ "mode": "unified" \| "split" }` | `StreamView` (emits `streamProgress` notifications per file while running); error `-32000` before the first sync |
@@ -129,7 +129,7 @@ Comment mutations behave consistently offline and on errors:
 
 ```json
 { "type": "synced", "view": SessionView }
-{ "type": "syncFailed", "message": "gh timed out after 30s" }
+{ "type": "syncFailed", "message": "gh timed out after 30s", "authRequired": false, "isBackground": false }
 { "type": "viewedChanged", "view": SessionView }
 { "type": "threadsChanged", "view": SessionView }
 { "type": "filesChanged", "paths": ["src/a.rs"], "view": SessionView }
@@ -139,7 +139,11 @@ Comment mutations behave consistently offline and on errors:
 ```
 
 Every sync announces `synced` or `syncFailed`, whether a `sync` request or the
-background poller started it. When a sync sees `pr.headSha` change (or retries
+background poller started it. `syncFailed` sets `authRequired: true` when `gh`
+failed due to missing or expired GitHub authentication, and `isBackground: true`
+when triggered by the background poller rather than an explicit client `sync`
+request (allowing frontends to suppress unsolicited background auth modals
+while still prompting on foreground actions). When a sync sees `pr.headSha` change (or retries
 a prior `"failed"` head move), it reconciles the local checkout and announces
 `headMoved` (`message` is omitted when absent) before `synced`. `viewedChanged`
 follows every `setViewed` and every retry that got a queued mark through.
@@ -516,6 +520,7 @@ checked-out head; the current side is the file on disk:
 | -32601 | Unknown method |
 | -32602 | Invalid params: a missing or mistyped param (`path`, `paths`, `viewed`, `mode`, `anchor`, `origin`, `agent`, `kind`, `round`, `threadIds`, `findings`, `updates`, `renames`, `content`, `event`, `cursorLine`, etc.) |
 | -32000 | The engine could not do it; `message` says why |
+| -32001 | GitHub authentication is required (`gh` is not logged in or credentials expired); frontends may run `gh auth login` and retry |
 
 ## Versioning
 
@@ -553,3 +558,8 @@ result or an event changes shape, and update this document in the same commit.
 - **Version 7** added `refreshWorktree` (optional `renames` array of
   `{ "oldPath", "newPath" }`, returning `SessionView`) and `isLocalOnly`
   (`boolean`, `#[serde(default)]`) on `FileRow`.
+- **Version 8** added `localContext` on `SessionView` and unlinked `--local`
+  mode with in-place `sync` upgrade to a live PR session.
+- **Version 9** added JSON-RPC error code `-32001` (`AUTH_REQUIRED`) for
+  unauthenticated `gh` failures across GitHub-backed requests, and added
+  `authRequired` and `isBackground` booleans to the `syncFailed` notification.
