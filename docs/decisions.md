@@ -860,3 +860,45 @@ GitHub-backed review actions until `:Jpr push` and sync promote them, and
 **Revisit when.** Neovim ships a built-in high-level `vim.lsp.fs` file
 operations helper with cold-start attach and atomic error prompts, or when
 reviewers want sidebar delete (`d`) with `workspace/willDeleteFiles` support.
+
+## Unified local worktree review with in-place PR upgrade (`PROTOCOL_VERSION = 8`)
+
+**Decision.** Local worktree reviews (`:Jpr local [base]` and `jpr-review serve --local`)
+run inside the same `ReviewSession` facade via `SessionTarget::{Pr, Local}`
+rather than a separate session type or engine binary:
+
+1. **Active PR auto-detection vs explicit base precedence.** Bare `:Jpr local`
+   (and `jpr-review local`) probes GitHub via `gh pr view` in the current
+   worktree and attaches directly to an open PR in-place (no duplicate checkout
+   worktree). Supplying an explicit `--base <ref>` (for example `:Jpr local HEAD`)
+   or `--no-pr` bypasses PR detection and stays local-only against that ref.
+2. **Fork and non-GitHub safety.** `GhForge::new` receives `Some(repo)` only
+   when the user explicitly passed `--repo`, never the `origin`-inferred
+   repository name, so `gh` resolves upstream PRs on forks and classifies
+   non-GitHub remotes as `Ok(None)`. Once linked, `Forge::pin_repo` pins
+   subsequent polls to the linked PR's `owner/repo`.
+3. **In-place mid-session upgrade and crash-safe retargeting.** Calling
+   `:Jpr sync` in an unlinked local session probes `current_branch_pr()`,
+   fetches the PR snapshot before touching disk, retargets `FsStore` from the
+   local state directory to `pr-<N>/` (migrating `rounds.jsonl` and merging any
+   preexisting PR snapshot while renumbering colliding `loc-*` IDs), keeps
+   locally `VIEWED` files authoritative by promoting them to `queued_viewed`
+   and pushing `setViewed(path, true)` to GitHub, and retires old local state
+   files only after `pr-<N>/` is durably saved (`finalize_retarget`) while
+   preserving the still-bound Unix domain socket (`JPR_SOCKET`) for any running
+   coding-agent terminal.
+
+**Why.** Preserving the live `jpr-review serve` process and `JPR_SOCKET` across
+a mid-session local-to-PR upgrade means an active `:Jpr agent` terminal never
+loses its socket or needs restarting when a branch is published as a PR. Keeping
+all local-mode rules, viewed promotion, and GitHub-only refusals inside
+`review-core` preserves the frontend-neutral dependency rule.
+
+**Consequences.** Every GitHub-only operation (GitHub comments, `promoteThread`,
+`:Jpr suggest`, `:Jpr submit`, `:Jpr push`, `retryMessage`,
+`prepareConflictResolution`, and 60-second background GitHub polling) is
+cleanly gated while unlinked, and `PROTOCOL_VERSION` advances to `8` alongside
+release `0.7.0`.
+
+**Revisit when.** Reviewers want to switch between multiple open PRs targeting
+different base branches from the same worktree without closing the tab first.

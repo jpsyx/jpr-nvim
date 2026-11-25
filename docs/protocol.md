@@ -1,4 +1,4 @@
-# Engine protocol (version 7)
+# Engine protocol (version 8)
 
 `jpr-review serve` speaks JSON-RPC 2.0, one JSON message per line, UTF-8.
 Requests from the primary frontend arrive on stdin. Responses and notifications
@@ -7,16 +7,22 @@ to stderr.
 
 ```
 jpr-review serve --pr <number> --repo <owner/name> [--poll <seconds>]
+jpr-review serve --local [--base <ref>] [--repo <owner/name>] [--poll <seconds>]
 ```
 
-Run it in the pull request's worktree. `--poll` defaults to 60 seconds, and
-`--poll 0` turns background syncing off. While it polls, the server also
-resends queued viewed marks and queued comment operations every 20 seconds
-between syncs, and watches tracked worktree files and git status every 2
-seconds for on-disk and commit changes. Every sync sends queued viewed marks
-before pulling, and reconciles and replays queued comment operations once the
-pull succeeds. The server does not sync on its own at startup: until the first
-sync, `snapshot` returns what was saved last.
+Run it in the pull request's or local branch's worktree. `--poll` defaults to
+60 seconds, and `--poll 0` turns background syncing off. While it polls a
+linked PR session, the server also resends queued viewed marks and queued
+comment operations every 20 seconds between syncs, and watches tracked worktree
+files and git status every 2 seconds for on-disk and commit changes. In
+`--local` mode (unlinked), background GitHub sync and retry polling stay off
+until the session links to a PR, while the 2-second worktree watcher still
+runs. Every PR sync sends queued viewed marks before pulling, and reconciles
+and replays queued comment operations once the pull succeeds. In `--local`
+mode, `snapshot` immediately returns the worktree's changed files against
+`baseRef` (`localContext` set, `pr: null`), and `sync` probes GitHub via
+`gh pr view` to upgrade the live session in-place when an open PR is found
+(promoting locally `VIEWED` files to GitHub).
 
 ## Unix socket transport
 
@@ -45,9 +51,9 @@ with `:Lazy build jpr-nvim`.
 
 | Method | Params | Result |
 | --- | --- | --- |
-| `initialize` | `{ "protocolVersion": 7, "client": "..." }` (the server reads neither) | `{ "protocolVersion": 7, "version": "0.6.0" }` |
-| `snapshot` | none | `SessionView` |
-| `sync` | none | `SessionView`; error `-32000` when GitHub fails, after a `syncFailed` event (announces `headMoved` before `synced` when `pr.headSha` changes) |
+| `initialize` | `{ "protocolVersion": 8, "client": "..." }` (the server reads neither) | `{ "protocolVersion": 8, "version": "0.7.0" }` |
+| `snapshot` | none | `SessionView` (carries `localContext` when unlinked, `pr` when linked) |
+| `sync` | none | `SessionView`; in PR mode, error `-32000` when GitHub fails after a `syncFailed` event (announces `headMoved` before `synced` when `pr.headSha` changes); in local mode, probes `gh pr view` and upgrades the live session in-place if an open PR exists (promoting locally `VIEWED` files to GitHub), or returns an informational `-32000` error without `syncFailed` when no open PR exists yet |
 | `push` | none | `PushResult`; pushes `HEAD` to `refs/heads/<headRef>` (stdio-only; refused over `JPR_SOCKET` with `-32600`); error `-32000` before the first sync, when local `HEAD` is behind or already at the remote head, when a cross-repository (`pr.isCrossRepository`) pull request lacks explicit fork tracking or targets the base repository, or when `git push` fails |
 | `fileDiff` | `{ "path": "src/a.rs" }` | `FileDiffView`; error `-32000` for a file the pull request does not change, a side over 4 MiB, or before the first sync |
 | `stream` | `{ "mode": "unified" \| "split" }` | `StreamView` (emits `streamProgress` notifications per file while running); error `-32000` before the first sync |
