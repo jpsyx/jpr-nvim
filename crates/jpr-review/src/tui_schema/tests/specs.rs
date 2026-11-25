@@ -107,6 +107,54 @@ fn prepass_write_discriminant_branches_between_file_and_stdin() {
 }
 
 #[test]
+fn local_serve_and_state_path_discriminants_hide_irrelevant_steps() {
+    let specs = build_command_specs();
+    let local_spec = find_spec(&specs, "local");
+    assert_eq!(
+        active_step_ids(&local_spec, &[("base_mode", "custom")]),
+        vec!["base_mode", "base"]
+    );
+    assert_eq!(
+        active_step_ids(
+            &local_spec,
+            &[("base_mode", "auto"), ("detect_pr", "false")],
+        ),
+        vec!["base_mode", "detect_pr"]
+    );
+    assert_eq!(
+        active_step_ids(
+            &local_spec,
+            &[
+                ("base_mode", "auto"),
+                ("detect_pr", "true"),
+                ("custom_repo", "true"),
+            ],
+        ),
+        vec!["base_mode", "detect_pr", "custom_repo", "repo"]
+    );
+
+    let state_path_spec = find_spec(&specs, "state-path");
+    assert_eq!(
+        active_step_ids(&state_path_spec, &[("session_mode", "local")]),
+        vec!["session_mode"]
+    );
+    assert_eq!(
+        active_step_ids(&state_path_spec, &[("session_mode", "pr")]),
+        vec!["session_mode", "pr", "repo"]
+    );
+
+    let serve_spec = find_spec(&specs, "serve");
+    assert_eq!(
+        active_step_ids(&serve_spec, &[("session_mode", "local")]),
+        vec!["session_mode", "base", "poll"]
+    );
+    assert_eq!(
+        active_step_ids(&serve_spec, &[("session_mode", "pr")]),
+        vec!["session_mode", "pr", "repo", "poll"]
+    );
+}
+
+#[test]
 fn pull_request_summary_formats_label_optional_draft_badge_and_hover_help() {
     let draft_pr = PullRequestSummary {
         number: 42,

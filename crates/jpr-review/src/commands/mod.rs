@@ -4,6 +4,8 @@
 pub mod checkout;
 /// `guide`: print the agent review and reply contract.
 pub mod guide;
+/// `local`: inspect the current worktree for local or PR review.
+pub mod local;
 /// `prepass-write`: write pre-pass findings as answered local threads.
 pub mod prepass_write;
 /// `prs`: list open pull requests as JSON.
@@ -42,12 +44,35 @@ pub fn run_command(command: &Command, theme: Theme) -> Result<()> {
             worktree_cmd.as_deref(),
             theme,
         ),
+        Command::Local { base, repo, no_pr } => {
+            local::run(base.as_deref(), repo.as_deref(), *no_pr, theme)
+        }
         Command::Guide => guide::run(),
         Command::Prs { repo, limit } => prs::run(repo.as_deref(), *limit, theme),
-        Command::Serve { pr, repo, poll } => serve::run(*pr, repo, *poll),
-        Command::StatePath { pr, repo } => {
-            let number = pr_number(*pr, theme)?;
-            state_path::run(number, &repo_name(repo.as_deref(), theme)?)
+        Command::Serve {
+            pr,
+            is_local,
+            base,
+            repo,
+            poll,
+        } => {
+            if *is_local {
+                serve::run_local(base.as_deref(), repo.as_deref(), *poll)
+            } else {
+                let number = pr.context("--pr is required unless --local is set")?;
+                let repo_name = repo
+                    .as_deref()
+                    .context("--repo is required unless --local is set")?;
+                serve::run(number, repo_name, *poll)
+            }
+        }
+        Command::StatePath { pr, is_local, repo } => {
+            if *is_local {
+                state_path::run_local(repo.as_deref())
+            } else {
+                let number = pr_number(*pr, theme)?;
+                state_path::run(number, &repo_name(repo.as_deref(), theme)?)
+            }
         }
         other => run_agent_command(other, theme),
     }
@@ -90,6 +115,7 @@ fn run_agent_command(command: &Command, theme: Theme) -> Result<()> {
             prepass_write::run(input.as_deref(), target)
         }),
         Command::Checkout { .. }
+        | Command::Local { .. }
         | Command::Guide
         | Command::Prs { .. }
         | Command::Serve { .. }
@@ -221,13 +247,50 @@ pub fn parse_repo(value: &str) -> Result<(String, String)> {
     }
 }
 
-/// This machine's state directory for a pull request.
-pub fn state_dir(owner: &str, name: &str, number: u64) -> Result<PathBuf> {
+/// State-root configuration derived from `HOME` and optional `XDG_STATE_HOME`.
+pub fn state_root_config() -> Result<review_store_fs::StateRootConfig> {
     let home = env::var_os("HOME")
         .map(PathBuf::from)
         .context("HOME is not set")?;
-    let xdg = env::var_os("XDG_STATE_HOME").map(PathBuf::from);
-    review_store_fs::state_dir(xdg.as_deref(), &home, crate::STATE_APP, owner, name, number)
+    let xdg_state_home = env::var_os("XDG_STATE_HOME").map(PathBuf::from);
+    Ok(review_store_fs::StateRootConfig {
+        xdg_state_home,
+        home,
+        app: crate::STATE_APP.to_owned(),
+    })
+}
+
+/// This machine's state directory for a pull request.
+pub fn state_dir(owner: &str, name: &str, number: u64) -> Result<PathBuf> {
+    let config = state_root_config()?;
+    review_store_fs::state_dir(
+        config.xdg_state_home.as_deref(),
+        &config.home,
+        &config.app,
+        owner,
+        name,
+        number,
+    )
+}
+
+/// This machine's state directory for an unlinked local worktree review.
+pub fn local_state_dir(worktree_root: &Path, branch: &str, repo: Option<&str>) -> Result<PathBuf> {
+    let config = state_root_config()?;
+    let owner_repo = match repo {
+        Some(value) => Some(parse_repo(value)?),
+        None => None,
+    };
+    let pair = owner_repo
+        .as_ref()
+        .map(|(owner, name)| (owner.as_str(), name.as_str()));
+    review_store_fs::local_state_dir(
+        config.xdg_state_home.as_deref(),
+        &config.home,
+        &config.app,
+        pair,
+        worktree_root,
+        branch,
+    )
 }
 
 /// Says what the tool is about to do, on stderr.

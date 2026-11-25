@@ -33,6 +33,18 @@ pub enum Command {
         #[arg(long, value_name = "COMMAND", env = "JPR_WORKTREE_CMD")]
         worktree_cmd: Option<String>,
     },
+    /// Inspect the current worktree for local review or active PR auto-detection.
+    Local {
+        /// Base git ref to diff against (bypasses active PR auto-detection).
+        #[arg(long, value_name = "REF")]
+        base: Option<String>,
+        /// Explicit GitHub repository (`owner/name`) for PR lookup.
+        #[arg(long, value_name = "OWNER/NAME")]
+        repo: Option<String>,
+        /// Stay in local mode even if an open pull request exists for this branch.
+        #[arg(long)]
+        no_pr: bool,
+    },
     /// Print the agent review and reply contract to stdout.
     Guide,
     /// Print review threads as JSON from a live daemon or saved state.
@@ -91,23 +103,36 @@ pub enum Command {
         #[arg(long, default_value_t = 50, value_parser = clap::value_parser!(u32).range(1..))]
         limit: u32,
     },
-    /// Serve a pull request's review session as JSON-RPC on stdin and stdout.
+    /// Serve a review session as JSON-RPC on stdin and stdout.
     Serve {
-        /// The pull request number.
-        #[arg(long)]
-        pr: u64,
-        /// The repository, as owner/name.
-        #[arg(long, value_name = "OWNER/NAME")]
-        repo: String,
+        /// The pull request number (mutually exclusive with --local).
+        #[arg(
+            long,
+            conflicts_with = "is_local",
+            required_unless_present = "is_local"
+        )]
+        pr: Option<u64>,
+        /// Serve an unlinked local worktree review session.
+        #[arg(long = "local", action = clap::ArgAction::SetTrue, conflicts_with = "pr")]
+        is_local: bool,
+        /// Base git ref to diff against when serving in --local mode.
+        #[arg(long, value_name = "REF", requires = "is_local", conflicts_with = "pr")]
+        base: Option<String>,
+        /// The repository, as owner/name (required with --pr; optional with --local).
+        #[arg(long, value_name = "OWNER/NAME", required_unless_present = "is_local")]
+        repo: Option<String>,
         /// Seconds between background syncs; 0 syncs only on request.
         #[arg(long, value_name = "SECONDS", default_value_t = 60)]
         poll: u64,
     },
-    /// Print the directory that holds a pull request's review state.
+    /// Print the directory that holds a review session's state.
     StatePath {
         /// The pull request number. Left out on a terminal, you are asked.
-        #[arg(long)]
+        #[arg(long, conflicts_with = "is_local")]
         pr: Option<u64>,
+        /// Print the local review state directory for the current worktree and branch.
+        #[arg(long = "local", conflicts_with = "pr")]
+        is_local: bool,
         /// The repository, as owner/name. Left out on a terminal, you are asked.
         #[arg(long, value_name = "OWNER/NAME")]
         repo: Option<String>,
@@ -128,6 +153,37 @@ mod tests {
     fn a_bare_invocation_has_no_subcommand() {
         let cli = Cli::try_parse_from(["jpr-review"]).unwrap();
         assert!(cli.command.is_none());
+    }
+
+    #[test]
+    fn local_parses_optional_base_repo_and_no_pr() {
+        let bare = Cli::try_parse_from(["jpr-review", "local"]).unwrap();
+        assert_eq!(
+            bare.command,
+            Some(Command::Local {
+                base: None,
+                repo: None,
+                no_pr: false,
+            })
+        );
+        let full = Cli::try_parse_from([
+            "jpr-review",
+            "local",
+            "--base",
+            "HEAD",
+            "--repo",
+            "octo/widgets",
+            "--no-pr",
+        ])
+        .unwrap();
+        assert_eq!(
+            full.command,
+            Some(Command::Local {
+                base: Some("HEAD".into()),
+                repo: Some("octo/widgets".into()),
+                no_pr: true,
+            })
+        );
     }
 
     #[test]
@@ -173,23 +229,72 @@ mod tests {
     }
 
     #[test]
-    fn serve_polls_every_minute_by_default() {
-        let cli =
+    fn serve_supports_pr_and_local_modes_with_mutual_exclusion() {
+        let pr_cli =
             Cli::try_parse_from(["jpr-review", "serve", "--pr", "7", "--repo", "octo/widgets"])
                 .unwrap();
         assert_eq!(
-            cli.command,
+            pr_cli.command,
             Some(Command::Serve {
-                pr: 7,
-                repo: "octo/widgets".into(),
+                pr: Some(7),
+                is_local: false,
+                base: None,
+                repo: Some("octo/widgets".into()),
                 poll: 60
             })
+        );
+        let local_cli =
+            Cli::try_parse_from(["jpr-review", "serve", "--local", "--base", "develop"]).unwrap();
+        assert_eq!(
+            local_cli.command,
+            Some(Command::Serve {
+                pr: None,
+                is_local: true,
+                base: Some("develop".into()),
+                repo: None,
+                poll: 60
+            })
+        );
+        assert!(Cli::try_parse_from(["jpr-review", "serve", "--pr", "7"]).is_err());
+        assert!(
+            Cli::try_parse_from([
+                "jpr-review",
+                "serve",
+                "--pr",
+                "7",
+                "--local",
+                "--repo",
+                "o/r"
+            ])
+            .is_err()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "jpr-review",
+                "serve",
+                "--pr",
+                "7",
+                "--repo",
+                "o/r",
+                "--base",
+                "main"
+            ])
+            .is_err()
         );
     }
 
     #[test]
-    fn serve_requires_the_repository() {
-        assert!(Cli::try_parse_from(["jpr-review", "serve", "--pr", "7"]).is_err());
+    fn state_path_supports_local_flag_and_rejects_conflict_with_pr() {
+        let local = Cli::try_parse_from(["jpr-review", "state-path", "--local"]).unwrap();
+        assert_eq!(
+            local.command,
+            Some(Command::StatePath {
+                pr: None,
+                is_local: true,
+                repo: None,
+            })
+        );
+        assert!(Cli::try_parse_from(["jpr-review", "state-path", "--pr", "7", "--local"]).is_err());
     }
 
     #[test]

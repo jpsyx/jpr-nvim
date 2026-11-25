@@ -11,9 +11,10 @@ use anyhow::{Context, Result, bail};
 use review_core::ReviewSession;
 use review_core::ports::{Ports, ReviewStore, SystemClock};
 use review_forge_github::GhForge;
+use review_model::LocalReviewContext;
 use review_rpc::ServeOptions;
 use review_store_fs::FsStore;
-use review_workspace_git::GitWorkspace;
+use review_workspace_git::{GitWorkspace, inspect_local_worktree};
 
 /// Seconds between resends of what GitHub refused, while the server polls.
 pub const RETRY_SECONDS: u64 = 20;
@@ -72,7 +73,8 @@ pub fn run(number: u64, repo: &str, poll: u64) -> Result<()> {
     let (owner, name) = super::parse_repo(repo)?;
     let cwd = env::current_dir().context("reading the current directory")?;
     let state_dir = super::state_dir(&owner, &name, number)?;
-    let store = FsStore::new(state_dir.clone());
+    let store = FsStore::new_with_root(state_dir.clone(), super::state_root_config()?);
+    let store_handle = store.clone();
     let pid = std::process::id();
     let (socket_path, _temp_dir_guard) = prepare_daemon_socket(&state_dir, &store, pid)?;
     let ports = Ports {
@@ -81,11 +83,77 @@ pub fn run(number: u64, repo: &str, poll: u64) -> Result<()> {
         workspace: Box::new(GitWorkspace::open(&cwd)?),
         clock: Box::new(SystemClock),
     };
-    let mut session = ReviewSession::open(number, ports)?;
+    let session = ReviewSession::open(number, ports)?;
+    serve_session(
+        session,
+        &store_handle,
+        &state_dir,
+        &cwd,
+        pid,
+        poll,
+        socket_path,
+    )
+}
+
+/// Runs `jpr-review serve --local` for the current worktree without a linked PR.
+pub fn run_local(base: Option<&str>, repo: Option<&str>, poll: u64) -> Result<()> {
+    if let Some(explicit_repo) = repo {
+        let _ = super::parse_repo(explicit_repo)?;
+    }
+    let cwd = env::current_dir().context("reading the current directory")?;
+    let info = inspect_local_worktree(&cwd, base)?;
+    let effective_repo = repo
+        .map(str::to_owned)
+        .or_else(|| super::socket_client::infer_repo_from_git_remote(&info.worktree));
+    let state_dir =
+        super::local_state_dir(&info.worktree, &info.branch, effective_repo.as_deref())?;
+    let store = FsStore::new_with_root(state_dir.clone(), super::state_root_config()?);
+    let store_handle = store.clone();
+    let pid = std::process::id();
+    let (socket_path, _temp_dir_guard) = prepare_daemon_socket(&state_dir, &store, pid)?;
+    // Pass ONLY explicit `--repo` to `GhForge` (never `origin`-inferred repo)
+    // so mid-session `:Jpr sync` resolves upstream PRs on forks cleanly.
+    let ports = Ports {
+        forge: Box::new(GhForge::new(info.worktree.clone(), repo.map(str::to_owned))),
+        store: Box::new(store),
+        workspace: Box::new(GitWorkspace::open(&info.worktree)?),
+        clock: Box::new(SystemClock),
+    };
+    let context = LocalReviewContext {
+        branch: info.branch,
+        base_ref: info.base_ref,
+        base_sha: info.base_sha,
+        repo: effective_repo,
+    };
+    let session = ReviewSession::open_local(context, ports)?;
+    serve_session(
+        session,
+        &store_handle,
+        &state_dir,
+        &info.worktree,
+        pid,
+        poll,
+        socket_path,
+    )
+}
+
+fn serve_session(
+    mut session: ReviewSession,
+    store_handle: &FsStore,
+    initial_state_dir: &Path,
+    worktree_root: &Path,
+    pid: u32,
+    poll: u64,
+    socket_path: Option<PathBuf>,
+) -> Result<()> {
     let socket_text = socket_path
         .as_ref()
         .map(|path| path.to_string_lossy().into_owned());
-    session.record_daemon_with_socket(pid, &cwd.to_string_lossy(), socket_text.as_deref())?;
+    session.record_daemon_with_socket(
+        pid,
+        &worktree_root.to_string_lossy(),
+        socket_text.as_deref(),
+    )?;
     let shared_session = Arc::new(Mutex::new(session));
     let options = create_serve_options(poll, socket_path);
     let result = review_rpc::serve(
@@ -94,14 +162,18 @@ pub fn run(number: u64, repo: &str, poll: u64) -> Result<()> {
         &shared_session,
         &options,
     );
+    let active_dir = store_handle.current_dir();
     if result.is_ok() {
         clear_owned_socket_record(
-            &state_dir,
+            &active_dir,
             &shared_session,
             pid,
-            &cwd,
+            worktree_root,
             socket_text.as_deref(),
         );
+    }
+    if active_dir != initial_state_dir {
+        let _ = fs::remove_dir(initial_state_dir);
     }
     result
 }
@@ -330,5 +402,57 @@ mod tests {
 
         clear_owned_socket_record(root.path(), &shared, 42, worktree, Some("/tmp/a.sock"));
         assert_eq!(read_socket(), None);
+    }
+
+    #[test]
+    fn clear_owned_socket_record_uses_active_dir_after_mid_session_retarget() {
+        use review_core::fakes::{FakeForge, FakeWorkspace, FixedClock, sample_pr};
+        use review_core::ports::{ForgeSnapshot, Ports};
+        use review_store_fs::StateRootConfig;
+
+        let root = tempfile::tempdir().expect("tempdir");
+        let local_dir = root.path().join("local-dir");
+        let state_root = StateRootConfig {
+            xdg_state_home: Some(root.path().to_path_buf()),
+            home: root.path().to_path_buf(),
+            app: "jpr".into(),
+        };
+        let store = FsStore::new_with_root(local_dir, state_root);
+        let store_handle = store.clone();
+        let ports = Ports {
+            forge: Box::new(FakeForge::new(sample_pr(), ForgeSnapshot::default())),
+            store: Box::new(store),
+            workspace: Box::new(FakeWorkspace::default()),
+            clock: Box::new(FixedClock::at(100)),
+        };
+        let mut session = ReviewSession::open_local(
+            LocalReviewContext {
+                branch: "fix/widget".into(),
+                base_ref: "main".into(),
+                base_sha: "base000".into(),
+                repo: Some("octo/widgets".into()),
+            },
+            ports,
+        )
+        .expect("open local");
+        session
+            .record_daemon_with_socket(42, "/worktree", Some("/tmp/live.sock"))
+            .expect("record");
+        session.sync().expect("upgrade to PR #7");
+
+        let active_dir = store_handle.current_dir();
+        assert!(active_dir.ends_with("pr-7"), "{active_dir:?}");
+        let shared = Arc::new(Mutex::new(session));
+        clear_owned_socket_record(
+            &active_dir,
+            &shared,
+            42,
+            Path::new("/worktree"),
+            Some("/tmp/live.sock"),
+        );
+        assert_eq!(
+            FsStore::new(active_dir).load().unwrap().session.socket,
+            None
+        );
     }
 }

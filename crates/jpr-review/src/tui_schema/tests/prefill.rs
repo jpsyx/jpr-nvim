@@ -106,17 +106,30 @@ fn assert_partial_state_path_prefill(specs: &[CommandSpec]) {
     assert_eq!(
         initial_answers_for_missing_inputs(&Command::StatePath {
             pr: Some(7),
+            is_local: false,
             repo: Some("octo/widgets".into()),
+        }),
+        None
+    );
+    assert_eq!(
+        initial_answers_for_missing_inputs(&Command::StatePath {
+            pr: None,
+            is_local: true,
+            repo: None,
         }),
         None
     );
     let (id, answers) = initial_answers_for_missing_inputs(&Command::StatePath {
         pr: Some(7),
+        is_local: false,
         repo: None,
     })
     .expect("state-path without --repo needs interactive input");
     assert_eq!(id, "state-path");
-    assert_eq!(answers, answers_from(&[("pr", "7")]));
+    assert_eq!(
+        answers,
+        answers_from(&[("session_mode", "pr"), ("pr", "7")])
+    );
     let spec = find_spec(specs, id);
     let wizard = WizardState::new(&spec, answers, false);
     assert_eq!(

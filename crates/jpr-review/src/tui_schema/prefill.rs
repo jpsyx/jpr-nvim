@@ -43,11 +43,19 @@ pub(super) fn initial_answers_for_missing_inputs_with_env(
             repo,
             worktree_cmd,
         } => initial_checkout_answers(*pr, repo.as_deref(), worktree_cmd.as_deref()),
-        Command::StatePath { pr, repo } => initial_state_path_answers(*pr, repo.as_deref()),
+        Command::StatePath { pr, is_local, repo } => {
+            if *is_local {
+                None
+            } else {
+                initial_state_path_answers(*pr, repo.as_deref())
+            }
+        }
         Command::Threads { .. } | Command::Reply { .. } | Command::PrepassWrite { .. } => {
             initial_agent_answers(command, env)
         }
-        Command::Prs { .. } | Command::Serve { .. } | Command::Guide => None,
+        Command::Local { .. } | Command::Prs { .. } | Command::Serve { .. } | Command::Guide => {
+            None
+        }
     }
 }
 
@@ -86,6 +94,7 @@ fn initial_agent_answers(command: &Command, env: TargetEnv<'_>) -> Option<(&'sta
             env,
         ),
         Command::Checkout { .. }
+        | Command::Local { .. }
         | Command::Guide
         | Command::Prs { .. }
         | Command::Serve { .. }
@@ -133,6 +142,7 @@ fn initial_state_path_answers(
         return None;
     }
     let mut answers = Answers::new();
+    answers.insert("session_mode".to_owned(), "pr".to_owned());
     if let Some(number) = pr {
         answers.insert("pr".to_owned(), number.to_string());
     }

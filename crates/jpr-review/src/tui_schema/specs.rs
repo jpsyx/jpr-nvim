@@ -5,7 +5,8 @@ use cli_tui::{CommandSpec, SelectOption, StepKind, StepSpec};
 use super::steps::{
     create_custom_repo_steps, create_open_pr_picker_step, create_required_pr_step,
     create_required_repo_step, create_target_steps, has_answer_value, non_empty_env,
-    validate_non_empty, validate_positive_u32, validate_pr_number, validate_u64,
+    validate_git_ref, validate_non_empty, validate_optional_git_ref, validate_positive_u32,
+    validate_pr_number, validate_u64,
 };
 
 const DEFAULT_POLL_SECONDS: &str = "60";
@@ -15,6 +16,7 @@ const DEFAULT_POLL_SECONDS: &str = "60";
 pub fn build_command_specs() -> Vec<CommandSpec> {
     vec![
         create_prs_spec(),
+        create_local_spec(),
         create_checkout_spec(),
         create_threads_spec(),
         create_reply_spec(),
@@ -23,6 +25,71 @@ pub fn build_command_specs() -> Vec<CommandSpec> {
         create_serve_spec(),
         create_guide_spec(),
     ]
+}
+
+fn create_local_spec() -> CommandSpec {
+    let mut steps = vec![
+        StepSpec::new(
+            "base_mode",
+            "Base Branch Selection",
+            "Auto-detect the base branch (and attach to an open PR if one exists) or pick a custom git ref.",
+            StepKind::Select(vec![
+                SelectOption::new("auto", "Auto-detect base branch").with_help(
+                    "Use develop if present else main, and auto-attach if an open PR exists.",
+                ),
+                SelectOption::new("custom", "Custom git ref (local only)").with_help(
+                    "Diff against a specific git ref such as HEAD or a branch; stays local-only.",
+                ),
+            ]),
+        )
+        .with_default("auto"),
+        StepSpec::new(
+            "base",
+            "Base Git Ref",
+            "Enter the git ref to diff the current worktree against (for example develop, main, or HEAD).",
+            StepKind::Text {
+                placeholder: Some("HEAD".to_owned()),
+            },
+        )
+        .with_when(|answers| has_answer_value(answers, "base_mode", "custom"))
+        .with_validate(validate_git_ref),
+        StepSpec::new(
+            "detect_pr",
+            "Active PR Detection",
+            "Choose whether to auto-attach when the current branch already has an open GitHub PR.",
+            StepKind::Toggle {
+                yes_label: "Auto-attach to open PR".to_owned(),
+                yes_help: "Probe GitHub with gh pr view and attach in-place if an open PR exists."
+                    .to_owned(),
+                no_label: "Stay local only (--no-pr)".to_owned(),
+                no_help: "Skip GitHub PR detection and start an unlinked local worktree review."
+                    .to_owned(),
+            },
+        )
+        .with_default("true")
+        .with_when(|answers| has_answer_value(answers, "base_mode", "auto")),
+    ];
+    for mut step in create_custom_repo_steps(
+        "Choose whether to probe a specific GitHub repository for an open PR.",
+        "Let gh resolve the repository from the current worktree's remotes.",
+        "Check a specific owner/name repository for an open PR.",
+    ) {
+        let existing_when = step.when.take();
+        step = step.with_when(move |answers| {
+            has_answer_value(answers, "base_mode", "auto")
+                && has_answer_value(answers, "detect_pr", "true")
+                && existing_when
+                    .as_ref()
+                    .is_none_or(|predicate| predicate(answers))
+        });
+        steps.push(step);
+    }
+    CommandSpec::new(
+        "local",
+        "Inspect Current Worktree Review",
+        "Inspects the current worktree for local review or active PR auto-detection as JSON.",
+        steps,
+    )
 }
 
 fn create_prs_spec() -> CommandSpec {
@@ -225,12 +292,35 @@ fn create_prepass_write_spec() -> CommandSpec {
     )
 }
 
+fn create_session_mode_step(help: &str) -> StepSpec {
+    StepSpec::new(
+        "session_mode",
+        "Session Mode",
+        help,
+        StepKind::Select(vec![
+            SelectOption::new("pr", "GitHub Pull Request")
+                .with_help("Target a GitHub pull request by number and owner/name repository."),
+            SelectOption::new("local", "Local Worktree Review")
+                .with_help("Target the current worktree and branch without a linked PR."),
+        ]),
+    )
+    .with_default("pr")
+}
+
 fn create_state_path_spec() -> CommandSpec {
     CommandSpec::new(
         "state-path",
         "Show Review State Path",
-        "Prints the local directory holding a pull request's review state.",
-        vec![create_required_pr_step(), create_required_repo_step()],
+        "Prints the local directory holding a pull request or local worktree's review state.",
+        vec![
+            create_session_mode_step(
+                "Choose whether to print the state path for a GitHub PR or the current local worktree.",
+            ),
+            create_required_pr_step()
+                .with_when(|answers| has_answer_value(answers, "session_mode", "pr")),
+            create_required_repo_step()
+                .with_when(|answers| has_answer_value(answers, "session_mode", "pr")),
+        ],
     )
 }
 
@@ -238,10 +328,25 @@ fn create_serve_spec() -> CommandSpec {
     CommandSpec::new(
         "serve",
         "Run Review Engine Daemon",
-        "Serves a pull request review session as JSON-RPC over stdin and stdout.",
+        "Serves a pull request or local worktree review session as JSON-RPC over stdin and stdout.",
         vec![
-            create_required_pr_step(),
-            create_required_repo_step(),
+            create_session_mode_step(
+                "Choose whether to serve a GitHub pull request or an unlinked local worktree review.",
+            ),
+            create_required_pr_step()
+                .with_when(|answers| has_answer_value(answers, "session_mode", "pr")),
+            create_required_repo_step()
+                .with_when(|answers| has_answer_value(answers, "session_mode", "pr")),
+            StepSpec::new(
+                "base",
+                "Base Git Ref (Optional)",
+                "Enter a base git ref to diff against, or leave blank to auto-detect.",
+                StepKind::Text {
+                    placeholder: Some("develop (blank auto-detects)".to_owned()),
+                },
+            )
+            .with_when(|answers| has_answer_value(answers, "session_mode", "local"))
+            .with_validate(validate_optional_git_ref),
             StepSpec::new(
                 "poll",
                 "Poll Interval (Seconds)",

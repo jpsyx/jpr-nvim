@@ -13,6 +13,7 @@ use crate::commands;
 pub fn answers_to_command(command_id: &str, answers: &Answers) -> Result<Command> {
     match command_id {
         "prs" => answers_to_prs(answers),
+        "local" => answers_to_local(answers),
         "checkout" => answers_to_checkout(answers),
         "threads" => answers_to_threads(answers),
         "reply" => answers_to_reply(answers),
@@ -48,6 +49,7 @@ pub(super) fn apply_answers_to_command_with_env(
 const fn command_id_for_command(command: &Command) -> &'static str {
     match command {
         Command::Checkout { .. } => "checkout",
+        Command::Local { .. } => "local",
         Command::Guide => "guide",
         Command::Threads { .. } => "threads",
         Command::Reply { .. } => "reply",
@@ -70,6 +72,7 @@ const fn has_ambient_socket_origin(command: &Command) -> bool {
             pr, repo, socket, ..
         } => socket.is_none() && pr.is_none() && repo.is_none(),
         Command::Checkout { .. }
+        | Command::Local { .. }
         | Command::Guide
         | Command::Prs { .. }
         | Command::Serve { .. }
@@ -83,6 +86,7 @@ fn clear_matching_ambient_socket(command: &mut Command, ambient_socket: &str) {
         | Command::Reply { socket, .. }
         | Command::PrepassWrite { socket, .. } => socket,
         Command::Checkout { .. }
+        | Command::Local { .. }
         | Command::Guide
         | Command::Prs { .. }
         | Command::Serve { .. }
@@ -180,21 +184,86 @@ fn answers_to_prepass_write(answers: &Answers) -> Result<Command> {
     })
 }
 
+fn answers_to_local(answers: &Answers) -> Result<Command> {
+    match answers.get("base_mode").map(String::as_str) {
+        Some("custom") => {
+            let base = require_non_empty(answers, "base")?;
+            review_workspace_git::validate_git_ref(&base)?;
+            Ok(Command::Local {
+                base: Some(base),
+                repo: None,
+                no_pr: false,
+            })
+        }
+        Some("auto") | None => {
+            let no_pr = has_answer_value(answers, "detect_pr", "false");
+            let repo = if !no_pr && has_answer_value(answers, "custom_repo", "true") {
+                Some(parse_required_repo(answers, "repo")?)
+            } else {
+                None
+            };
+            Ok(Command::Local {
+                base: None,
+                repo,
+                no_pr,
+            })
+        }
+        Some(other) => bail!("unknown local base mode {other:?}"),
+    }
+}
+
 fn answers_to_state_path(answers: &Answers) -> Result<Command> {
-    Ok(Command::StatePath {
-        pr: Some(parse_required_pr(answers, "pr")?),
-        repo: Some(parse_required_repo(answers, "repo")?),
-    })
+    match answers.get("session_mode").map(String::as_str) {
+        Some("local") => Ok(Command::StatePath {
+            pr: None,
+            is_local: true,
+            repo: None,
+        }),
+        Some("pr") | None => Ok(Command::StatePath {
+            pr: Some(parse_required_pr(answers, "pr")?),
+            is_local: false,
+            repo: Some(parse_required_repo(answers, "repo")?),
+        }),
+        Some(other) => bail!("unknown state-path session mode {other:?}"),
+    }
 }
 
 fn answers_to_serve(answers: &Answers) -> Result<Command> {
-    let pr = parse_required_pr(answers, "pr")?;
-    let repo = parse_required_repo(answers, "repo")?;
     let raw_poll = answers.get("poll").map_or("60", String::as_str).trim();
     let poll: u64 = raw_poll
         .parse()
         .with_context(|| format!("{raw_poll:?} is not a valid poll interval"))?;
-    Ok(Command::Serve { pr, repo, poll })
+    match answers.get("session_mode").map(String::as_str) {
+        Some("local") => {
+            let base = answers
+                .get("base")
+                .map(|raw| raw.trim())
+                .filter(|trimmed| !trimmed.is_empty())
+                .map(str::to_owned);
+            if let Some(ref base_ref) = base {
+                review_workspace_git::validate_git_ref(base_ref)?;
+            }
+            Ok(Command::Serve {
+                pr: None,
+                is_local: true,
+                base,
+                repo: None,
+                poll,
+            })
+        }
+        Some("pr") | None => {
+            let pr = parse_required_pr(answers, "pr")?;
+            let repo = parse_required_repo(answers, "repo")?;
+            Ok(Command::Serve {
+                pr: Some(pr),
+                is_local: false,
+                base: None,
+                repo: Some(repo),
+                poll,
+            })
+        }
+        Some(other) => bail!("unknown serve session mode {other:?}"),
+    }
 }
 
 fn answers_to_target(answers: &Answers) -> Result<ResolvedTarget> {

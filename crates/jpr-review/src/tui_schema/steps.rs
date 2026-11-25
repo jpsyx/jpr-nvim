@@ -218,6 +218,18 @@ pub(super) fn validate_u64(value: &str, _answers: &Answers) -> Result<(), String
         .map_err(|_| "poll interval must be a non-negative integer in seconds".to_owned())
 }
 
+pub(super) fn validate_git_ref(value: &str, _answers: &Answers) -> Result<(), String> {
+    review_workspace_git::validate_git_ref(value.trim()).map_err(|error| error.to_string())
+}
+
+pub(super) fn validate_optional_git_ref(value: &str, _answers: &Answers) -> Result<(), String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Ok(());
+    }
+    review_workspace_git::validate_git_ref(trimmed).map_err(|error| error.to_string())
+}
+
 pub(super) fn validate_non_empty(
     field_name: &'static str,
 ) -> impl Fn(&str, &Answers) -> Result<(), String> + Send + Sync + 'static {

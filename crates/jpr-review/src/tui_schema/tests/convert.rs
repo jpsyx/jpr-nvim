@@ -111,20 +111,74 @@ fn assert_converts_remaining_subcommands() {
 
 fn assert_converts_state_and_daemon_subcommands() {
     assert_converts(
+        "local",
+        &[("base_mode", "custom"), ("base", "HEAD")],
+        &Command::Local {
+            base: Some("HEAD".into()),
+            repo: None,
+            no_pr: false,
+        },
+    );
+    assert_converts(
+        "local",
+        &[("base_mode", "auto"), ("detect_pr", "false")],
+        &Command::Local {
+            base: None,
+            repo: None,
+            no_pr: true,
+        },
+    );
+    assert_converts(
         "state-path",
-        &[("pr", "7"), ("repo", "octo/widgets")],
+        &[
+            ("session_mode", "pr"),
+            ("pr", "7"),
+            ("repo", "octo/widgets"),
+        ],
         &Command::StatePath {
             pr: Some(7),
+            is_local: false,
             repo: Some("octo/widgets".into()),
         },
     );
     assert_converts(
+        "state-path",
+        &[("session_mode", "local")],
+        &Command::StatePath {
+            pr: None,
+            is_local: true,
+            repo: None,
+        },
+    );
+    assert_converts(
         "serve",
-        &[("pr", "7"), ("repo", "octo/widgets"), ("poll", "30")],
+        &[
+            ("session_mode", "pr"),
+            ("pr", "7"),
+            ("repo", "octo/widgets"),
+            ("poll", "30"),
+        ],
         &Command::Serve {
-            pr: 7,
-            repo: "octo/widgets".into(),
+            pr: Some(7),
+            is_local: false,
+            base: None,
+            repo: Some("octo/widgets".into()),
             poll: 30,
+        },
+    );
+    assert_converts(
+        "serve",
+        &[
+            ("session_mode", "local"),
+            ("base", "develop"),
+            ("poll", "0"),
+        ],
+        &Command::Serve {
+            pr: None,
+            is_local: true,
+            base: Some("develop".into()),
+            repo: None,
+            poll: 0,
         },
     );
     assert_converts("guide", &[], &Command::Guide);

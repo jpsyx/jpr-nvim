@@ -184,10 +184,30 @@ pub fn execute_via_socket_or_store<T>(
 }
 
 fn open_store_from_target(pr: Option<u64>, repo: Option<&str>, theme: Theme) -> Result<FsStore> {
+    if pr.is_none()
+        && let Some(local_store) = find_existing_local_store(repo)
+    {
+        return Ok(local_store);
+    }
     let number = super::pr_number(pr, theme)?;
     let repo_name = get_repo_name_from_flag_or_git(repo, theme)?;
     let (owner, name) = super::parse_repo(&repo_name)?;
     Ok(FsStore::new(super::state_dir(&owner, &name, number)?))
+}
+
+fn find_existing_local_store(repo: Option<&str>) -> Option<FsStore> {
+    let cwd = env::current_dir().ok()?;
+    let info = review_workspace_git::inspect_local_worktree(&cwd, Some("HEAD")).ok()?;
+    let effective_repo = repo
+        .map(str::to_owned)
+        .or_else(|| infer_repo_from_git_remote(&info.worktree));
+    let dir =
+        super::local_state_dir(&info.worktree, &info.branch, effective_repo.as_deref()).ok()?;
+    if dir.join("local.json").exists() {
+        Some(FsStore::new(dir))
+    } else {
+        None
+    }
 }
 
 fn get_repo_name_from_flag_or_git(flag: Option<&str>, theme: Theme) -> Result<String> {
