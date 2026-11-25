@@ -263,8 +263,9 @@ mod tests {
     fn stream_checks_head_commit_once_across_all_files() {
         let fakes = create_fakes();
         let mut session = fakes.open_synced();
+        let calls_before_stream = fakes.workspace.head_commit_calls();
         session.stream(ViewMode::Unified).unwrap();
-        assert_eq!(fakes.workspace.head_commit_calls(), 1);
+        assert_eq!(fakes.workspace.head_commit_calls() - calls_before_stream, 1);
     }
 
     #[test]

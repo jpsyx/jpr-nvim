@@ -902,3 +902,26 @@ release `0.7.0`.
 
 **Revisit when.** Reviewers want to switch between multiple open PRs targeting
 different base branches from the same worktree without closing the tab first.
+
+## Reusing existing PR worktrees and fast-forwarding behind `HEAD` on reopen
+
+**Decision.** Before `jpr-review checkout` invokes `gh pr checkout` or a custom
+`worktree_cmd`, `find_existing_pr_worktree` scans `git worktree list --porcelain`
+(preferring the `worktree` path saved in `session.json`) for any non-bare
+worktree already checked out on `pr-<N>` or, for same-repository PRs, the PR's
+`head_ref`. When a matching worktree exists, `checkout` returns it directly.
+On the session's first `sync()`, `ReviewSession::apply_pull` also compares local
+`HEAD` against `pr.head_sha` once (`has_checked_reopen_head`) so a reused
+worktree that fell behind while closed runs `fast_forward_to` (nonce-pinned
+auto-stash `--ff-only`, keeping the stash and opening the Resolve/Agent prompt
+on `RestoreConflict`, and leaving `AheadOfTarget`/`Diverged` untouched without
+repeating warnings on subsequent 60-second polls).
+
+**Why.** Reopening a closed review or an already checked-out PR branch should
+not re-run slow checkout commands or create duplicate worktrees, while dirty
+edits from a prior review session must stay safe when pulling new commits.
+
+**Consequences.** Cross-repository (fork) PRs only match `pr-<N>` (not `head_ref`
+alone) to avoid colliding with an unrelated local branch of the same name.
+State continues to live under `$XDG_STATE_HOME/jpr/` (`session.json`), never in
+`~/.config/`.

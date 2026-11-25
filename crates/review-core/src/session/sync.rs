@@ -157,8 +157,9 @@ impl ReviewSession {
             .pr
             .as_ref()
             .map(|existing_pr| existing_pr.head_sha.clone());
-        let prior_head_sha = self.pending_head_move_from.clone().or(previous_head_sha);
         let pr_head_sha = pr.head_sha.clone();
+        let prior_head_sha = self.get_prior_head_sha_for_sync(previous_head_sha, &pr_head_sha);
+        self.has_checked_reopen_head = true;
         if let Some(prior_sha) = prior_head_sha
             .as_ref()
             .filter(|prior_sha| *prior_sha != &pr_head_sha)
@@ -179,6 +180,31 @@ impl ReviewSession {
             view: Box::new(view.clone()),
         });
         Ok(view)
+    }
+
+    fn get_prior_head_sha_for_sync(
+        &self,
+        previous_head_sha: Option<String>,
+        pr_head_sha: &str,
+    ) -> Option<String> {
+        let tracked = self.pending_head_move_from.clone().or(previous_head_sha);
+        if tracked.as_deref().is_some_and(|sha| sha != pr_head_sha) || self.has_checked_reopen_head
+        {
+            return tracked;
+        }
+        let Ok(local_head) = self.ports.workspace.head_commit() else {
+            return tracked;
+        };
+        if local_head != pr_head_sha
+            && self
+                .pushed_head
+                .as_ref()
+                .is_none_or(|pushed| pushed.pushed_sha != local_head)
+        {
+            Some(local_head)
+        } else {
+            tracked
+        }
     }
 
     fn reconcile_pulled_state(

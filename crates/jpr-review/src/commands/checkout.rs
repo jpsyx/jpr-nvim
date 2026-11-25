@@ -1,20 +1,23 @@
 use std::env;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use review_core::ports::Forge;
+use review_core::ports::{Forge, ReviewStore};
 use review_forge_github::GhForge;
 use review_model::PullRequest;
-use review_workspace_git::{WorktreeCommand, checkout_pr};
+use review_store_fs::FsStore;
+use review_workspace_git::{WorktreeCommand, checkout_pr, find_existing_pr_worktree};
 use serde_json::json;
 
 use crate::theme::Theme;
 
-/// Runs `jpr-review checkout`: puts pull request `number` in its own worktree.
+/// Runs `jpr-review checkout`: returns an existing PR worktree or checks one out.
 ///
-/// Prints where, as one JSON line on stdout, for the Neovim plugin to open.
-/// `expected_repo` (owner/name) refuses a pull request from another
-/// repository, and `worktree_cmd` replaces the default checkout.
+/// Reuses any existing worktree already on the pull request's branch without
+/// re-running `gh pr checkout` or `worktree_cmd`, and prints one JSON line on
+/// stdout for the Neovim plugin to open. `expected_repo` (owner/name) refuses
+/// a pull request from another repository, and `worktree_cmd` replaces the
+/// default checkout.
 pub fn run(
     number: u64,
     expected_repo: Option<&str>,
@@ -26,16 +29,41 @@ pub fn run(
     let pr = GhForge::new(cwd.clone(), None).pull_request(number)?;
     // Checked before any worktree exists, so a mismatch leaves nothing behind.
     ensure_expected_repo(&pr, expected_repo)?;
-    super::narrate(
-        theme,
-        &format!("Checking out #{number} ({})...", pr.head_ref),
-    );
-    let command = worktree_cmd.map_or(WorktreeCommand::Default, |template| {
-        WorktreeCommand::Custom(template.to_owned())
-    });
-    let worktree = checkout_pr(&cwd, number, &command)?;
+    let preferred_worktree = load_saved_worktree(&pr);
+    let worktree = if let Some(existing) = find_existing_pr_worktree(
+        &cwd,
+        number,
+        Some(&pr.head_ref),
+        pr.is_cross_repository,
+        preferred_worktree.as_deref(),
+    ) {
+        super::narrate(
+            theme,
+            &format!("Reusing worktree for #{number} ({})...", pr.head_ref),
+        );
+        existing
+    } else {
+        super::narrate(
+            theme,
+            &format!("Checking out #{number} ({})...", pr.head_ref),
+        );
+        let command = worktree_cmd.map_or(WorktreeCommand::Default, |template| {
+            WorktreeCommand::Custom(template.to_owned())
+        });
+        checkout_pr(&cwd, number, &command)?
+    };
     println!("{}", output_line(&pr, &worktree));
     Ok(())
+}
+
+fn load_saved_worktree(pr: &PullRequest) -> Option<PathBuf> {
+    let state_dir = super::state_dir(&pr.owner, &pr.repo, pr.number).ok()?;
+    let snapshot = FsStore::new(state_dir).load().ok()?;
+    snapshot
+        .session
+        .worktree
+        .filter(|path| !path.trim().is_empty())
+        .map(PathBuf::from)
 }
 
 /// Fails when `expected` (owner/name) is set and `pr` is in another repository.

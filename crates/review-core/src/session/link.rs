@@ -35,6 +35,7 @@ impl ReviewSession {
         }
         self.ports.forge.pin_repo(&pr.owner, &pr.repo);
         self.target = SessionTarget::Pr { number: pr.number };
+        self.has_checked_reopen_head = true;
         let view = self.apply_pull(pr, snapshot, now)?;
         let _ = self.ports.store.finalize_retarget();
         Ok(view)

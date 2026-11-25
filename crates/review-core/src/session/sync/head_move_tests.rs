@@ -1,3 +1,4 @@
+use crate::ports::Workspace;
 use review_model::{Anchor, Event, HeadMoveOutcome, Origin, SyncState};
 
 use super::super::ReviewSession;
@@ -11,6 +12,44 @@ fn find_thread_state(session: &ReviewSession, thread_id: &str) -> (Option<u64>, 
         .find(|thread| thread.id == thread_id)
         .unwrap();
     (thread.anchor.start, thread.outdated)
+}
+
+#[test]
+fn reopen_sync_fast_forwards_when_local_head_is_behind_pr_head_on_first_sync() {
+    let fakes = Fakes::new(100);
+    fakes.workspace.set_head_commit("old000");
+    let mut session = fakes.open();
+    let events = session.subscribe();
+
+    session.sync().unwrap();
+    let (previous_sha, head_sha, outcome, _, _, _) = take_head_moved_and_synced(&events);
+    assert_eq!(previous_sha, "old000");
+    assert_eq!(head_sha, "abc123");
+    assert_eq!(outcome, HeadMoveOutcome::FastForwarded);
+    assert_eq!(fakes.workspace.head_commit().unwrap(), "abc123");
+}
+
+#[test]
+fn reopen_sync_does_not_repeat_ahead_warning_on_subsequent_polls() {
+    let fakes = Fakes::new(100);
+    fakes.workspace.set_head_commit("local999");
+    fakes.workspace.set_fast_forward_outcome(Some(Ok(
+        crate::ports::FastForwardOutcome::AheadOfTarget {
+            head_sha: "local999".into(),
+            target_sha: "abc123".into(),
+        },
+    )));
+    let mut session = fakes.open();
+    let events = session.subscribe();
+
+    session.sync().unwrap();
+    let (_, _, outcome, _, _, _) = take_head_moved_and_synced(&events);
+    assert_eq!(outcome, HeadMoveOutcome::AheadOfTarget);
+
+    // Subsequent poll at the same remote head must emit only Synced, not HeadMoved again.
+    session.sync().unwrap();
+    assert!(matches!(events.try_recv().ok(), Some(Event::Synced { .. })));
+    assert!(events.try_recv().is_err());
 }
 
 #[test]

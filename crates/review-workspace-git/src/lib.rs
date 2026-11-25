@@ -16,6 +16,7 @@ mod test_support;
 mod unattended;
 mod workspace;
 mod worktree_path;
+mod worktree_reuse;
 
 pub use checkout::{WorktreeCommand, checkout_pr, render_custom};
 pub use custom::last_path_line;
@@ -26,3 +27,7 @@ pub use local_ref::{
 };
 pub use repo::main_repo_root;
 pub use workspace::{FETCH_TIMEOUT, GitWorkspace};
+pub use worktree_reuse::{
+    WorktreeEntry, find_existing_pr_worktree, parse_worktree_list_porcelain,
+    select_reusable_worktree,
+};

@@ -67,6 +67,7 @@ pub struct ReviewSession {
     last_worktree_status: Option<WorktreeStatus>,
     pushed_head: Option<PushedHead>,
     pending_head_move_from: Option<String>,
+    has_checked_reopen_head: bool,
 }
 
 impl ReviewSession {
@@ -112,6 +113,7 @@ impl ReviewSession {
             last_worktree_status: None,
             pushed_head: None,
             pending_head_move_from: None,
+            has_checked_reopen_head: false,
         })
     }
 
