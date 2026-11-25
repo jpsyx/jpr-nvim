@@ -1,6 +1,14 @@
 -- Declarative schema for all 16 `:Jpr` subcommands, driving the floating
 -- command palette, interactive steppers, and subcommand argument completion.
+-- Command aliases live in `COMMAND_ALIASES` and are not palette entries.
 local M = {}
+
+--- Alternate `:Jpr` names that dispatch as an existing command.
+--- Add a row to accept another typed name without a palette entry or a
+--- completion candidate. Keys are the alias; values are canonical command ids.
+local COMMAND_ALIASES = {
+    review = "open",
+}
 
 local function jpr()
     return require("jpr")
@@ -351,6 +359,57 @@ function M.find_command_spec(id)
     return nil
 end
 
+--- Returns configured aliases sorted by alias name.
+--- Each entry is `{ alias = string, command_id = string }`.
+--- @return table[]
+function M.list_command_aliases()
+    local aliases = {}
+    for alias, command_id in pairs(COMMAND_ALIASES) do
+        aliases[#aliases + 1] = { alias = alias, command_id = command_id }
+    end
+    table.sort(aliases, function(left, right)
+        return left.alias < right.alias
+    end)
+    return aliases
+end
+
+--- Maps `name` to its canonical command id.
+--- A known command id maps to itself. An alias maps to its target.
+--- An unknown name returns nil.
+--- @param name string|nil
+--- @return string|nil
+function M.resolve_command_id(name)
+    if type(name) ~= "string" or name == "" then
+        return nil
+    end
+    local alias_target = COMMAND_ALIASES[name]
+    if type(alias_target) == "string" then
+        return alias_target
+    end
+    if M.find_command_spec(name) ~= nil then
+        return name
+    end
+    return nil
+end
+
+--- Checks that every alias names a real command and does not reuse a command id.
+--- @return boolean, string|nil
+function M.validate_command_aliases()
+    local command_ids = {}
+    for _, command_id in ipairs(M.list_command_ids()) do
+        command_ids[command_id] = true
+    end
+    for _, entry in ipairs(M.list_command_aliases()) do
+        if command_ids[entry.alias] then
+            return false, ("alias %q collides with a command id"):format(entry.alias)
+        end
+        if not command_ids[entry.command_id] then
+            return false, ("alias %q targets unknown command %q"):format(entry.alias, tostring(entry.command_id))
+        end
+    end
+    return true
+end
+
 --- Returns the ordered list of all 16 `:Jpr` subcommand IDs.
 --- @return string[]
 function M.list_command_ids()
@@ -366,7 +425,8 @@ end
 --- @param subcommand string|nil
 --- @return string[]
 function M.subcommand_arg_completions(subcommand)
-    local command = M.find_command_spec(subcommand)
+    local resolved_id = M.resolve_command_id(subcommand) or subcommand
+    local command = M.find_command_spec(resolved_id)
     if not command or type(command.steps) ~= "table" or #command.steps ~= 1 then
         return {}
     end

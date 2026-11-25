@@ -2,6 +2,18 @@ local root = vim.fs.dirname(vim.fs.dirname(vim.fs.dirname(vim.fn.fnamemodify(deb
 package.path = root .. "/lua/?.lua;" .. root .. "/lua/?/init.lua;" .. package.path
 
 local jpr = require("jpr")
+local commands_schema = require("jpr.commands.schema")
+
+local aliases_ok, aliases_error = commands_schema.validate_command_aliases()
+assert(aliases_ok == true, "command aliases are valid: " .. tostring(aliases_error))
+assert(
+    vim.deep_equal(commands_schema.list_command_aliases(), { { alias = "review", command_id = "open" } }),
+    "review is the configured alias for open: " .. vim.inspect(commands_schema.list_command_aliases())
+)
+assert(commands_schema.resolve_command_id("review") == "open", "review resolves to open")
+assert(commands_schema.resolve_command_id("open") == "open", "a canonical id resolves to itself")
+assert(commands_schema.resolve_command_id("frobnicate") == nil, "an unknown name does not resolve")
+assert(not vim.tbl_contains(commands_schema.list_command_ids(), "review"), "review is not a command id")
 
 assert(jpr.parse_pr_arg("123") == 123, "a bare number")
 assert(jpr.parse_pr_arg("#45") == 45, "a hash number")
@@ -42,6 +54,8 @@ assert(vim.deep_equal(jpr.complete("", "Jpr toggle split "), {}), "no completion
 assert(vim.deep_equal(jpr.complete("", "1,2 Jpr toggle "), { "unified", "split" }), "spaced range toggle completions")
 assert(vim.deep_equal(jpr.complete("s", "1,2 Jpr toggle s"), { "split" }), "spaced range filtered toggle completion")
 assert(vim.deep_equal(jpr.complete("c", "'<,'> Jpr c"), { "comment", "conversation", "close" }), "spaced visual range subcommands")
+assert(vim.deep_equal(jpr.complete("re", "Jpr re"), {}), "review alias is not offered by completion")
+assert(vim.deep_equal(jpr.complete("r", "Jpr r"), {}), "review alias is not offered by a shorter prefix")
 
 jpr.setup({ worktree_cmd = "wt pr {n}" })
 assert(jpr.config.worktree_cmd == "wt pr {n}", "setup takes options")
@@ -130,6 +144,27 @@ package.loaded["jpr.session"] = {
 }
 jpr.command({ "open", "https://github.com/octo/gadgets/pull/12" })
 assert(opened.number == 12 and opened.repo == "octo/gadgets", ":Jpr open passes the URL's repository on: " .. vim.inspect(opened))
+opened = {}
+jpr.command({ "review", "123" })
+assert(opened.number == 123 and opened.repo == nil, ":Jpr review 123 opens pull request 123: " .. vim.inspect(opened))
+opened = {}
+jpr.command({ "review", "#45" })
+assert(opened.number == 45 and opened.repo == nil, ":Jpr review #45 opens pull request 45: " .. vim.inspect(opened))
+opened = {}
+jpr.command({ "review", "https://github.com/octo/gadgets/pull/9/files" })
+assert(opened.number == 9 and opened.repo == "octo/gadgets", ":Jpr review passes the URL's repository on: " .. vim.inspect(opened))
+local review_message_count = #messages
+jpr.command({ "review", "abc" })
+assert(messages[review_message_count + 1].level == vim.log.levels.ERROR, "review with an invalid arg emits ERROR")
+assert(
+    messages[review_message_count + 1].text:find("invalid pull request", 1, true),
+    "review with an invalid arg matches open: " .. messages[review_message_count + 1].text
+)
+jpr.command({ "review", "1", "extra" })
+assert(
+    messages[review_message_count + 2].text:find("too many arguments", 1, true),
+    "review rejects extra arguments: " .. messages[review_message_count + 2].text
+)
 package.loaded["jpr.session"] = nil
 
 local calls = {}

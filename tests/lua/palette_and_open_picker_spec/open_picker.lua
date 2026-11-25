@@ -38,6 +38,27 @@ return function(context)
         end)
     end
 
+    local function test_review_alias_opens_the_same_pr_picker()
+        local fake_binary = context.write_fake_prs_binary(context.create_two_pr_payload())
+        local opened_call = nil
+        context.with_stubbed_session_methods({
+            open = function(number, repo)
+                opened_call = { number = number, repo = repo }
+            end,
+        }, function()
+            jpr.setup({ binary = fake_binary })
+            jpr.command({ "review" })
+            assert(wizard.is_open() == true, ":Jpr review opens the same PR picker as :Jpr open")
+            assert(vim.wait(3000, function()
+                return wizard.is_open() and helpers.current_text():find("#42  Add OAuth", 1, true) ~= nil
+            end), "review alias loads the open pull request list")
+            assert(helpers.current_text():find("[review]", 1, true) == nil, "review alias is not drawn as a palette row")
+            helpers.press_key("<CR>")
+            assert(wizard.is_open() == false, "confirming a PR from the review alias closes the picker")
+            assert(opened_call ~= nil and opened_call.number == 42, "review alias confirmation calls session.open")
+        end)
+    end
+
     local function test_open_picker_skips_malformed_entries_and_falls_back_on_null_fields()
         local payload = '["bad",{"title":"missing number"},{"number":55,"title":null,"author":null,"headRef":null,"isDraft":false,"updatedAt":null}]'
         local fake_binary = context.write_fake_prs_binary(payload)
@@ -149,6 +170,7 @@ return function(context)
     end
 
     test_open_picker_lists_prs_hovers_metadata_and_opens_selected()
+    test_review_alias_opens_the_same_pr_picker()
     test_open_picker_skips_malformed_entries_and_falls_back_on_null_fields()
     test_open_picker_steps_back_to_manual_input_and_opens_entered_pr()
     test_open_picker_empty_prs_notifies_user()

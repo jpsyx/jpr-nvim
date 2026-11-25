@@ -54,6 +54,11 @@
 - Schema completeness is enforced by automated unit tests in both Rust
   (`crates/jpr-review/src/tui_schema/tests/`) and Lua
   (`tests/lua/palette_and_open_picker_spec.lua`).
+- A command alias is an extra typed name for an existing command, tracked in
+  `COMMAND_ALIASES` inside `lua/jpr/commands/schema.lua`. It resolves to the
+  canonical id before dispatch. It is not a palette entry, a completion
+  candidate, or a new schema command. Document aliases in the README and
+  `docs/` only.
 
 ## Documentation
 

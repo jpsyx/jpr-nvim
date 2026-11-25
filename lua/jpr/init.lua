@@ -287,9 +287,26 @@ local function dispatch_direct_subcommand(session, args, cmd_opts, context)
     M.error(("unknown subcommand %q; expected one of: %s"):format(tostring(subcommand), table.concat(M.subcommands, ", ")))
 end
 
+--- Rewrites a leading command alias to its canonical id, leaving real
+--- subcommands and unknown names unchanged.
+local function canonicalize_command_args(args)
+    if type(args[1]) ~= "string" then
+        return args
+    end
+    local resolved = require("jpr.commands.schema").resolve_command_id(args[1])
+    if resolved == nil or resolved == args[1] then
+        return args
+    end
+    local canonical_args = { resolved }
+    for index = 2, #args do
+        canonical_args[index] = args[index]
+    end
+    return canonical_args
+end
+
 --- Dispatches `:Jpr [subcommand [arg]]` with optional command options `cmd_opts` (such as range), opening the interactive floating command palette when no subcommand is given.
 function M.command(fargs, cmd_opts)
-    local args = fargs or {}
+    local args = canonicalize_command_args(fargs or {})
     local session = require("jpr.session")
     local context = build_tui_context(session, cmd_opts)
     if #args == 0 then
