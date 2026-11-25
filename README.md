@@ -26,6 +26,9 @@ With [lazy.nvim](https://github.com/folke/lazy.nvim):
 {
   "jpsyx/jpr-nvim",
   cmd = "Jpr",
+  keys = {
+    { "<leader>J", "<cmd>Jpr<cr>", desc = "Open Jpr command palette" },
+  },
   opts = {
     -- Optional: a command that creates the worktree and prints its path (`{n}` is the PR number).
     -- worktree_cmd = "my-worktree-tool pr {n}",
@@ -38,8 +41,9 @@ With [lazy.nvim](https://github.com/folke/lazy.nvim):
     -- claude_cmd = "claude",
     -- codex_cmd = "codex",
     -- agent_width = 56,
-    -- Optional: override or disable (false) diff/stream comment & thread keys.
+    -- Optional: override or disable (false) global (`palette`) and diff/stream comment & thread keys.
     -- keys = {
+    --   palette = "<leader>J",
     --   comment = "gc",
     --   suggest_comment = "gC",
     --   file_comment = "gf",
@@ -67,9 +71,9 @@ binary manually.
 
 | Command | What it does |
 | --- | --- |
-| `:Jpr` | Open the interactive Command Palette with human-readable labels, hover helper text, and multi-step steppers for every command (`j`/`k` move, `l`/`<CR>` forward, `h`/`<S-Tab>` back, `q`/`<Esc>` cancel) |
+| `:Jpr` (default key: `<leader>J`) | Open the interactive Command Palette with human-readable labels, hover helper text, and multi-step steppers for every command (`j`/`k` move, `l`/`<CR>` forward, `h`/`<S-Tab>` back, `q`/`<Esc>` cancel) |
 | `:Jpr open [n \| #n \| URL]` | Omit the argument to open the interactive open-PR picker (backed by `jpr-review prs`; press `h` to step back and enter a PR number or URL manually), or pass a number, `#number`, or repository PR URL directly. Opens a review tab immediately with a live 4-stage loading view (worktree checkout stderr, engine startup, GitHub sync, and per-file diff percentage progress) until the stream renders |
-| `:Jpr local [base]` | Review the current worktree in-place against its base branch (`develop` if present else `main`, or an explicit git ref such as `HEAD`). Bare `:Jpr local` auto-attaches to an open PR on the current branch if one exists; passing an explicit `[base]` stays local-only. Edits stay unstaged in the current worktree and local threads dispatch in bulk via `:Jpr send` |
+| `:Jpr local [base]` (alias: `:Jpr self [base]`) | Review the current worktree in-place against its base branch (`develop` if present else `main`, or an explicit git ref such as `HEAD`). Bare `:Jpr local` (or `:Jpr self`) auto-attaches to an open PR on the current branch if one exists; passing an explicit `[base]` stays local-only. Edits stay unstaged in the current worktree and local threads dispatch in bulk via `:Jpr send` |
 | `:Jpr keys` | Show the scrollable floating keyboard shortcuts cheatsheet (reflecting your `keys` config; also bound to `?` inside panel, stream, and PR conversation buffers) |
 | `:Jpr sync` | Sync with GitHub now (it also syncs every minute in PR mode; in an unlinked local session, probes GitHub for an open PR on the branch and upgrades the live session in-place, pushing locally viewed files to GitHub) |
 | `:Jpr push` | Push committed `HEAD` to the pull request's remote branch and resync (never auto-commits dirty files) |

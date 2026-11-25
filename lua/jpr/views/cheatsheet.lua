@@ -93,8 +93,9 @@ local function create_sections_from_config(config)
         {
             title = "Command Palette & Steppers",
             entries = {
+                create_key_entry_from_binding(current_config.keys and current_config.keys.palette, "Open command palette (bare :Jpr)"),
                 { key = ":Jpr", desc = "Open command palette" },
-                { key = ":Jpr local [base]", desc = "Review current worktree (auto-attaches open PR)" },
+                { key = ":Jpr local [base]", desc = "Review current worktree (alias: :Jpr self)" },
                 { key = ":Jpr keys", desc = "Show keyboard shortcuts" },
                 { key = "j/k/<Down>/<Up>", desc = "Move selection" },
                 { key = "l/<Right>/<Tab>/<CR>", desc = "Confirm / next step" },

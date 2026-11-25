@@ -47,6 +47,7 @@ jpr.setup({ worktree_cmd = "wt pr {n}" })
 assert(jpr.config.worktree_cmd == "wt pr {n}", "setup takes options")
 assert(jpr.config.binary == nil, "setup keeps nil default binary so bundled target/release/jpr-review is used")
 assert(jpr.binary_path() == root .. "/target/release/jpr-review", "binary_path resolves bundled release binary")
+assert(jpr.config.keys.palette == "<leader>J", "setup keeps default palette key")
 assert(jpr.config.keys.comment == "gc", "setup keeps default keys")
 jpr.setup({ binary = "/tmp/custom" })
 assert(jpr.binary_path() == "/tmp/custom", "binary_path honors explicit setup override")
@@ -70,6 +71,7 @@ assert(jpr_command ~= nil, ":Jpr exists")
 assert(jpr_command.nargs == "*", ":Jpr accepts zero or more arguments: " .. tostring(jpr_command.nargs))
 
 for _, plug in ipairs({
+    "<Plug>(jpr-palette)",
     "<Plug>(jpr-comment)",
     "<Plug>(jpr-suggest-comment)",
     "<Plug>(jpr-file-comment)",
@@ -82,6 +84,29 @@ end
 for _, plug in ipairs({ "<Plug>(jpr-comment)", "<Plug>(jpr-suggest-comment)" }) do
     assert(vim.fn.maparg(plug, "x", false, true).lhs == plug, plug .. " exists in visual mode")
 end
+
+assert(
+    vim.fn.maparg("<leader>J", "n", false, true).rhs == "<Plug>(jpr-palette)",
+    "plugin/jpr.lua binds default <leader>J to <Plug>(jpr-palette)"
+)
+jpr.setup({ keys = { palette = false } })
+assert(vim.fn.maparg("<leader>J", "n", false, true).lhs == nil, "disabling palette key removes default <leader>J")
+assert(
+    vim.fn.maparg("<Plug>(jpr-palette)", "n", false, true).lhs == "<Plug>(jpr-palette)",
+    "<Plug>(jpr-palette) remains defined when palette key is disabled"
+)
+jpr.setup({ keys = { palette = "<leader>gj" } })
+assert(
+    vim.fn.maparg("<leader>gj", "n", false, true).rhs == "<Plug>(jpr-palette)",
+    "custom palette key binds to <Plug>(jpr-palette)"
+)
+assert(vim.fn.maparg("<leader>J", "n", false, true).lhs == nil, "old default palette key stays unbound")
+jpr.setup({})
+assert(
+    vim.fn.maparg("<leader>J", "n", false, true).rhs == "<Plug>(jpr-palette)",
+    "default setup restores <leader>J mapping"
+)
+assert(vim.fn.maparg("<leader>gj", "n", false, true).lhs == nil, "previous custom palette key is cleaned up")
 
 jpr.setup({ keys = { comment = false } })
 local key_buf = vim.api.nvim_create_buf(false, true)

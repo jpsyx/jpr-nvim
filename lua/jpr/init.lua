@@ -30,9 +30,10 @@ M.defaults = {
     lsp_file_ops_timeout_ms = 30000,
     -- Timeout in milliseconds to wait for an LSP client to attach on cold-start rename.
     lsp_attach_timeout_ms = 3000,
-    -- Buffer-local keybindings inside diff and stream buffers; set any entry to
-    -- false to disable it while keeping its <Plug>(jpr-*) mapping available.
+    -- Global (`palette`) and buffer-local keybindings; set any entry to false
+    -- to disable it while keeping its `<Plug>(jpr-*)` mapping available.
     keys = {
+        palette = "<leader>J",
         comment = "gc",
         suggest_comment = "gC",
         file_comment = "gf",
@@ -56,11 +57,35 @@ function M.define_highlights()
     require("jpr.highlights").define_highlights()
 end
 
+local bound_palette_key = M.defaults.keys.palette
+
+--- Binds the configured global `<Plug>(jpr-palette)` shortcut (default `<leader>J`),
+--- removing any previous plugin-owned palette mapping when changed or disabled.
+function M.bind_global_keys()
+    if type(bound_palette_key) == "string" and bound_palette_key ~= "" then
+        local existing = vim.fn.maparg(bound_palette_key, "n", false, true)
+        if existing and existing.rhs == "<Plug>(jpr-palette)" then
+            pcall(vim.keymap.del, "n", bound_palette_key)
+        end
+    end
+    bound_palette_key = nil
+    local palette_key = M.config.keys and M.config.keys.palette
+    if type(palette_key) == "string" and palette_key ~= "" then
+        vim.keymap.set("n", palette_key, "<Plug>(jpr-palette)", {
+            remap = true,
+            silent = true,
+            desc = "Open Jpr command palette",
+        })
+        bound_palette_key = palette_key
+    end
+end
+
 --- Configures the plugin from a user's `opts` (see `defaults`), for example
 --- from `require("jpr").setup({ worktree_cmd = "wt pr {n}" })`.
 function M.setup(opts)
     M.config = vim.tbl_deep_extend("force", vim.deepcopy(M.defaults), opts or {})
     M.define_highlights()
+    M.bind_global_keys()
 end
 
 --- Active engine binary path or command, defaulting to the bundled release binary.
@@ -249,6 +274,7 @@ local function dispatch_optional_arg_subcommand(session, subcommand, argument, c
     return nil
 end
 
+local SUBCOMMAND_ALIASES = { self = "local" }
 local OPTIONAL_ARG_SUBCOMMANDS = { open = true, ["local"] = true, toggle = true, comment = true, agent = true }
 local ZERO_ARG_SESSION_METHODS = {
     sync = "sync_current",
@@ -265,19 +291,20 @@ local ZERO_ARG_SESSION_METHODS = {
 
 local function dispatch_direct_subcommand(session, args, cmd_opts, context)
     local subcommand = args[1]
-    if subcommand == "keys" then
+    local canonical_subcommand = SUBCOMMAND_ALIASES[subcommand] or subcommand
+    if canonical_subcommand == "keys" then
         if #args > 1 then
             return M.error(":Jpr keys does not accept arguments")
         end
         return require("jpr.views.cheatsheet").open()
     end
-    if OPTIONAL_ARG_SUBCOMMANDS[subcommand] then
+    if OPTIONAL_ARG_SUBCOMMANDS[canonical_subcommand] then
         if #args > 2 then
             return M.error(("too many arguments for :Jpr %s"):format(subcommand))
         end
-        return dispatch_optional_arg_subcommand(session, subcommand, args[2], cmd_opts, context)
+        return dispatch_optional_arg_subcommand(session, canonical_subcommand, args[2], cmd_opts, context)
     end
-    local method_name = ZERO_ARG_SESSION_METHODS[subcommand]
+    local method_name = ZERO_ARG_SESSION_METHODS[canonical_subcommand]
     if method_name then
         if #args > 1 then
             return M.error((":Jpr %s does not accept arguments"):format(subcommand))
