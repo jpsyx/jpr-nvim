@@ -748,7 +748,10 @@ the editor and the terminal.
 **Consequences.** Every new or modified `:Jpr` subcommand or `jpr-review` CLI
 option must update its declarative schema in the same change, enforced by
 `crates/jpr-review/src/tui_schema/tests/` and
-`tests/lua/palette_and_open_picker_spec.lua`. `crates/cli-tui` adds `crossterm`
+`tests/lua/palette_and_open_picker_spec.lua`. A typed alias of an existing
+command lives in `COMMAND_ALIASES` (`lua/jpr/commands/schema.lua`), resolves to
+that command before dispatch, and is not an extra palette entry.
+`crates/cli-tui` adds `crossterm`
 to the workspace strictly at the frontend layer, rendering to stderr inside an
 RAII raw-mode guard and gating on `cli_tui::is_interactive_terminal()` so
 pipes, CI jobs, and coding agents never hit interactive prompts.
