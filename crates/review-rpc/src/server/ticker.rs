@@ -178,13 +178,13 @@ fn run_ticker_tick(
     if guard.is_linked() {
         match actions.poll {
             PollStep::Sync => {
-                let _ = guard.sync();
+                let _ = guard.sync_background();
                 let now = Instant::now();
                 *last_sync = now;
                 *last_retry = now;
             }
             PollStep::Retry => {
-                let _ = guard.flush_queued();
+                let _ = guard.flush_queued_background();
                 *last_retry = Instant::now();
             }
             PollStep::Wait => {}
@@ -357,6 +357,53 @@ mod tests {
         assert!(
             files.iter().any(|row| row.path == "src/b.rs"),
             "worktree watch must still refresh local files"
+        );
+    }
+
+    #[test]
+    fn ticker_background_sync_auth_failure_emits_background_auth_sync_failed() {
+        use review_core::fakes::{
+            FakeForge, FakeWorkspace, FixedClock, MemoryStore, create_fake_ports, sample_pr,
+        };
+        use review_model::Event;
+
+        let forge = FakeForge::new(sample_pr(), review_core::ports::ForgeSnapshot::default());
+        let store = MemoryStore::default();
+        let workspace = FakeWorkspace::default();
+        let clock = FixedClock::at(100);
+        let ports = create_fake_ports(&forge, &store, &workspace, &clock);
+        let mut session = ReviewSession::open(7, ports).expect("opens");
+        session.sync().expect("initial sync");
+        let events = session.subscribe();
+        forge.fail_auth_with(Some("gh auth login"));
+
+        let session_mutex = Mutex::new(session);
+        let config = TickerConfig {
+            poll_every: Some(Duration::from_millis(1)),
+            retry_every: None,
+            watch_every: None,
+            wake_interval: Duration::from_millis(1),
+        };
+        let past = Instant::now()
+            .checked_sub(Duration::from_secs(1))
+            .expect("past instant");
+        let mut last_sync = past;
+        let mut last_retry = past;
+        let mut last_watch = past;
+        run_ticker_tick(
+            &session_mutex,
+            config,
+            &mut last_sync,
+            &mut last_retry,
+            &mut last_watch,
+        );
+        assert_eq!(
+            events.try_recv().unwrap(),
+            Event::SyncFailed {
+                message: "gh auth login".into(),
+                auth_required: true,
+                is_background: true,
+            }
         );
     }
 }

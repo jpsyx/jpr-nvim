@@ -103,6 +103,17 @@ pub enum Command {
         #[arg(long, default_value_t = 50, value_parser = clap::value_parser!(u32).range(1..))]
         limit: u32,
     },
+    /// List the authenticated GitHub user profile and organizations as JSON.
+    Owners,
+    /// List GitHub repositories for an account or organization as JSON.
+    Repos {
+        /// Account or organization login. Left out, lists your personal repositories.
+        #[arg(long, value_name = "LOGIN")]
+        owner: Option<String>,
+        /// Maximum number of repositories to return.
+        #[arg(long, default_value_t = 100, value_parser = clap::value_parser!(u32).range(1..))]
+        limit: u32,
+    },
     /// Serve a review session as JSON-RPC on stdin and stdout.
     Serve {
         /// The pull request number (mutually exclusive with --local).
@@ -385,5 +396,30 @@ mod tests {
             })
         );
         assert!(Cli::try_parse_from(["jpr-review", "prs", "--limit", "0"]).is_err());
+    }
+
+    #[test]
+    fn owners_and_repos_parse_expected_flags() {
+        let owners = Cli::try_parse_from(["jpr-review", "owners"]).unwrap();
+        assert_eq!(owners.command, Some(Command::Owners));
+        let default_repos = Cli::try_parse_from(["jpr-review", "repos"]).unwrap();
+        assert_eq!(
+            default_repos.command,
+            Some(Command::Repos {
+                owner: None,
+                limit: 100,
+            })
+        );
+        let org_repos =
+            Cli::try_parse_from(["jpr-review", "repos", "--owner", "acme", "--limit", "25"])
+                .unwrap();
+        assert_eq!(
+            org_repos.command,
+            Some(Command::Repos {
+                owner: Some("acme".into()),
+                limit: 25,
+            })
+        );
+        assert!(Cli::try_parse_from(["jpr-review", "repos", "--limit", "0"]).is_err());
     }
 }

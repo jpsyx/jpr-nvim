@@ -3,7 +3,7 @@
 use serde_json::{Value, json};
 
 /// Bumped whenever a request, response or event changes shape.
-pub const PROTOCOL_VERSION: u32 = 8;
+pub const PROTOCOL_VERSION: u32 = 9;
 
 /// A request from the client, as [`parse_request`] reads it off the wire. The
 /// server routes it by `method` and answers with its `id`.
@@ -38,6 +38,8 @@ impl RpcError {
     pub const INVALID_PARAMS: i64 = -32602;
     /// The request was valid, but the review engine could not do it.
     pub const ENGINE_ERROR: i64 = -32000;
+    /// The request failed because `gh` is not authenticated with GitHub.
+    pub const AUTH_REQUIRED: i64 = -32001;
 
     /// An error with `code` and `message`.
     #[must_use]

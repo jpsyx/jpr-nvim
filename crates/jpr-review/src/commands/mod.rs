@@ -6,12 +6,16 @@ pub mod checkout;
 pub mod guide;
 /// `local`: inspect the current worktree for local or PR review.
 pub mod local;
+/// `owners`: list the authenticated GitHub user and organizations as JSON.
+pub mod owners;
 /// `prepass-write`: write pre-pass findings as answered local threads.
 pub mod prepass_write;
 /// `prs`: list open pull requests as JSON.
 pub mod prs;
 /// `reply`: append an agent reply to a local thread.
 pub mod reply;
+/// `repos`: list GitHub repositories for an account or organization as JSON.
+pub mod repos;
 /// `serve`: one pull request's review session, as JSON-RPC on stdin/stdout.
 pub mod serve;
 /// Shared Unix socket client, target resolution, and UTC timestamp formatting.
@@ -48,7 +52,9 @@ pub fn run_command(command: &Command, theme: Theme) -> Result<()> {
             local::run(base.as_deref(), repo.as_deref(), *no_pr, theme)
         }
         Command::Guide => guide::run(),
+        Command::Owners => owners::run(theme),
         Command::Prs { repo, limit } => prs::run(repo.as_deref(), *limit, theme),
+        Command::Repos { owner, limit } => repos::run(owner.as_deref(), *limit, theme),
         Command::Serve {
             pr,
             is_local,
@@ -117,7 +123,9 @@ fn run_agent_command(command: &Command, theme: Theme) -> Result<()> {
         Command::Checkout { .. }
         | Command::Local { .. }
         | Command::Guide
+        | Command::Owners
         | Command::Prs { .. }
+        | Command::Repos { .. }
         | Command::Serve { .. }
         | Command::StatePath { .. } => unreachable!("handled by commands::run_command"),
     }
@@ -298,6 +306,17 @@ pub fn narrate(theme: Theme, message: &str) {
     eprintln!("{}", theme.info(message));
 }
 
+/// Process exit code for a command failure: `3` for GitHub authentication
+/// errors and `1` for all other errors.
+#[must_use]
+pub fn exit_code_for_error(error: &anyhow::Error) -> u8 {
+    if review_core::is_auth_error(error) {
+        review_core::AUTH_EXIT_CODE
+    } else {
+        1
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -326,5 +345,13 @@ mod tests {
         let error =
             run(&cli, Theme::dark(false)).expect_err("bare Cli should fail in commands::run");
         assert!(error.to_string().contains("no subcommand specified"));
+    }
+
+    #[test]
+    fn exit_code_for_error_returns_three_only_for_auth_errors() {
+        let auth_err =
+            anyhow::Error::new(review_core::ForgeAuthError::new("gh auth login")).context("prs");
+        assert_eq!(exit_code_for_error(&auth_err), 3);
+        assert_eq!(exit_code_for_error(&anyhow::anyhow!("network down")), 1);
     }
 }

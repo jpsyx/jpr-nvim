@@ -5,8 +5,8 @@ use cli_tui::{CommandSpec, SelectOption, StepKind, StepSpec};
 use super::steps::{
     create_custom_repo_steps, create_open_pr_picker_step, create_required_pr_step,
     create_required_repo_step, create_target_steps, has_answer_value, non_empty_env,
-    validate_git_ref, validate_non_empty, validate_optional_git_ref, validate_positive_u32,
-    validate_pr_number, validate_u64,
+    validate_git_ref, validate_non_empty, validate_optional_git_ref, validate_owner,
+    validate_positive_u32, validate_pr_number, validate_u64,
 };
 
 const DEFAULT_POLL_SECONDS: &str = "60";
@@ -16,6 +16,8 @@ const DEFAULT_POLL_SECONDS: &str = "60";
 pub fn build_command_specs() -> Vec<CommandSpec> {
     vec![
         create_prs_spec(),
+        create_owners_spec(),
+        create_repos_spec(),
         create_local_spec(),
         create_checkout_spec(),
         create_threads_spec(),
@@ -378,5 +380,58 @@ fn create_guide_spec() -> CommandSpec {
         "Print Agent Review Guide",
         "Prints the agent review workflow and reply contract to stdout.",
         Vec::new(),
+    )
+}
+
+fn create_owners_spec() -> CommandSpec {
+    CommandSpec::new(
+        "owners",
+        "List GitHub Owners",
+        "Lists the authenticated GitHub user profile and organizations as a JSON array.",
+        Vec::new(),
+    )
+}
+
+fn create_repos_spec() -> CommandSpec {
+    CommandSpec::new(
+        "repos",
+        "List GitHub Repositories",
+        "Lists GitHub repositories for your account or a specific organization as a JSON array.",
+        vec![
+            StepSpec::new(
+                "owner_scope",
+                "Repository Owner",
+                "Choose whether to list your personal repositories or repositories from a specific owner or organization.",
+                StepKind::Toggle {
+                    yes_label: "Specific owner or organization".to_owned(),
+                    yes_help: "Enter a GitHub user or organization login to list its repositories."
+                        .to_owned(),
+                    no_label: "My personal repositories".to_owned(),
+                    no_help: "List repositories owned by your authenticated GitHub account."
+                        .to_owned(),
+                },
+            )
+            .with_default("false"),
+            StepSpec::new(
+                "owner",
+                "Owner or Organization Login",
+                "Enter the GitHub user or organization login (for example octocat or acme-corp).",
+                StepKind::Text {
+                    placeholder: Some("octocat".to_owned()),
+                },
+            )
+            .with_when(|answers| has_answer_value(answers, "owner_scope", "true"))
+            .with_validate(validate_owner),
+            StepSpec::new(
+                "limit",
+                "Maximum Repositories",
+                "Enter the maximum number of repositories to return.",
+                StepKind::Text {
+                    placeholder: Some("100".to_owned()),
+                },
+            )
+            .with_default("100")
+            .with_validate(validate_positive_u32),
+        ],
     )
 }

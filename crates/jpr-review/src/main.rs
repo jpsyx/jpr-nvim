@@ -74,7 +74,7 @@ fn report_result(result: Result<()>, theme: Theme) -> ExitCode {
         Err(error) => {
             // `{:#}` prints the whole `.context(...)` chain on one line.
             eprintln!("{}", theme.error_line("error:", &format!("{error:#}")));
-            ExitCode::FAILURE
+            ExitCode::from(app::commands::exit_code_for_error(&error))
         }
     }
 }

@@ -6,7 +6,10 @@ use review_core::ports::{Forge, ReviewStore};
 use review_forge_github::GhForge;
 use review_model::PullRequest;
 use review_store_fs::FsStore;
-use review_workspace_git::{WorktreeCommand, checkout_pr, find_existing_pr_worktree};
+use review_workspace_git::{
+    WorktreeCommand, checkout_pr, ensure_managed_clone, find_existing_pr_worktree, main_repo_root,
+    managed_repo_dir,
+};
 use serde_json::json;
 
 use crate::theme::Theme;
@@ -15,9 +18,9 @@ use crate::theme::Theme;
 ///
 /// Reuses any existing worktree already on the pull request's branch without
 /// re-running `gh pr checkout` or `worktree_cmd`, and prints one JSON line on
-/// stdout for the Neovim plugin to open. `expected_repo` (owner/name) refuses
-/// a pull request from another repository, and `worktree_cmd` replaces the
-/// default checkout.
+/// stdout for the Neovim plugin to open. When invoked outside a git repository,
+/// `--repo <owner/name>` is required and the repository is cloned on demand
+/// into the managed XDG cache directory before creating PR worktrees.
 pub fn run(
     number: u64,
     expected_repo: Option<&str>,
@@ -25,35 +28,87 @@ pub fn run(
     theme: Theme,
 ) -> Result<()> {
     let cwd = env::current_dir().context("reading the current directory")?;
-    super::narrate(theme, &format!("Looking up pull request #{number}..."));
-    let pr = GhForge::new(cwd.clone(), None).pull_request(number)?;
-    // Checked before any worktree exists, so a mismatch leaves nothing behind.
-    ensure_expected_repo(&pr, expected_repo)?;
-    let preferred_worktree = load_saved_worktree(&pr);
-    let worktree = if let Some(existing) = find_existing_pr_worktree(
-        &cwd,
-        number,
+    let (pr, checkout_root) = if main_repo_root(&cwd).is_ok() {
+        super::narrate(theme, &format!("Looking up pull request #{number}..."));
+        let pr = GhForge::new(cwd.clone(), None).pull_request(number)?;
+        // Checked before any worktree exists, so a mismatch leaves nothing behind.
+        ensure_expected_repo(&pr, expected_repo)?;
+        (pr, cwd)
+    } else {
+        resolve_managed_checkout_root(&cwd, number, expected_repo, theme)?
+    };
+    let worktree = checkout_in_root(&checkout_root, &pr, worktree_cmd, theme)?;
+    println!("{}", output_line(&pr, &worktree));
+    Ok(())
+}
+
+fn resolve_managed_checkout_root(
+    cwd: &Path,
+    number: u64,
+    expected_repo: Option<&str>,
+    theme: Theme,
+) -> Result<(PullRequest, PathBuf)> {
+    let (owner, repo) = require_repo_outside_git(expected_repo)?;
+    let slug = format!("{owner}/{repo}");
+    super::narrate(
+        theme,
+        &format!("Looking up pull request #{number} in {slug}..."),
+    );
+    let pr = GhForge::new(cwd.to_path_buf(), Some(slug.clone())).pull_request(number)?;
+    let home = env::var_os("HOME")
+        .map(PathBuf::from)
+        .context("HOME is not set")?;
+    let xdg_cache_home = env::var_os("XDG_CACHE_HOME").map(PathBuf::from);
+    let cache_dir = managed_repo_dir(
+        xdg_cache_home.as_deref(),
+        &home,
+        crate::STATE_APP,
+        &owner,
+        &repo,
+    )?;
+    if !cache_dir.exists() {
+        super::narrate(theme, &format!("Cloning {slug} into cache..."));
+    }
+    let root = ensure_managed_clone(&cache_dir, &owner, &repo)?;
+    Ok((pr, root))
+}
+
+fn checkout_in_root(
+    root: &Path,
+    pr: &PullRequest,
+    worktree_cmd: Option<&str>,
+    theme: Theme,
+) -> Result<PathBuf> {
+    let preferred_worktree = load_saved_worktree(pr);
+    if let Some(existing) = find_existing_pr_worktree(
+        root,
+        pr.number,
         Some(&pr.head_ref),
         pr.is_cross_repository,
         preferred_worktree.as_deref(),
     ) {
         super::narrate(
             theme,
-            &format!("Reusing worktree for #{number} ({})...", pr.head_ref),
+            &format!("Reusing worktree for #{} ({})...", pr.number, pr.head_ref),
         );
-        existing
-    } else {
-        super::narrate(
-            theme,
-            &format!("Checking out #{number} ({})...", pr.head_ref),
-        );
-        let command = worktree_cmd.map_or(WorktreeCommand::Default, |template| {
-            WorktreeCommand::Custom(template.to_owned())
-        });
-        checkout_pr(&cwd, number, &command)?
+        return Ok(existing);
+    }
+    super::narrate(
+        theme,
+        &format!("Checking out #{} ({})...", pr.number, pr.head_ref),
+    );
+    let command = worktree_cmd.map_or(WorktreeCommand::Default, |template| {
+        WorktreeCommand::Custom(template.to_owned())
+    });
+    checkout_pr(root, pr.number, &command)
+}
+
+/// Validates `--repo <owner/name>` when running `checkout` outside a git repo.
+pub fn require_repo_outside_git(expected_repo: Option<&str>) -> Result<(String, String)> {
+    let Some(repo) = expected_repo else {
+        bail!("not inside a git repository; pass --repo <owner/name> to check out a pull request");
     };
-    println!("{}", output_line(&pr, &worktree));
-    Ok(())
+    super::parse_repo(repo)
 }
 
 fn load_saved_worktree(pr: &PullRequest) -> Option<PathBuf> {
@@ -136,5 +191,15 @@ mod tests {
         assert_eq!(value["repo"], "octo/widgets");
         assert_eq!(value["number"], 7);
         assert_eq!(value["title"], "Fix the widget");
+    }
+
+    #[test]
+    fn out_of_repo_checkout_requires_repo_flag() {
+        let error = require_repo_outside_git(None).unwrap_err();
+        assert!(error.to_string().contains("--repo"), "{error:#}");
+        assert_eq!(
+            require_repo_outside_git(Some("octo/widgets")).unwrap(),
+            ("octo".to_owned(), "widgets".to_owned())
+        );
     }
 }

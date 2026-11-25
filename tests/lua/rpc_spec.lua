@@ -21,7 +21,7 @@ local client = assert(rpc.start({ root .. "/tests/lua/fixtures/fake_engine.sh" }
     end,
 }))
 
-assert(rpc.PROTOCOL_VERSION == 8, "protocol version is 8")
+assert(rpc.PROTOCOL_VERSION == 9, "protocol version is 9")
 local initialize_answer
 client:request("initialize", { protocolVersion = rpc.PROTOCOL_VERSION }, function(err, result)
     initialize_answer = { err = err, result = result }
@@ -29,7 +29,7 @@ end)
 assert(vim.wait(2000, function()
     return initialize_answer ~= nil
 end), "initialize is answered")
-assert(initialize_answer.err == nil and initialize_answer.result.protocolVersion == 8, vim.inspect(initialize_answer))
+assert(initialize_answer.err == nil and initialize_answer.result.protocolVersion == 9, vim.inspect(initialize_answer))
 
 local synced
 client:request("sync", nil, function(err, result)
