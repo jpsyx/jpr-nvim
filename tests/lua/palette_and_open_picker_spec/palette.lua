@@ -35,11 +35,51 @@ return function(context)
         assert(commands_schema.format_pr_updated_date(nil) == "unknown", "nil timestamp falls back to unknown")
     end
 
-    local function test_bare_jpr_opens_palette_with_hover_helper_text()
+    local function extract_visible_command_ids(text)
+        local ids = {}
+        for line in (text or ""):gmatch("[^\n]+") do
+            local id = line:match("%s+%[([%a_]+)%]%s*$")
+            if id then
+                ids[#ids + 1] = id
+            end
+        end
+        return ids
+    end
+
+    local function select_palette_command(command_id)
+        local needle = "[" .. command_id .. "]"
+        for _ = 1, 20 do
+            local selected_line = helpers.current_text():match("▸[^\n]+") or ""
+            if selected_line:find(needle, 1, true) ~= nil then
+                helpers.press_key("<CR>")
+                return
+            end
+            helpers.press_key("j")
+        end
+        error("command " .. command_id .. " not found in palette:\n" .. helpers.current_text())
+    end
+
+    local function with_tab_session(stub_session, callback)
+        local tab = vim.api.nvim_get_current_tabpage()
+        local original_by_tab = session.by_tab[tab]
+        session.by_tab[tab] = stub_session
+        local is_ok, call_error = pcall(callback, tab)
+        wizard.close()
+        session.by_tab[tab] = original_by_tab
+        if not is_ok then
+            error(call_error, 0)
+        end
+    end
+
+    local function test_bare_jpr_opens_palette_with_only_executable_commands_outside_session()
         jpr.command({})
         assert(wizard.is_open() == true, "bare :Jpr opens floating Command Palette")
 
         local first_text = helpers.current_text()
+        assert(
+            vim.deep_equal(extract_visible_command_ids(first_text), { "open", "local", "keys" }),
+            "outside session in git repo shows only open, local, keys: " .. vim.inspect(extract_visible_command_ids(first_text))
+        )
         assert(first_text:find("▸ Open Pull Request  [open]", 1, true) ~= nil, "first row selected: " .. first_text)
         assert(first_text:find("Pick an open pull request", 1, true) ~= nil, "open hover helper text visible")
         assert(first_text:find("Review the current worktree", 1, true) == nil, "local helper text hidden initially")
@@ -56,31 +96,46 @@ return function(context)
 
     local function test_palette_multi_step_commands_preselect_and_dispatch_smart_defaults()
         context.with_temp_view_mode("unified", function()
+            local tab = vim.api.nvim_get_current_tabpage()
+            local previous_buf = vim.api.nvim_get_current_buf()
+            local base_buf = vim.api.nvim_create_buf(false, true)
+            vim.api.nvim_win_set_buf(0, base_buf)
+            vim.b[base_buf].jpr_base_path = "README.md"
+
             local recorded = {}
-            context.with_stubbed_session_methods({
-                set_view_mode = function(mode) recorded[#recorded + 1] = { fn = "set_view_mode", mode = mode } end,
-                comment_current = function(opts) recorded[#recorded + 1] = { fn = "comment_current", opts = opts } end,
-                agent_current = function(provider) recorded[#recorded + 1] = { fn = "agent_current", provider = provider } end,
-            }, function()
-                jpr.command({})
-                helpers.press_key("jjj<CR>")
-                assert(wizard.is_open() and helpers.current_text():find("▸ Side-by-Side Split  [split]", 1, true) ~= nil, "toggle defaults to split")
-                helpers.press_key("<CR>")
-                assert(not wizard.is_open() and recorded[#recorded].mode == "split", "toggle stepper calls set_view_mode('split')")
+            local is_ok, call_error = pcall(function()
+                with_tab_session({ number = 7, repo = "octo/widgets", tab = tab, mode = "pr" }, function()
+                    context.with_stubbed_session_methods({
+                        set_view_mode = function(mode) recorded[#recorded + 1] = { fn = "set_view_mode", mode = mode } end,
+                        comment_current = function(opts) recorded[#recorded + 1] = { fn = "comment_current", opts = opts } end,
+                        agent_current = function(provider) recorded[#recorded + 1] = { fn = "agent_current", provider = provider } end,
+                    }, function()
+                        jpr.command({})
+                        select_palette_command("toggle")
+                        assert(wizard.is_open() and helpers.current_text():find("▸ Side-by-Side Split  [split]", 1, true) ~= nil, "toggle defaults to split")
+                        helpers.press_key("<CR>")
+                        assert(not wizard.is_open() and recorded[#recorded].mode == "split", "toggle stepper calls set_view_mode('split')")
 
-                jpr.command({})
-                helpers.press_key("jjjjj<CR>")
-                assert(wizard.is_open() and helpers.current_text():find("▸ File-Level Comment  [file]", 1, true) ~= nil, "comment defaults to file")
-                helpers.press_key("<CR>")
-                assert(not wizard.is_open() and recorded[#recorded].opts.file == true, "comment stepper calls comment_current({ file = true })")
+                        jpr.command({})
+                        select_palette_command("comment")
+                        assert(wizard.is_open() and helpers.current_text():find("▸ Line / Selection Comment  [line]", 1, true) ~= nil, "comment defaults to line on diff buffer")
+                        helpers.press_key("j<CR>")
+                        assert(not wizard.is_open() and recorded[#recorded].opts.file == true, "comment stepper calls comment_current({ file = true })")
 
-                jpr.setup({ agent = "codex" })
-                jpr.command({})
-                helpers.press_key(string.rep("j", 11) .. "<CR>")
-                assert(wizard.is_open() and helpers.current_text():find("▸ Codex  [codex]", 1, true) ~= nil, "agent defaults to config.agent")
-                helpers.press_key("<CR>")
-                assert(not wizard.is_open() and recorded[#recorded].provider == "codex", "agent stepper calls agent_current('codex')")
+                        jpr.setup({ agent = "codex" })
+                        jpr.command({})
+                        select_palette_command("agent")
+                        assert(wizard.is_open() and helpers.current_text():find("▸ Codex  [codex]", 1, true) ~= nil, "agent defaults to config.agent")
+                        helpers.press_key("<CR>")
+                        assert(not wizard.is_open() and recorded[#recorded].provider == "codex", "agent stepper calls agent_current('codex')")
+                    end)
+                end)
             end)
+            vim.api.nvim_win_set_buf(0, previous_buf)
+            pcall(vim.api.nvim_buf_delete, base_buf, { force = true })
+            if not is_ok then
+                error(call_error, 0)
+            end
         end)
     end
 
@@ -132,7 +187,7 @@ return function(context)
             comment_current = function(opts) recorded_opts = opts end,
         }, function()
             jpr.command({})
-            helpers.press_key("jjjjj<CR>")
+            select_palette_command("comment")
             assert(wizard.is_open() == true, "comment opens stepper from palette on diff line")
             assert(helpers.current_text():find("▸ Line / Selection Comment  [line]", 1, true) ~= nil, "comment defaults to line on diff line: " .. helpers.current_text())
             helpers.press_key("<CR>")
@@ -150,7 +205,7 @@ return function(context)
 
     test_command_specs_validate_and_match_jpr_subcommands()
     test_format_pr_updated_date_extracts_iso_date_or_falls_back_to_unknown()
-    test_bare_jpr_opens_palette_with_hover_helper_text()
+    test_bare_jpr_opens_palette_with_only_executable_commands_outside_session()
     test_palette_multi_step_commands_preselect_and_dispatch_smart_defaults()
     test_direct_subcommand_args_bypass_modal_and_reject_invalid_values()
     test_comment_smart_default_preselects_line_on_diff_line()

@@ -14,6 +14,18 @@ return function(context)
         local original_by_tab = session.by_tab[tab]
         local agent_calls = {}
 
+        local function select_agent_from_palette()
+            for _ = 1, 20 do
+                local selected_line = helpers.current_text():match("▸[^\n]+") or ""
+                if selected_line:find("[agent]", 1, true) ~= nil then
+                    helpers.press_key("<CR>")
+                    return
+                end
+                helpers.press_key("j")
+            end
+            error("agent command not found in palette:\n" .. helpers.current_text())
+        end
+
         session.by_tab[tab] = {
             number = 42,
             repo = "octo/widgets",
@@ -25,14 +37,14 @@ return function(context)
         }, function()
             assert(agent.is_open(session.by_tab[tab]) == true, "agent.is_open detects open window")
             jpr.command({})
-            helpers.press_key(string.rep("j", 11) .. "<CR>")
+            select_agent_from_palette()
             assert(not wizard.is_open() and #agent_calls == 1 and agent_calls[1].provider == nil, "open agent skips stepper")
 
             -- Live-but-hidden agent also skips provider stepper.
             session.by_tab[tab].agent.win = nil
             assert(agent.is_open(session.by_tab[tab]) == false and agent.has_live_agent(session.by_tab[tab]) == true, "hidden live agent detected")
             jpr.command({})
-            helpers.press_key(string.rep("j", 11) .. "<CR>")
+            select_agent_from_palette()
             assert(not wizard.is_open() and #agent_calls == 2 and agent_calls[2].provider == nil, "hidden live agent skips stepper")
         end)
         session.by_tab[tab] = original_by_tab

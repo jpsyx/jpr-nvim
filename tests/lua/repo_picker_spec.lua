@@ -198,9 +198,17 @@ end, function()
     helpers.press_key("<CR>")
     assert(helpers.win_title(helpers.current_float_win()):find("acme/widgets", 1, true) ~= nil, "palette scoped to acme/widgets")
 
-    -- Selecting Review Current Worktree [local] outside git repo notifies clear error.
-    helpers.press_key("j<CR>")
-    helpers.press_key("<CR>")
+    -- Outside git repo without a session, repo-scoped palette hides [local] and session commands (only open + keys appear).
+    local scoped_palette_text = helpers.current_text()
+    assert(scoped_palette_text:find("Open Pull Request  [open]", 1, true) ~= nil, "repo-scoped palette includes open")
+    assert(scoped_palette_text:find("Keyboard Shortcuts  [keys]", 1, true) ~= nil, "repo-scoped palette includes keys")
+    assert(scoped_palette_text:find("Review Current Worktree", 1, true) == nil, "repo-scoped palette hides local outside git repo")
+    assert(scoped_palette_text:find("Sync with GitHub", 1, true) == nil, "repo-scoped palette hides session commands")
+    wizard.close()
+
+    -- Direct command execution guard for local outside git repo still notifies clear error.
+    local local_spec = require("jpr.commands.schema").find_command_spec("local")
+    local_spec.execute({ base_mode = "auto" }, { is_git_repo = false })
     assert(has_notification("local git checkout", vim.log.levels.ERROR), "local command errors clearly outside git repo")
 
     -- Pressing h from repo-scoped palette reopens the repository picker.

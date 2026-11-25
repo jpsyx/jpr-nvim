@@ -181,6 +181,25 @@ assert_invalid({
         },
     },
 }, "yes_label", "missing toggle yes_label")
+assert_invalid({
+    { id = "open", label = "Open", help = "Help.", when = "not-a-function" },
+}, "when", "non-function command when predicate")
+assert_invalid({
+    {
+        id = "open",
+        label = "Open",
+        help = "Help.",
+        steps = {
+            {
+                id = "mode",
+                label = "Mode",
+                help = "Pick.",
+                kind = "select",
+                options = { { value = "a", label = "Option A", when = true } },
+            },
+        },
+    },
+}, "when", "non-function select option when predicate")
 
 -- 3. get_active_steps_from_command evaluates discriminant predicates with answers and context.
 local branch_command = {
@@ -303,5 +322,76 @@ assert(
     }),
     "toggle options match expected structure: " .. vim.inspect(toggle_options)
 )
+
+-- 8. is_command_executable and get_active_commands enforce requires_session, requires_git_repo, and command.when.
+local gated_commands = {
+    { id = "open", label = "Open", help = "Open PR.", requires_session = false },
+    { id = "local", label = "Local", help = "Local review.", requires_session = false, requires_git_repo = true },
+    { id = "sync", label = "Sync", help = "Sync PR.", requires_session = true },
+    {
+        id = "submit",
+        label = "Submit",
+        help = "Submit PR review.",
+        requires_session = true,
+        when = function(context)
+            return context.is_linked_pr == true and not context.is_read_only
+        end,
+    },
+}
+
+local function extract_command_ids(commands)
+    local ids = {}
+    for _, command in ipairs(commands) do
+        ids[#ids + 1] = command.id
+    end
+    return ids
+end
+
+assert(schema.is_command_executable(gated_commands[1], {}) == true, "unconditional command is executable")
+assert(schema.is_command_executable(gated_commands[2], { is_git_repo = false }) == false, "requires_git_repo fails when is_git_repo == false")
+assert(schema.is_command_executable(gated_commands[2], {}) == true, "requires_git_repo defaults to true when is_git_repo is omitted")
+assert(schema.is_command_executable(gated_commands[3], { has_session = false }) == false, "requires_session fails without session")
+assert(schema.is_command_executable(gated_commands[4], { has_session = true, is_linked_pr = false }) == false, "command.when filters unlinked session")
+assert(schema.is_command_executable(gated_commands[4], { has_session = true, is_linked_pr = true, is_read_only = true }) == false, "command.when filters read-only session")
+assert(schema.is_command_executable(gated_commands[4], { has_session = true, is_linked_pr = true }) == true, "command.when allows matching context")
+
+assert(
+    vim.deep_equal(extract_command_ids(schema.get_active_commands(gated_commands, { has_session = false, is_git_repo = false })), { "open" }),
+    "filters session and git repo commands outside git without session"
+)
+assert(
+    vim.deep_equal(extract_command_ids(schema.get_active_commands(gated_commands, { has_session = false, is_git_repo = true })), { "open", "local" }),
+    "keeps open and local in git repo without session"
+)
+assert(
+    vim.deep_equal(
+        extract_command_ids(schema.get_active_commands(gated_commands, { has_session = true, is_git_repo = true, is_linked_pr = false })),
+        { "open", "local", "sync" }
+    ),
+    "hides PR-only submit in unlinked local session"
+)
+assert(
+    vim.deep_equal(
+        extract_command_ids(schema.get_active_commands(gated_commands, { has_session = true, is_git_repo = true, is_linked_pr = true })),
+        { "open", "local", "sync", "submit" }
+    ),
+    "includes all executable commands in linked PR session"
+)
+
+-- 9. get_active_options_from_step filters select options by option.when without mutating step.options.
+local gated_step = {
+    id = "kind",
+    label = "Comment Scope",
+    help = "Choose comment scope.",
+    kind = "select",
+    options = {
+        { value = "line", label = "Line", when = function(_answers, command_context) return command_context.is_on_diff_line == true end },
+        { value = "file", label = "File", when = function(_answers, command_context) return command_context.can_comment_file == true end },
+        { value = "always", label = "Always" },
+    },
+}
+local file_only_options = schema.get_active_options_from_step(gated_step, {}, { is_on_diff_line = false, can_comment_file = true })
+assert(#file_only_options == 2 and file_only_options[1].value == "file" and file_only_options[2].value == "always", "filters select options by when")
+assert(#gated_step.options == 3, "step.options is not mutated")
 
 print("tui_schema_spec: ok")

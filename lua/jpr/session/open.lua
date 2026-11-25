@@ -200,6 +200,15 @@ local function is_pending_buf_key_taken(session, candidate)
     return false
 end
 
+local function has_pending_tab(tab)
+    for _, pending in pairs(pending_by_key) do
+        if pending.tab == tab then
+            return true
+        end
+    end
+    return false
+end
+
 local function close_pending_tab(tab)
     for _, pending in pairs(pending_by_key) do
         if pending.tab == tab then
@@ -326,6 +335,11 @@ function M.attach(session_mod)
     --- in valid tabs (optionally filtered to `repo`), used for `[open]` badges.
     function session_mod.open_tab_numbers(repo)
         return collect_open_tab_numbers(session_mod, repo)
+    end
+
+    --- Returns whether `tab` currently has an in-flight loading checkout.
+    function session_mod.has_pending_tab(tab)
+        return has_pending_tab(tab)
     end
 
     --- Cancels and closes an in-flight loading checkout tab if `tab` is one.

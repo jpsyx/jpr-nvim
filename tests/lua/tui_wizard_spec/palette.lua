@@ -19,7 +19,7 @@ return function(context)
     local function test_palette_renders_floating_window_wraps_hover_navigation_and_closes_without_executing()
         local executed_calls = {}
         local commands = create_palette_commands(executed_calls)
-        wizard.open_palette(commands, { has_session = false, title = " Jpr Palette " })
+        wizard.open_palette(commands, { has_session = true, title = " Jpr Palette " })
         assert(wizard.is_open() == true, "palette opens")
 
         local win = helpers.current_float_win()
@@ -51,6 +51,80 @@ return function(context)
         assert(helpers.current_text():find("▸ Open Pull Request", 1, true) ~= nil, "gg jumps to first command")
         wizard.close()
         assert(#executed_calls == 0, "closing without confirm does not execute")
+    end
+
+    local function create_filtered_palette_commands(executed_calls)
+        return {
+            {
+                id = "open",
+                label = "Open Pull Request",
+                help = "Pick an open pull request.",
+                requires_session = false,
+                execute = function() executed_calls[#executed_calls + 1] = "open" end,
+            },
+            {
+                id = "sync",
+                label = "Sync with GitHub",
+                help = "Requires session.",
+                requires_session = true,
+                execute = function() executed_calls[#executed_calls + 1] = "sync" end,
+            },
+            {
+                id = "comment",
+                label = "Add Comment",
+                help = "Draft a comment.",
+                requires_session = false,
+                steps = {
+                    {
+                        id = "kind",
+                        label = "Comment Scope",
+                        help = "Pick comment scope.",
+                        kind = "select",
+                        options = {
+                            { value = "line", label = "Line Comment", badge = "[line]", when = function(_answers, command_context) return command_context.is_on_diff_line == true end },
+                            { value = "file", label = "File Comment", badge = "[file]", when = function(_answers, command_context) return command_context.can_comment_file == true end },
+                        },
+                    },
+                },
+                execute = function(answers) executed_calls[#executed_calls + 1] = "comment:" .. tostring(answers.kind) end,
+            },
+        }
+    end
+
+    local function test_palette_omits_non_executable_commands_and_preserves_step_back()
+        local executed_calls = {}
+        local commands = create_filtered_palette_commands(executed_calls)
+
+        wizard.open_palette(commands, { has_session = false, is_on_diff_line = false, can_comment_file = true })
+        local initial_text = helpers.current_text()
+        assert(initial_text:find("Sync with GitHub", 1, true) == nil, "non-executable sync command hidden from palette")
+        assert(initial_text:find("▸ Open Pull Request", 1, true) ~= nil, "open command visible")
+        assert(initial_text:find("Add Comment", 1, true) ~= nil, "executable comment command visible")
+
+        helpers.press_key("j<CR>")
+        local step_text = helpers.current_text()
+        assert(step_text:find("Line Comment", 1, true) == nil, "inapplicable line option hidden from select step")
+        assert(step_text:find("▸ File Comment  [file]", 1, true) ~= nil, "applicable file option rendered and selected")
+
+        helpers.press_key("h")
+        local returned_text = helpers.current_text()
+        assert(returned_text:find("Sync with GitHub", 1, true) == nil, "filtered palette stays filtered on step back")
+        assert(returned_text:find("▸ Add Comment", 1, true) ~= nil, "step back restores selection to Add Comment in filtered list")
+
+        helpers.press_key("<CR><CR>")
+        assert(wizard.is_open() == false, "confirming filtered step option closes modal")
+        assert(vim.deep_equal(executed_calls, { "comment:file" }), "executes confirmed filtered option")
+    end
+
+    local function test_palette_shows_empty_placeholder_when_all_commands_are_filtered()
+        local commands = create_filtered_palette_commands({})
+        wizard.open_palette({ commands[2] }, { has_session = false })
+        assert(helpers.current_text():find("(no commands available)", 1, true) ~= nil, "all-filtered palette shows empty state")
+        for _, key in ipairs({ "j", "k", "G", "gg", "<CR>" }) do
+            helpers.press_key(key)
+        end
+        assert(wizard.is_open() == true, "navigation on all-filtered palette stays safe")
+        wizard.close()
     end
 
     local function test_palette_syncs_selection_on_cursor_moved_and_cancels_on_q_or_esc()
@@ -130,6 +204,8 @@ return function(context)
     end
 
     test_palette_renders_floating_window_wraps_hover_navigation_and_closes_without_executing()
+    test_palette_omits_non_executable_commands_and_preserves_step_back()
+    test_palette_shows_empty_placeholder_when_all_commands_are_filtered()
     test_palette_syncs_selection_on_cursor_moved_and_cancels_on_q_or_esc()
     test_zero_step_command_executes_immediately_and_prunes_stale_answers()
     test_empty_palette_renders_placeholder_and_ignores_navigation()

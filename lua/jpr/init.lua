@@ -187,39 +187,8 @@ function M.statusline()
     return require("jpr.render.statusline").build_statusline_from_session(session_module.current())
 end
 
-local function is_cursor_on_diff_line(current_session)
-    if not current_session then
-        return false
-    end
-    local win = vim.api.nvim_get_current_win()
-    local buf = vim.api.nvim_win_get_buf(win)
-    local buffers = current_session.stream and current_session.stream.buffers
-    if buffers ~= nil and (buf == buffers.main or buf == buffers.left) then
-        local line = vim.api.nvim_win_get_cursor(win)[1]
-        return require("jpr.views.stream").anchor_at_range(current_session, win, line, line) ~= nil
-    end
-    if type(vim.b[buf].jpr_base_path) == "string" and vim.b[buf].jpr_base_path ~= "" then
-        return true
-    end
-    return require("jpr.views.diff").buffer_to_changed_path(current_session, buf) ~= nil
-end
-
 local function build_tui_context(session, cmd_opts)
-    local current_session = type(session.current) == "function" and session.current() or nil
-    local is_agent_open = false
-    local has_live_agent = false
-    if current_session ~= nil then
-        local agent_module = require("jpr.agent")
-        is_agent_open = type(agent_module.is_open) == "function" and agent_module.is_open(current_session) == true
-        has_live_agent = type(agent_module.has_live_agent) == "function" and agent_module.has_live_agent(current_session) == true
-    end
-    return {
-        cmd_opts = cmd_opts,
-        has_session = current_session ~= nil,
-        is_agent_open = is_agent_open,
-        has_live_agent = has_live_agent,
-        is_on_diff_line = is_cursor_on_diff_line(current_session),
-    }
+    return require("jpr.tui.context").create_context_from_session(session, cmd_opts)
 end
 
 local function open_pr_picker_for_context(context)
@@ -365,8 +334,9 @@ end
 
 local function open_palette_with_repo_picker(commands, context)
     local repo_picker = require("jpr.repo_picker")
-    if context.has_session or repo_picker.is_git_repo(vim.fn.getcwd()) then
-        context.is_git_repo = true
+    local is_in_git_repo = repo_picker.is_git_repo(vim.fn.getcwd())
+    if context.has_session or context.has_pending_tab or is_in_git_repo then
+        context.is_git_repo = context.has_session or is_in_git_repo
         return require("jpr.tui.wizard").open_palette(commands, context)
     end
     local function pick_and_open()
