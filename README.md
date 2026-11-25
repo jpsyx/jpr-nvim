@@ -91,7 +91,7 @@ The left sidebar panel acts as a vertical-only collapsible menu:
 | --- | --- |
 | `j` / `k` | Move selection down / up across selectable rows |
 | `h` / `<Left>` | Collapse directory or jump to its parent directory |
-| `l` / `<Right>` | Expand directory or open the file / `Conversation` row |
+| `l` / `<Right>` | Expand a collapsed directory or step into its first child |
 | `<CR>` / `o` | Open the PR conversation view or file from the worktree (`<CR>` also toggles directories) |
 | `r` | Rename or move the file or directory under the cursor (inline input + automatic LSP import updates) |
 | `a` | Create a new file or directory (inline input; trailing `/` creates a directory + LSP `willCreateFiles`/`didCreateFiles`) |

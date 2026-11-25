@@ -132,20 +132,19 @@ local function handle_right(session)
         return
     end
     local panel, row = session.panel, row_info.row
-    if row.kind == "dir" then
-        if row.is_collapsed then
-            panel.collapsed_dirs[row.path] = nil
-            return M.render(session, session.view or {})
-        end
-        local current_index = find_selectable_index(panel.selectable_lines, row_info.line)
-        local next_line = current_index and panel.selectable_lines[current_index + 1] or nil
-        local next_row = next_line and panel.rows[next_line] or nil
-        if next_row and type(next_row.depth) == "number" and next_row.depth > row.depth then
-            set_cursor_line(panel, next_line)
-        end
+    if row.kind ~= "dir" then
         return
     end
-    M.open_file_under_cursor(session)
+    if row.is_collapsed then
+        panel.collapsed_dirs[row.path] = nil
+        return M.render(session, session.view or {})
+    end
+    local current_index = find_selectable_index(panel.selectable_lines, row_info.line)
+    local next_line = current_index and panel.selectable_lines[current_index + 1] or nil
+    local next_row = next_line and panel.rows[next_line] or nil
+    if next_row and type(next_row.depth) == "number" and next_row.depth > row.depth then
+        set_cursor_line(panel, next_line)
+    end
 end
 
 local function handle_open_key(session)
@@ -194,8 +193,8 @@ local function bind_navigation_keymaps(session, buf)
     map("<End>", function() jump_selection(session, true) end, "Last item in Jpr panel")
     map("h", function() handle_left(session) end, "Collapse directory or jump to parent")
     map("<Left>", function() handle_left(session) end, "Collapse directory or jump to parent")
-    map("l", function() handle_right(session) end, "Expand directory or open item")
-    map("<Right>", function() handle_right(session) end, "Expand directory or open item")
+    map("l", function() handle_right(session) end, "Expand directory or step into first child")
+    map("<Right>", function() handle_right(session) end, "Expand directory or step into first child")
 end
 
 local function bind_action_keymaps(session, buf)

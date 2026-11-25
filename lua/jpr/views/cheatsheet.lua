@@ -80,7 +80,7 @@ local function create_sections_from_config(config)
             entries = {
                 { key = "j / k", desc = "Move selection up / down" },
                 { key = "h / <Left>", desc = "Collapse directory or jump to parent" },
-                { key = "l / <Right>", desc = "Expand directory or open item" },
+                { key = "l / <Right>", desc = "Expand directory or step into first child" },
                 { key = "<CR> / o", desc = "Open file or PR conversation (<CR> toggles dir)" },
                 { key = "r", desc = "Rename or move file / directory" },
                 { key = "a", desc = "Create file or directory" },

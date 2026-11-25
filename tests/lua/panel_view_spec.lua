@@ -249,7 +249,8 @@ assert(review.panel.collapsed_dirs["src"] == true, "<CR> collapses expanded dir"
 run_panel_key("<CR>")
 assert(review.panel.collapsed_dirs["src"] == nil, "<CR> expands collapsed dir")
 
--- l expands a collapsed dir, steps into first child on an expanded dir, and opens a file.
+-- l / <Right> expands a collapsed dir and steps into first child on an expanded dir,
+-- but never opens a file or Conversation row (avoiding accidental opens).
 run_panel_key("h")
 assert(review.panel.collapsed_dirs["src"] == true, "re-collapsed src/")
 run_panel_key("l")
@@ -257,9 +258,16 @@ assert(review.panel.collapsed_dirs["src"] == nil, "l expands collapsed dir")
 assert(vim.api.nvim_win_get_cursor(panel_win)[1] == 7, "l expanding dir keeps cursor on dir")
 run_panel_key("l")
 assert(vim.api.nvim_win_get_cursor(panel_win)[1] == 8, "l on expanded dir steps into first child")
+local main_buf_before_l = vim.api.nvim_win_get_buf(stream_win)
 run_panel_key("l")
-assert(vim.api.nvim_get_current_win() ~= panel_win, "l on file opens it in main window")
-assert(vim.fn.resolve(vim.api.nvim_buf_get_name(0)) == vim.fn.resolve(worktree .. "/src/a.rs"), "l opens src/a.rs")
+assert(vim.api.nvim_get_current_win() == panel_win, "l on file stays in panel window")
+assert(vim.api.nvim_win_get_buf(stream_win) == main_buf_before_l, "l on file does not open it in main window")
+run_panel_key("<Right>")
+assert(vim.api.nvim_get_current_win() == panel_win, "<Right> on file stays in panel window")
+assert(vim.api.nvim_win_get_buf(stream_win) == main_buf_before_l, "<Right> on file does not open it in main window")
+vim.api.nvim_win_set_cursor(panel_win, { 6, 0 })
+run_panel_key("l")
+assert(vim.api.nvim_get_current_win() == panel_win, "l on Conversation row stays in panel window")
 
 -- Cursor stays on the same file path across M.render redraws.
 vim.api.nvim_set_current_win(panel_win)
