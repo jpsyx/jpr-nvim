@@ -1,6 +1,7 @@
 //! The GitHub forge: `gh pr view` for the pull request, `gh api graphql` for
 //! threads, files and viewed state, and the viewed mutations.
 
+pub mod discovery;
 mod gh;
 pub mod graphql;
 mod mutations;
@@ -108,7 +109,7 @@ impl GhForge {
         pr::parse_pr_list(&self.gh.run(&arg_refs, None)?)
     }
 
-    fn graphql(&self, query: &str, variables: &Value) -> Result<Value> {
+    pub(crate) fn graphql(&self, query: &str, variables: &Value) -> Result<Value> {
         let body = json!({ "query": query, "variables": variables });
         graphql::parse_data_from_answer(
             &self
@@ -363,5 +364,76 @@ mod tests {
             error.to_string().contains("limit must be at least 1"),
             "{error:#}"
         );
+    }
+
+    #[test]
+    fn discovery_parses_owners_and_repos_and_validates_repo_list_args() {
+        let data: Value = serde_json::from_str(
+            r#"{
+                "viewer": {
+                    "login": "pablo",
+                    "name": "Pablo",
+                    "organizations": {
+                        "pageInfo": { "hasNextPage": true, "endCursor": "CUR1" },
+                        "nodes": [
+                            { "login": "zeta-org", "name": "" },
+                            { "login": "Acme", "name": "Acme Corp" },
+                            { "login": "acme", "name": "Duplicate" }
+                        ]
+                    }
+                }
+            }"#,
+        )
+        .unwrap();
+        let (viewer, orgs, cursor) = discovery::parse_owners_page(&data).unwrap();
+        assert_eq!(viewer.login, "pablo");
+        assert_eq!(viewer.kind, review_model::OwnerKind::User);
+        assert_eq!(cursor.as_deref(), Some("CUR1"));
+        let combined = discovery::assemble_owners(viewer, orgs);
+        assert_eq!(combined.len(), 3);
+        assert_eq!(combined[0].login, "pablo");
+        assert_eq!(combined[1].login, "Acme");
+        assert_eq!(combined[2].login, "zeta-org");
+        assert_eq!(combined[2].name, None);
+
+        assert_eq!(
+            GhForge::repo_list_args(None, 100).unwrap(),
+            vec![
+                "repo",
+                "list",
+                "--limit",
+                "100",
+                "--json",
+                discovery::REPO_LIST_FIELDS,
+            ]
+        );
+        assert_eq!(
+            GhForge::repo_list_args(Some("acme"), 50).unwrap(),
+            vec![
+                "repo",
+                "list",
+                "acme",
+                "--limit",
+                "50",
+                "--json",
+                discovery::REPO_LIST_FIELDS,
+            ]
+        );
+        assert!(GhForge::repo_list_args(None, 0).is_err());
+        assert!(GhForge::repo_list_args(Some("a/b"), 10).is_err());
+        assert!(GhForge::repo_list_args(Some("-flag"), 10).is_err());
+
+        let repos = discovery::parse_repo_list(
+            r#"[
+                {"nameWithOwner":"acme/widgets","description":"","isPrivate":true,"isArchived":false,"updatedAt":"2026-11-24T12:00:00Z"},
+                {"nameWithOwner":"acme/docs","description":"Docs","isPrivate":false,"isArchived":true,"updatedAt":"2026-11-20T00:00:00Z"}
+            ]"#,
+        )
+        .unwrap();
+        assert_eq!(repos.len(), 2);
+        assert_eq!(repos[0].description, None);
+        assert!(repos[0].is_private);
+        assert_eq!(repos[1].description.as_deref(), Some("Docs"));
+        assert!(repos[1].is_archived);
     }
 }
