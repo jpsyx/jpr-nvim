@@ -49,9 +49,18 @@ impl Gh {
         let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            bail!("{}", format_gh_failure(&stdout, &stderr));
+            return Err(gh_failure_to_error(&stdout, &stderr));
         }
         Ok(stdout)
+    }
+}
+
+fn gh_failure_to_error(stdout: &str, stderr: &str) -> anyhow::Error {
+    let message = format_gh_failure(stdout, stderr);
+    if review_core::is_gh_auth_failure_text(&message) {
+        anyhow::Error::new(review_core::ForgeAuthError::new(message))
+    } else {
+        anyhow::anyhow!(message)
     }
 }
 
@@ -155,5 +164,21 @@ mod tests {
             format_gh_failure(rest, "gh: HTTP 422"),
             "gh: HTTP 422: pending review"
         );
+    }
+
+    #[test]
+    fn gh_failure_to_error_wraps_auth_failures_as_forge_auth_error() {
+        let login_error = gh_failure_to_error(
+            "",
+            "To get started with GitHub CLI, please run:  gh auth login\n",
+        );
+        assert!(review_core::is_auth_error(&login_error));
+        let unauthenticated_error = gh_failure_to_error(
+            r#"{"message":"Bad credentials"}"#,
+            "gh: HTTP 401 Unauthorized\n",
+        );
+        assert!(review_core::is_auth_error(&unauthenticated_error));
+        let server_error = gh_failure_to_error("", "gh: HTTP 502 Bad Gateway\n");
+        assert!(!review_core::is_auth_error(&server_error));
     }
 }

@@ -1,6 +1,7 @@
 //! The GitHub forge: `gh pr view` for the pull request, `gh api graphql` for
 //! threads, files and viewed state, and the viewed mutations.
 
+pub mod discovery;
 mod gh;
 pub mod graphql;
 mod mutations;
@@ -108,7 +109,7 @@ impl GhForge {
         pr::parse_pr_list(&self.gh.run(&arg_refs, None)?)
     }
 
-    fn graphql(&self, query: &str, variables: &Value) -> Result<Value> {
+    pub(crate) fn graphql(&self, query: &str, variables: &Value) -> Result<Value> {
         let body = json!({ "query": query, "variables": variables });
         graphql::parse_data_from_answer(
             &self

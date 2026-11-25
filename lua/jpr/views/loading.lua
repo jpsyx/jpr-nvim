@@ -199,7 +199,7 @@ function M.open(session, initial_state)
     state.spinner_index = state.spinner_index or 0
 
     local buf = vim.api.nvim_create_buf(false, true)
-    local buf_key = state.number and tostring(state.number) or require("jpr.session").buf_key(session)
+    local buf_key = require("jpr.session").buf_key(session)
     pcall(vim.api.nvim_buf_set_name, buf, "jpr://loading/" .. buf_key)
     vim.bo[buf].filetype = "jpr-loading"
     vim.bo[buf].bufhidden = "wipe"

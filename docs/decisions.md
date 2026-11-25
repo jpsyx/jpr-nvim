@@ -928,3 +928,69 @@ edits from a prior review session must stay safe when pulling new commits.
 alone) to avoid colliding with an unrelated local branch of the same name.
 State continues to live under `$XDG_STATE_HOME/jpr/` (`session.json`), never in
 `~/.config/`.
+
+## Non-repository picker, managed clone cache, and global gh auth recovery (`PROTOCOL_VERSION = 9`)
+
+**Decision.** Opening `:Jpr` (or bare `:Jpr open`) outside a git repository
+runs an engine-backed GitHub discovery flow before the Command Palette, clones
+picked repositories into a managed XDG cache on demand, and routes every `gh`
+authentication failure across the plugin through a single structured recovery
+controller:
+
+1. **Managed clone cache under XDG cache.** When `jpr-review checkout --pr <n>
+   --repo <owner/name>` runs outside any local git repository,
+   `review-workspace-git::cache::ensure_managed_clone` clones `<owner>/<repo>`
+   into `$XDG_CACHE_HOME/jpr/repos/<owner>/<repo>` (default
+   `~/.cache/jpr/repos/<owner>/<repo>`) using `gh repo clone` and reuses the
+   existing PR worktree path convention beside it
+   (`<repo>-worktrees/pr-<n>`). Validating both owner/repo segments and an
+   existing cache checkout's `origin` URL prevents cache collisions or
+   traversal.
+2. **Structured auth signaling in Rust and single-flight recovery in Lua.**
+   `review-core::auth` defines `ForgeAuthError`, `AUTH_EXIT_CODE = 3`, and
+   `is_gh_auth_failure_text` so every `gh` call (`review-forge-github` and
+   `review-workspace-git`) classifies missing or expired credentials once in
+   Rust rather than via ad-hoc Lua string matching. CLI subcommands exit `3`;
+   JSON-RPC returns `-32001` (`AUTH_REQUIRED`) and `Event::SyncFailed` carries
+   `authRequired` and `isBackground` (with background poller ticks calling
+   `sync_background` / `flush_queued_background` so the first background auth
+   failure can prompt once and subsequent background ticks stay suppressed
+   after the reviewer declines until an explicit foreground action clears
+   suppression). `lua/jpr/auth`
+   coalesces concurrent auth prompts behind a single floating modal (keyboard
+   and `<LeftMouse>` clickable), launches `gh auth login` in a floating
+   terminal, verifies completion via `gh auth status`, and replays all queued
+   callers automatically.
+3. **Synchronous `.git` check, multi-repo buffer keys, and draft safety.**
+   `jpr.repo_picker.is_git_repo` uses synchronous upward `vim.fs.find(".git")`
+   (matching standard repos and linked worktrees with zero subprocess latency).
+   Because a reviewer outside a git repo can open PR `#42` in two different
+   repositories simultaneously, `session.buf_key` preserves bare `<n>` for the
+   first open PR and disambiguates colliding `jpr://` buffer URIs as
+   `<sanitized-owner-repo>-<n>` (falling back to `<n>-tab<tab>`),
+   `pending_by_key` keys in-flight checkouts by `(repo, number)`, and
+   `jpr.comments.compose` preserves unsaved comment text if authentication is
+   canceled.
+
+**Why.** Keeping GitHub discovery (`jpr-review owners`, `jpr-review repos`) and
+auth error classification in Rust preserves the frontend-neutral dependency
+rule so future frontends reuse the exact same contract. Checking out into an
+XDG cache keeps the user's current working directory clean while giving
+`GitWorkspace` a real local clone and worktree for diffs, edits, and coding
+agents. Single-flight auth recovery avoids cascading modals when multiple
+requests fail simultaneously after a token expires.
+
+**Consequences.** `PROTOCOL_VERSION` advances to `9` alongside release `0.8.0`.
+In non-repo mode, `:Jpr local` is visually muted in the Command Palette because
+it requires a local git checkout, and pressing `h`/`<Left>`/`<S-Tab>` in the
+scoped Command Palette steps back to the repository picker. Foreground comment
+and review mutations return `-32001` immediately without queueing an optimistic
+operation or mutating a `Failed` message into `Queued`, so retrying after
+`gh auth login` cleanly re-runs the action; `setViewed` retains its optimistic
+local contract (keeping the mark queued) while emitting
+`Event::SyncFailed { authRequired: true, isBackground: false }` so the user is
+prompted and a post-login sync flushes the queued mark.
+
+**Revisit when.** Reviewers need multi-host GitHub Enterprise support (where
+cache directories and `gh auth login --hostname` would key on forge host) or
+want a `:Jpr cache clean` command to prune old managed clones.

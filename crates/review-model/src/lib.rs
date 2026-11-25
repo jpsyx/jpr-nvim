@@ -3,6 +3,7 @@
 
 mod agent;
 mod diff;
+mod forge;
 mod pr;
 mod review;
 mod thread;
@@ -17,6 +18,7 @@ pub use diff::{
     AddedLine, FileDiffView, LineCell, LineChange, RemovedBlock, RemovedLine, StreamRow,
     StreamView, SuggestedEdit, ViewMode, WordRange,
 };
+pub use forge::{ForgeOwner, ForgeRepo, OwnerKind};
 pub use pr::{ChangedFile, PullRequest, PullRequestSummary, ViewedState};
 pub use review::{
     MentionCandidate, Reaction, ReactionContent, ReviewEvent, SubmitDraft, SubmitPreview,

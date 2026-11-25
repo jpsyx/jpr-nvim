@@ -12,6 +12,7 @@ pub(super) enum ReplayOutcome {
     Landed,
     Transient,
     Rejected,
+    AuthRequired(String),
 }
 
 impl ReviewSession {
@@ -234,6 +235,7 @@ impl ReviewSession {
                 ReplayOutcome::Landed
             }
             Err(ForgeWriteError::Transient(_)) => ReplayOutcome::Transient,
+            Err(ForgeWriteError::AuthRequired(reason)) => ReplayOutcome::AuthRequired(reason),
             Err(ForgeWriteError::Rejected(_)) => ReplayOutcome::Rejected,
         }
     }
@@ -256,6 +258,7 @@ impl ReviewSession {
                 ReplayOutcome::Landed
             }
             Err(ForgeWriteError::Transient(_)) => ReplayOutcome::Transient,
+            Err(ForgeWriteError::AuthRequired(reason)) => ReplayOutcome::AuthRequired(reason),
             Err(ForgeWriteError::Rejected(_)) => {
                 if let Some(thread) = self.find_thread_mut(&canonical_thread_id) {
                     thread.state = if is_resolved {
@@ -288,6 +291,7 @@ impl ReviewSession {
                 ReplayOutcome::Landed
             }
             Err(ForgeWriteError::Transient(_)) => ReplayOutcome::Transient,
+            Err(ForgeWriteError::AuthRequired(reason)) => ReplayOutcome::AuthRequired(reason),
             Err(ForgeWriteError::Rejected(_)) => {
                 if let Some(message) = find_message_mut(&mut self.threads, &canonical_subject_id) {
                     toggle_reaction_in_list(&mut message.reactions, content);
@@ -310,6 +314,7 @@ impl ReviewSession {
                 ReplayOutcome::Landed
             }
             Err(ForgeWriteError::Transient(_)) => ReplayOutcome::Transient,
+            Err(ForgeWriteError::AuthRequired(reason)) => ReplayOutcome::AuthRequired(reason),
             Err(ForgeWriteError::Rejected(_)) => ReplayOutcome::Rejected,
         }
     }

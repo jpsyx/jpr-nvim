@@ -93,6 +93,7 @@ struct ForgeState {
     read_failure: Option<String>,
     write_failure: Option<String>,
     rejected_write_failure: Option<String>,
+    auth_failure: Option<String>,
     next_id: u64,
     viewed_calls: Vec<(String, bool)>,
 }
@@ -177,6 +178,13 @@ impl FakeForge {
         self.lock().read_failure = message.map(str::to_owned);
     }
 
+    /// Makes every later read and write fail with an authentication error
+    /// ([`crate::ForgeAuthError`] / [`ForgeWriteError::AuthRequired`]), or lets
+    /// calls succeed again with `None`.
+    pub fn fail_auth_with(&self, message: Option<&str>) {
+        self.lock().auth_failure = message.map(str::to_owned);
+    }
+
     /// Every viewed mark the forge accepted, in order.
     #[must_use]
     pub fn viewed_calls(&self) -> Vec<(String, bool)> {
@@ -191,6 +199,11 @@ impl FakeForge {
 impl Forge for FakeForge {
     fn pull_request(&self, number: u64) -> Result<PullRequest> {
         let state = self.lock();
+        if let Some(message) = &state.auth_failure {
+            return Err(anyhow::Error::new(crate::ForgeAuthError::new(
+                message.clone(),
+            )));
+        }
         if let Some(message) = state.failure.as_ref().or(state.read_failure.as_ref()) {
             return Err(anyhow!("{message}"));
         }
@@ -203,6 +216,11 @@ impl Forge for FakeForge {
 
     fn current_branch_pr(&self) -> Result<Option<PullRequest>> {
         let state = self.lock();
+        if let Some(message) = &state.auth_failure {
+            return Err(anyhow::Error::new(crate::ForgeAuthError::new(
+                message.clone(),
+            )));
+        }
         if let Some(message) = state.failure.as_ref().or(state.read_failure.as_ref()) {
             return Err(anyhow!("{message}"));
         }
@@ -218,6 +236,11 @@ impl Forge for FakeForge {
 
     fn fetch(&self, _pr: &PullRequest) -> Result<ForgeSnapshot> {
         let mut state = self.lock();
+        if let Some(message) = &state.auth_failure {
+            return Err(anyhow::Error::new(crate::ForgeAuthError::new(
+                message.clone(),
+            )));
+        }
         if let Some(message) = state.failure.as_ref().or(state.read_failure.as_ref()) {
             return Err(anyhow!("{message}"));
         }
@@ -227,6 +250,11 @@ impl Forge for FakeForge {
 
     fn set_viewed(&self, _pr: &PullRequest, path: &str, viewed: bool) -> Result<()> {
         let mut state = self.lock();
+        if let Some(message) = &state.auth_failure {
+            return Err(anyhow::Error::new(crate::ForgeAuthError::new(
+                message.clone(),
+            )));
+        }
         if let Some(message) = state.failure.as_ref().or(state.write_failure.as_ref()) {
             return Err(anyhow!("{message}"));
         }

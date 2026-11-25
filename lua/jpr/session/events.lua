@@ -113,6 +113,25 @@ local function handle_head_moved(session, params, show_session)
     end
 end
 
+local function handle_sync_failed(session, params)
+    session.view.sync = { state = "failed", at = os.time(), message = params.message }
+    panel.render(session, session.view)
+    if session.loading then
+        require("jpr.views.loading").close(session)
+    end
+    if params.authRequired == true then
+        require("jpr.auth").prompt_and_resume({
+            key = "sync:" .. tostring(session.tab),
+            is_background = params.isBackground == true,
+            on_authenticated = function()
+                if not session.closing and session.client then
+                    require("jpr.session").sync(session)
+                end
+            end,
+        })
+    end
+end
+
 local function handle_event_notification(session, params, show_session)
     if params.type == "synced" or params.type == "viewedChanged" then
         show_session(session, params.view)
@@ -143,11 +162,7 @@ local function handle_event_notification(session, params, show_session)
     elseif params.type == "headMoved" then
         handle_head_moved(session, params, show_session)
     elseif params.type == "syncFailed" then
-        session.view.sync = { state = "failed", at = os.time(), message = params.message }
-        panel.render(session, session.view)
-        if session.loading then
-            require("jpr.views.loading").close(session)
-        end
+        handle_sync_failed(session, params)
     end
 end
 

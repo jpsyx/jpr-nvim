@@ -102,26 +102,43 @@ impl ReviewSession {
     /// previous view and announces the failure; it saves only the queue,
     /// and only when marks were sent before it failed.
     pub fn sync(&mut self) -> Result<SessionView> {
+        self.sync_with_background(false)
+    }
+
+    /// Background poller variant of [`Self::sync`], marking any resulting
+    /// [`Event::SyncFailed`] with `is_background = true`.
+    pub fn sync_background(&mut self) -> Result<SessionView> {
+        self.sync_with_background(true)
+    }
+
+    fn sync_with_background(&mut self, is_background: bool) -> Result<SessionView> {
         let now = self.ports.clock.now();
         if !self.is_linked() {
             return self.sync_or_link_local(now);
         }
         // GitHub may lag behind a mark that lands now, so the pull that
         // follows can briefly undo it until a later pull.
-        let has_landed = self.send_queued();
+        let (has_landed, _) = self.send_queued();
         let result = self
             .pull()
             .and_then(|(pr, snapshot)| self.apply_pull(pr, snapshot, now));
         if let Err(error) = &result {
-            self.fail_sync(error, now, has_landed);
+            self.fail_sync(error, now, has_landed, is_background);
         }
         result
     }
 
     /// Records and announces a failed pull. Marks that landed before it are
     /// saved and announced first, so the queue count shown is not stale.
-    fn fail_sync(&mut self, error: &anyhow::Error, now: u64, has_landed: bool) {
+    fn fail_sync(
+        &mut self,
+        error: &anyhow::Error,
+        now: u64,
+        has_landed: bool,
+        is_background: bool,
+    ) {
         let message = format!("{error:#}");
+        let auth_required = crate::is_auth_error(error);
         self.sync = SyncState::Failed {
             at: now,
             message: message.clone(),
@@ -131,7 +148,11 @@ impl ReviewSession {
             // the shrunken queue is saved by the next save that succeeds.
             let _ = self.save_and_announce_viewed();
         }
-        self.publish(&Event::SyncFailed { message });
+        self.publish(&Event::SyncFailed {
+            message,
+            auth_required,
+            is_background,
+        });
     }
 
     fn pull(&self) -> Result<(PullRequest, ForgeSnapshot)> {

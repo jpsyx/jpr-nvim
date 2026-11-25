@@ -54,13 +54,13 @@ local function build_pr_help(pr)
     return table.concat(parts, " · ")
 end
 
-local function create_pr_options_from_list(prs, open_tabs)
+local function create_pr_options_from_list(prs, open_tabs, repo)
     local options = {}
     for _, pr in ipairs(prs) do
         if type(pr) == "table" and type(pr.number) == "number" then
             local title = type(pr.title) == "string" and pr.title or ""
             options[#options + 1] = {
-                value = { number = pr.number, repo = nil },
+                value = { number = pr.number, repo = repo },
                 label = ("#%d  %s"):format(pr.number, title),
                 badge = build_pr_badge(pr, open_tabs),
                 help = build_pr_help(pr),
@@ -70,8 +70,15 @@ local function create_pr_options_from_list(prs, open_tabs)
     return options
 end
 
-local function load_open_pr_options(_answers, _context, on_loaded)
+local open_pr_load_generation = 0
+
+local function load_open_pr_options(_answers, context, on_loaded)
+    open_pr_load_generation = open_pr_load_generation + 1
+    local generation = open_pr_load_generation
     local session = session_module()
+    local target_repo = type(context) == "table" and type(context.repo) == "string" and context.repo ~= ""
+            and context.repo
+        or nil
     session.list_open_prs(function(prs)
         if #prs == 0 then
             local is_applied = on_loaded(
@@ -84,22 +91,34 @@ local function load_open_pr_options(_answers, _context, on_loaded)
             end
             return
         end
-        local open_tabs = type(session.open_tab_numbers) == "function" and session.open_tab_numbers() or {}
-        on_loaded(create_pr_options_from_list(prs, open_tabs))
+        local open_tabs = type(session.open_tab_numbers) == "function" and session.open_tab_numbers(target_repo) or {}
+        on_loaded(create_pr_options_from_list(prs, open_tabs, target_repo))
     end, function(error_message)
         on_loaded(nil, error_message)
-    end)
+    end, {
+        repo = target_repo,
+        is_active = function()
+            return require("jpr.tui.wizard").is_open() and open_pr_load_generation == generation
+        end,
+        on_reopen = function()
+            local open_spec = M.find_command_spec("open")
+            require("jpr.tui.wizard").open_command(open_spec, { source = "list" }, context, { start_step_id = "pr" })
+        end,
+    })
 end
 
-local function execute_open_command(answers)
+local function execute_open_command(answers, context)
+    local fallback_repo = type(context) == "table" and type(context.repo) == "string" and context.repo ~= ""
+            and context.repo
+        or nil
     if answers.source == "list" and answers.pr ~= nil then
         local number = type(answers.pr) == "table" and answers.pr.number or answers.pr
-        local repo = type(answers.pr) == "table" and answers.pr.repo or nil
+        local repo = (type(answers.pr) == "table" and answers.pr.repo) or fallback_repo
         return session_module().open(number, repo)
     end
     local number, repo = jpr().parse_pr_arg(vim.trim(tostring(answers.pr_input or "")))
     if number then
-        return session_module().open(number, repo)
+        return session_module().open(number, repo or fallback_repo)
     end
 end
 
@@ -296,6 +315,7 @@ local function create_local_command_spec()
         label = "Review Current Worktree",
         help = "Review the current worktree against its base branch (auto-attaches if an open PR exists).",
         requires_session = false,
+        requires_git_repo = true,
         steps = {
             {
                 id = "base_mode",
@@ -318,7 +338,10 @@ local function create_local_command_spec()
                 validate = validate_local_base_ref,
             },
         },
-        execute = function(answers)
+        execute = function(answers, context)
+            if type(context) == "table" and context.is_git_repo == false then
+                return jpr().error("Review Current Worktree requires a local git checkout")
+            end
             local base_ref = answers.base_mode == "custom" and vim.trim(tostring(answers.base or "")) or nil
             return session_module().open_local(base_ref)
         end,

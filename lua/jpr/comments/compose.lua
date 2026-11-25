@@ -221,6 +221,27 @@ local function open_editor(session, opts)
     return buf
 end
 
+local function submit_with_draft_recovery(session, method, params, reopen_fn)
+    require("jpr.session").request(session, method, params, function() end, function(request_error)
+        if not session.closing and require("jpr.auth").is_rpc_auth_error(request_error) then
+            reopen_fn()
+        end
+    end)
+end
+
+local function prefill_suggested_comment(session, anchor, open_with_body)
+    local request_id = next_request_id(session)
+    return require("jpr.session").request(session, "anchoredLines", { anchor = anchor }, function(result)
+        if session.closing or session.compose_request_id ~= request_id then
+            return
+        end
+        if session.tab ~= nil and not vim.api.nvim_tabpage_is_valid(session.tab) then
+            return
+        end
+        open_with_body(("```suggestion\n%s\n```"):format((result and result.text) or ""))
+    end)
+end
+
 --- Opens the floating compose buffer for a new comment at `anchor`, optionally
 --- pre-filling a GitHub suggestion block on line or range anchors (`opts.suggest`).
 function M.open_new(session, anchor, opts)
@@ -234,8 +255,10 @@ function M.open_new(session, anchor, opts)
     local is_unlinked_local = is_unlinked_local_session(session)
     local is_local_only = is_local_only_anchor(session, anchor)
     local is_locked_local = is_unlinked_local or is_local_only
-    local open_with_body = function(initial_text)
-        local origin = is_locked_local and "local" or (open_opts.initial_origin or session.compose_destination or "github")
+    local open_with_body
+    open_with_body = function(initial_text, origin_override)
+        local origin = is_locked_local and "local"
+            or (origin_override or open_opts.initial_origin or session.compose_destination or "github")
         open_editor(session, {
             title = build_title_from_anchor(anchor, origin),
             initial_text = initial_text,
@@ -245,25 +268,18 @@ function M.open_new(session, anchor, opts)
             is_local_only = is_local_only,
             is_unlinked_local = is_unlinked_local,
             on_submit = function(body, submit_origin)
-                require("jpr.session").request(session, "comment", {
+                submit_with_draft_recovery(session, "comment", {
                     anchor = anchor,
                     body = body,
                     origin = submit_origin,
-                }, function() end)
+                }, function()
+                    open_with_body(body, submit_origin)
+                end)
             end,
         })
     end
     if open_opts.suggest and (anchor.kind == "line" or anchor.kind == "range") then
-        local request_id = next_request_id(session)
-        return require("jpr.session").request(session, "anchoredLines", { anchor = anchor }, function(result)
-            if session.closing or session.compose_request_id ~= request_id then
-                return
-            end
-            if session.tab ~= nil and not vim.api.nvim_tabpage_is_valid(session.tab) then
-                return
-            end
-            open_with_body(("```suggestion\n%s\n```"):format((result and result.text) or ""))
-        end)
+        return prefill_suggested_comment(session, anchor, open_with_body)
     end
     open_with_body("")
 end
@@ -282,15 +298,21 @@ function M.open_reply(session, thread)
         badge = "[GitHub draft]"
     end
     local thread_id = thread.threadId or thread.id
-    open_editor(session, {
-        title = badge .. " Reply",
-        initial_text = "",
-        anchor = thread.anchor,
-        allow_destination_toggle = false,
-        on_submit = function(body)
-            require("jpr.session").request(session, "reply", { threadId = thread_id, body = body }, function() end)
-        end,
-    })
+    local open_reply_editor
+    open_reply_editor = function(initial_text)
+        open_editor(session, {
+            title = badge .. " Reply",
+            initial_text = initial_text,
+            anchor = thread.anchor,
+            allow_destination_toggle = false,
+            on_submit = function(body)
+                submit_with_draft_recovery(session, "reply", { threadId = thread_id, body = body }, function()
+                    open_reply_editor(body)
+                end)
+            end,
+        })
+    end
+    open_reply_editor("")
 end
 
 --- Opens the floating compose buffer to edit `message` (pre-populating
@@ -310,15 +332,21 @@ function M.open_edit(session, message, thread)
         or (type(message.body) == "string" and message.body)
         or ""
     local anchor = type(thread) == "table" and type(thread.anchor) == "table" and thread.anchor or nil
-    open_editor(session, {
-        title = title,
-        initial_text = initial_text,
-        anchor = anchor,
-        allow_destination_toggle = false,
-        on_submit = function(body)
-            require("jpr.session").request(session, "editMessage", { messageId = message.id, body = body }, function() end)
-        end,
-    })
+    local open_edit_editor
+    open_edit_editor = function(body_text)
+        open_editor(session, {
+            title = title,
+            initial_text = body_text,
+            anchor = anchor,
+            allow_destination_toggle = false,
+            on_submit = function(body)
+                submit_with_draft_recovery(session, "editMessage", { messageId = message.id, body = body }, function()
+                    open_edit_editor(body)
+                end)
+            end,
+        })
+    end
+    open_edit_editor(initial_text)
 end
 
 --- Opens the floating compose buffer to promote a local `thread`'s root
@@ -338,18 +366,24 @@ function M.open_promote(session, thread)
     local first_message = messages[1]
     local raw_body = type(first_message) == "table" and first_message.body or ""
     local initial_text = type(raw_body) == "string" and raw_body or ""
-    open_editor(session, {
-        title = "[Promote → GitHub] " .. build_location_from_anchor(thread.anchor),
-        initial_text = initial_text,
-        anchor = thread.anchor,
-        allow_destination_toggle = false,
-        on_submit = function(body)
-            require("jpr.session").request(session, "promoteThread", {
-                threadId = thread_id,
-                body = body,
-            }, function() end)
-        end,
-    })
+    local open_promote_editor
+    open_promote_editor = function(body_text)
+        open_editor(session, {
+            title = "[Promote → GitHub] " .. build_location_from_anchor(thread.anchor),
+            initial_text = body_text,
+            anchor = thread.anchor,
+            allow_destination_toggle = false,
+            on_submit = function(body)
+                submit_with_draft_recovery(session, "promoteThread", {
+                    threadId = thread_id,
+                    body = body,
+                }, function()
+                    open_promote_editor(body)
+                end)
+            end,
+        })
+    end
+    open_promote_editor(initial_text)
 end
 
 return M

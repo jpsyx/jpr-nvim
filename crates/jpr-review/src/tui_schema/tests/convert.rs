@@ -185,6 +185,27 @@ fn assert_converts_state_and_daemon_subcommands() {
 }
 
 #[test]
+fn answers_to_command_builds_discovery_subcommands() {
+    assert_converts("owners", &[], &Command::Owners);
+    assert_converts(
+        "repos",
+        &[("owner_scope", "false"), ("limit", "100")],
+        &Command::Repos {
+            owner: None,
+            limit: 100,
+        },
+    );
+    assert_converts(
+        "repos",
+        &[("owner_scope", "true"), ("owner", "acme"), ("limit", "25")],
+        &Command::Repos {
+            owner: Some("acme".into()),
+            limit: 25,
+        },
+    );
+}
+
+#[test]
 fn answers_to_command_rejects_invalid_and_incomplete_inputs() {
     assert!(answers_to_command("unknown", &Answers::new()).is_err());
     assert!(answers_to_command("prs", &answers_from(&[("limit", "0")])).is_err());

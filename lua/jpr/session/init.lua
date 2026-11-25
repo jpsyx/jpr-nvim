@@ -20,12 +20,53 @@ function M.current()
     return M.by_tab[vim.api.nvim_get_current_tabpage()]
 end
 
---- Unique buffer-name suffix for `session`: numeric PR number or `local-<tab>`.
-function M.buf_key(session)
-    if type(session) == "table" and type(session.number) == "number" then
-        return tostring(session.number)
+local function sanitize_repo_for_buf_key(repo)
+    if type(repo) ~= "string" or repo == "" then
+        return nil
     end
-    return "local-" .. tostring(type(session) == "table" and session.tab or 0)
+    local cleaned = repo:lower():gsub("[^%w%-%._]+", "-")
+    return cleaned ~= "" and cleaned or nil
+end
+
+local function is_buf_key_taken(session, candidate)
+    for tab, existing in pairs(M.by_tab) do
+        if existing ~= session and vim.api.nvim_tabpage_is_valid(tab) then
+            local existing_key = existing.buf_key_value
+                or (type(existing.number) == "number" and tostring(existing.number) or nil)
+            if existing_key == candidate then
+                return true
+            end
+        end
+    end
+    return type(M.is_pending_buf_key_taken) == "function" and M.is_pending_buf_key_taken(session, candidate)
+end
+
+--- Unique buffer-name suffix for `session`: numeric PR number (disambiguated on
+--- multi-repo collision) or `local-<tab>`.
+function M.buf_key(session)
+    if type(session) ~= "table" then
+        return "local-0"
+    end
+    if type(session.buf_key_value) == "string" and session.buf_key_value ~= "" then
+        return session.buf_key_value
+    end
+    if type(session.number) ~= "number" then
+        return "local-" .. tostring(session.tab or 0)
+    end
+    local base_key = tostring(session.number)
+    if not is_buf_key_taken(session, base_key) then
+        session.buf_key_value = base_key
+        return base_key
+    end
+    local repo_slug = sanitize_repo_for_buf_key(session.repo)
+    local repo_key = repo_slug and (repo_slug .. "-" .. base_key) or nil
+    if repo_key and not is_buf_key_taken(session, repo_key) then
+        session.buf_key_value = repo_key
+        return repo_key
+    end
+    local tab_key = base_key .. "-tab" .. tostring(session.tab or 0)
+    session.buf_key_value = tab_key
+    return tab_key
 end
 
 --- Human-readable label for `session` (`PR #7` or `local review (branch)`).
@@ -42,6 +83,36 @@ function M.report_read_only(session)
             reopen_hint
         )
     )
+end
+
+local function handle_request_error(session, method, params, on_result, on_error, request_error)
+    if session.closing then
+        if on_error then
+            on_error(request_error)
+        end
+        return
+    end
+    local auth = require("jpr.auth")
+    if auth.is_rpc_auth_error(request_error) then
+        return auth.prompt_and_resume({
+            is_background = false,
+            on_authenticated = function()
+                if session.closing or not session.client then
+                    return
+                end
+                M.request(session, method, params, on_result, on_error)
+            end,
+            on_cancel = function()
+                if on_error then
+                    on_error(request_error)
+                end
+            end,
+        })
+    end
+    if on_error then
+        on_error(request_error)
+    end
+    return jpr().error(("%s failed: %s"):format(method, request_error.message))
 end
 
 --- Sends `method` with `params` to `session`'s engine. `on_result(result)`
@@ -66,13 +137,7 @@ function M.request(session, method, params, on_result, on_error)
     end
     session.client:request(method, params, function(request_error, result)
         if request_error then
-            if on_error then
-                on_error(request_error)
-            end
-            if session.closing then
-                return
-            end
-            return jpr().error(("%s failed: %s"):format(method, request_error.message))
+            return handle_request_error(session, method, params, on_result, on_error, request_error)
         end
         on_result(result)
     end)

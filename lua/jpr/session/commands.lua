@@ -27,9 +27,24 @@ local function sync_session(session_mod, session)
         )
     end
     session.client:request("sync", nil, function(sync_error, view)
+        if session.closing then
+            return
+        end
         if sync_error then
             if session.loading then
                 require("jpr.views.loading").close(session)
+            end
+            local auth = require("jpr.auth")
+            if auth.is_rpc_auth_error(sync_error) then
+                return auth.prompt_and_resume({
+                    key = "sync:" .. tostring(session.tab),
+                    is_background = false,
+                    on_authenticated = function()
+                        if not session.closing and session.client then
+                            session_mod.sync(session)
+                        end
+                    end,
+                })
             end
             local clean_message = crash.build_clean_text_from_raw(sync_error.message)
             if session.mode == "local" and clean_message:find("no open pull request found", 1, true) ~= nil then

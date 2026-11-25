@@ -203,6 +203,11 @@ fn validate_optional_repo(value: &str, _answers: &Answers) -> Result<(), String>
         .map_err(|error| error.to_string())
 }
 
+pub(super) fn validate_owner(value: &str, _answers: &Answers) -> Result<(), String> {
+    review_forge_github::discovery::validate_owner_login(value.trim())
+        .map_err(|error| error.to_string())
+}
+
 pub(super) fn validate_positive_u32(value: &str, _answers: &Answers) -> Result<(), String> {
     match value.trim().parse::<u32>() {
         Ok(limit) if limit >= 1 => Ok(()),

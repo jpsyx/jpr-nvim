@@ -67,6 +67,13 @@ fn error_classification_separates_transient_network_failures_from_rejections() {
         classify_write_error(&anyhow::anyhow!("HTTP 422: Comment not found")),
         ForgeWriteError::Rejected(_)
     ));
+    assert!(matches!(
+        classify_write_error(
+            &anyhow::Error::new(review_core::ForgeAuthError::new("gh auth login"))
+                .context("posting comment")
+        ),
+        ForgeWriteError::AuthRequired(_)
+    ));
 }
 
 #[test]

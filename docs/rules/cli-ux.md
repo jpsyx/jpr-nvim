@@ -106,4 +106,10 @@ a terminal and `NO_COLOR` is unset, so piped output is always plain text.
 Exit `0` only when the command did what it was asked. Any failure exits
 non-zero, after printing what went wrong and, when there is one, the command
 or flag that fixes it. Scripts and agents branch on the exit code before they
-read a word of the output.
+read a word of the output:
+
+- `0`: success.
+- `1`: operational or runtime failure.
+- `2`: usage error or missing required input without a TTY.
+- `3`: GitHub authentication required (`gh` is not logged in or credentials
+  expired), signaling frontends and scripts to run `gh auth login` and retry.

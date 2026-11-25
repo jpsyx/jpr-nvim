@@ -127,6 +127,9 @@ impl ReviewSession {
                 self.save_and_announce_threads()
             }
             Err(ForgeWriteError::Rejected(reason)) => bail!("{reason}"),
+            Err(ForgeWriteError::AuthRequired(reason)) => {
+                Err(anyhow::Error::new(crate::ForgeAuthError::new(reason)))
+            }
         }
     }
 

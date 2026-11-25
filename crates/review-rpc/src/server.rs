@@ -93,7 +93,14 @@ pub fn handle(
 
 /// An engine failure as an RPC error, with its whole context chain.
 pub fn engine_result_to_rpc<T>(result: anyhow::Result<T>) -> Result<T, RpcError> {
-    result.map_err(|error| RpcError::new(RpcError::ENGINE_ERROR, format!("{error:#}")))
+    result.map_err(|error| {
+        let code = if review_core::is_auth_error(&error) {
+            RpcError::AUTH_REQUIRED
+        } else {
+            RpcError::ENGINE_ERROR
+        };
+        RpcError::new(code, format!("{error:#}"))
+    })
 }
 
 /// Serves requests read from `reader` until it ends or a `shutdown` request
@@ -322,4 +329,24 @@ pub fn to_value<T: Serialize>(value: &T) -> Result<Value, RpcError> {
             format!("encoding the result: {error}"),
         )
     })
+}
+
+#[cfg(test)]
+mod auth_rpc_tests {
+    use super::*;
+
+    #[test]
+    fn engine_result_to_rpc_maps_forge_auth_error_to_auth_required_code() {
+        let auth_error: anyhow::Result<()> = Err(anyhow::Error::new(
+            review_core::ForgeAuthError::new("gh auth login"),
+        )
+        .context("syncing pr"));
+        let rpc_error = engine_result_to_rpc(auth_error).unwrap_err();
+        assert_eq!(rpc_error.code, RpcError::AUTH_REQUIRED);
+        assert_eq!(rpc_error.code, -32001);
+
+        let generic_error: anyhow::Result<()> = Err(anyhow!("offline"));
+        let generic_rpc = engine_result_to_rpc(generic_error).unwrap_err();
+        assert_eq!(generic_rpc.code, RpcError::ENGINE_ERROR);
+    }
 }

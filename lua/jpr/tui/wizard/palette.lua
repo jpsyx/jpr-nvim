@@ -77,6 +77,14 @@ local function bind_palette_keys(controller, state)
     for _, lhs in ipairs({ "gg", "<Home>" }) do map(lhs, jump_first) end
     for _, lhs in ipairs({ "G", "<End>" }) do map(lhs, jump_last) end
     for _, lhs in ipairs({ "<CR>", "l", "<Right>", "<Tab>" }) do map(lhs, confirm) end
+    if type(state.context and state.context.on_back) == "function" then
+        local go_back = function()
+            local on_back = state.context.on_back
+            controller.close()
+            on_back()
+        end
+        for _, lhs in ipairs({ "h", "<Left>", "<S-Tab>" }) do map(lhs, go_back) end
+    end
     for _, lhs in ipairs({ "q", "<Esc>" }) do map(lhs, controller.close) end
 end
 

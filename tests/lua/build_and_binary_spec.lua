@@ -188,7 +188,7 @@ local function create_fake_cargo(cargo_bin_directory, cargo_log)
         "  exit 0",
         "fi",
         "/bin/mkdir -p \"$PWD/target/release\"",
-        "printf '#!/bin/sh\\necho jpr-review 0.7.0\\n' > \"$PWD/target/release/jpr-review\"",
+        "printf '#!/bin/sh\\necho jpr-review 0.8.0\\n' > \"$PWD/target/release/jpr-review\"",
         "/bin/chmod +x \"$PWD/target/release/jpr-review\"",
     })
 end

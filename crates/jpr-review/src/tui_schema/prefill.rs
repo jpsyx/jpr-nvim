@@ -53,9 +53,12 @@ pub(super) fn initial_answers_for_missing_inputs_with_env(
         Command::Threads { .. } | Command::Reply { .. } | Command::PrepassWrite { .. } => {
             initial_agent_answers(command, env)
         }
-        Command::Local { .. } | Command::Prs { .. } | Command::Serve { .. } | Command::Guide => {
-            None
-        }
+        Command::Local { .. }
+        | Command::Owners
+        | Command::Prs { .. }
+        | Command::Repos { .. }
+        | Command::Serve { .. }
+        | Command::Guide => None,
     }
 }
 
@@ -96,7 +99,9 @@ fn initial_agent_answers(command: &Command, env: TargetEnv<'_>) -> Option<(&'sta
         Command::Checkout { .. }
         | Command::Local { .. }
         | Command::Guide
+        | Command::Owners
         | Command::Prs { .. }
+        | Command::Repos { .. }
         | Command::Serve { .. }
         | Command::StatePath { .. } => None,
     }

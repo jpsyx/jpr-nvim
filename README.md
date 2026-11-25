@@ -15,7 +15,9 @@ the Neovim plugin is a thin Lua frontend over its JSON-RPC protocol. See
 ## Requirements
 
 - A Rust toolchain ([rustup.rs](https://rustup.rs)) to build the engine.
-- The GitHub CLI (`gh`), logged in.
+- The GitHub CLI (`gh`). If `gh` is not logged in (or your token expires),
+  `jpr-nvim` prompts you in Neovim with a button to run `gh auth login` and
+  automatically resumes where you left off.
 - git and Neovim 0.11 or newer.
 
 ## Install
@@ -71,7 +73,7 @@ binary manually.
 
 | Command | What it does |
 | --- | --- |
-| `:Jpr` (default key: `<leader>J`) | Open the interactive Command Palette with human-readable labels, hover helper text, and multi-step steppers for every command (`j`/`k` move, `l`/`<CR>` forward, `h`/`<S-Tab>` back, `q`/`<Esc>` cancel) |
+| `:Jpr` (default key: `<leader>J`) | Open the interactive Command Palette with human-readable labels, hover helper text, and multi-step steppers for every command (`j`/`k` move, `l`/`<CR>` forward, `h`/`<S-Tab>` back, `q`/`<Esc>` cancel). When Neovim is opened outside a git repository, `:Jpr` first lets you pick an organization (if you belong to any) and a GitHub repository from your `gh` account, then opens the palette scoped to that repository (press `h` in the palette to switch repos); opening a PR clones the repo on demand into `$XDG_CACHE_HOME/jpr/repos/<owner>/<repo>` |
 | `:Jpr open [n \| #n \| URL]` (shorthand: `:Jpr <n \| #n \| URL>`) | Omit the argument to open the interactive open-PR picker (backed by `jpr-review prs`; press `h` to step back and enter a PR number or URL manually), or pass a positive PR number, `#number`, or repository PR URL directly (including `:Jpr 123` as an alias for `:Jpr open 123`). Opens a review tab immediately with a live 4-stage loading view (worktree checkout stderr, engine startup, GitHub sync, and per-file diff percentage progress) until the stream renders |
 | `:Jpr review [n \| #n \| URL]` | Alias for `:Jpr open`. Same arguments and the same picker. It is not a separate Command Palette entry |
 | `:Jpr local [base]` (alias: `:Jpr self [base]`) | Review the current worktree in-place against its base branch (`develop` if present else `main`, or an explicit git ref such as `HEAD`). Bare `:Jpr local` (or `:Jpr self`) auto-attaches to an open PR on the current branch if one exists; passing an explicit `[base]` stays local-only. Edits stay unstaged in the current worktree and local threads dispatch in bulk via `:Jpr send` |
@@ -238,8 +240,10 @@ subcommand and option also has full flag parity for scripts, CI, and agents:
 
 ```sh
 jpr-review                                         # interactive Command Palette (TTY)
+jpr-review owners                                  # list viewer and GitHub orgs as JSON
+jpr-review repos [--owner login] [--limit 100]     # list GitHub repositories as JSON
 jpr-review prs [--repo owner/name] [--limit 50]    # list open pull requests as JSON
-jpr-review checkout --pr 42                        # check out PR #42 into a worktree
+jpr-review checkout --pr 42 [--repo owner/name]    # check out PR #42 (auto-clones when outside a repo)
 jpr-review state-path --pr 42 --repo owner/name    # print PR state directory
 ```
 

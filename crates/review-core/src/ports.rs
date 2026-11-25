@@ -24,12 +24,16 @@ pub enum ForgeWriteError {
     /// Validation error (HTTP 4xx / GraphQL refusal) that retrying unchanged
     /// will not fix.
     Rejected(String),
+    /// Missing or invalid `gh` authentication; must not queue or mark failed.
+    AuthRequired(String),
 }
 
 impl std::fmt::Display for ForgeWriteError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Transient(message) | Self::Rejected(message) => formatter.write_str(message),
+            Self::Transient(message) | Self::Rejected(message) | Self::AuthRequired(message) => {
+                formatter.write_str(message)
+            }
         }
     }
 }

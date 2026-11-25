@@ -100,7 +100,7 @@ pub fn run(base: Option<&str>, repo: Option<&str>, no_pr: bool, theme: Theme) ->
         no_pr,
         || forge.current_branch_pr(),
         |warning| super::narrate(theme, warning),
-    );
+    )?;
     println!("{}", serde_json::to_string(&output.to_json_value())?);
     Ok(())
 }
@@ -114,19 +114,20 @@ pub fn resolve_local_output(
     no_pr: bool,
     probe_pr: impl FnOnce() -> Result<Option<PullRequest>>,
     warn: impl FnOnce(&str),
-) -> LocalCommandOutput {
+) -> Result<LocalCommandOutput> {
     let worktree = info.worktree.to_string_lossy().into_owned();
     if base_override.is_none() && !no_pr {
         match probe_pr() {
             Ok(Some(pr)) => {
-                return LocalCommandOutput::Pr {
+                return Ok(LocalCommandOutput::Pr {
                     worktree,
                     repo: format!("{}/{}", pr.owner, pr.repo),
                     number: pr.number,
                     title: pr.title,
-                };
+                });
             }
             Ok(None) => {}
+            Err(error) if review_core::is_auth_error(&error) => return Err(error),
             Err(error) => {
                 warn(&format!(
                     "could not check for an open PR ({error:#}); continuing in local mode"
@@ -134,13 +135,13 @@ pub fn resolve_local_output(
             }
         }
     }
-    LocalCommandOutput::Local {
+    Ok(LocalCommandOutput::Local {
         worktree,
         branch: info.branch.clone(),
         base_ref: info.base_ref.clone(),
         base_sha: info.base_sha.clone(),
         repo: explicit_repo.or(inferred_repo).map(str::to_owned),
-    }
+    })
 }
 
 #[cfg(test)]
@@ -178,7 +179,8 @@ mod tests {
                 Ok(Some(sample_pr()))
             },
             |_| panic!("unexpected warning"),
-        );
+        )
+        .unwrap();
         assert!(!probed.load(Ordering::SeqCst));
         assert_eq!(
             output,
@@ -203,7 +205,8 @@ mod tests {
             false,
             || Ok(Some(sample_pr())),
             |_| panic!("unexpected warning"),
-        );
+        )
+        .unwrap();
         assert_eq!(
             output,
             LocalCommandOutput::Pr {
@@ -230,8 +233,28 @@ mod tests {
                 assert!(message.contains("offline"));
                 warned.store(true, Ordering::SeqCst);
             },
-        );
+        )
+        .unwrap();
         assert!(warned.load(Ordering::SeqCst));
         assert!(matches!(output, LocalCommandOutput::Local { .. }));
+    }
+
+    #[test]
+    fn bare_local_propagates_auth_error_instead_of_falling_back_to_local_mode() {
+        let error = resolve_local_output(
+            &sample_info(),
+            None,
+            None,
+            None,
+            false,
+            || {
+                Err(anyhow::Error::new(review_core::ForgeAuthError::new(
+                    "gh auth login",
+                )))
+            },
+            |_| panic!("must not warn and fall back on auth error"),
+        )
+        .unwrap_err();
+        assert!(review_core::is_auth_error(&error));
     }
 }

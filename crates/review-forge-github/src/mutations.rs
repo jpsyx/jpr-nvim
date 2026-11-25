@@ -91,6 +91,9 @@ fn build_rest_reply_endpoint(
 
 fn classify_write_error(error: &anyhow::Error) -> ForgeWriteError {
     let text = format!("{error:#}");
+    if review_core::is_auth_error(error) || review_core::is_gh_auth_failure_text(&text) {
+        return ForgeWriteError::AuthRequired(text);
+    }
     let lower = text.to_lowercase();
     let is_transient = [
         "timed out",

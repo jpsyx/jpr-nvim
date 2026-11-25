@@ -13,6 +13,8 @@ use crate::commands;
 pub fn answers_to_command(command_id: &str, answers: &Answers) -> Result<Command> {
     match command_id {
         "prs" => answers_to_prs(answers),
+        "owners" => Ok(Command::Owners),
+        "repos" => answers_to_repos(answers),
         "local" => answers_to_local(answers),
         "checkout" => answers_to_checkout(answers),
         "threads" => answers_to_threads(answers),
@@ -51,10 +53,12 @@ const fn command_id_for_command(command: &Command) -> &'static str {
         Command::Checkout { .. } => "checkout",
         Command::Local { .. } => "local",
         Command::Guide => "guide",
+        Command::Owners => "owners",
         Command::Threads { .. } => "threads",
         Command::Reply { .. } => "reply",
         Command::PrepassWrite { .. } => "prepass-write",
         Command::Prs { .. } => "prs",
+        Command::Repos { .. } => "repos",
         Command::Serve { .. } => "serve",
         Command::StatePath { .. } => "state-path",
     }
@@ -74,7 +78,9 @@ const fn has_ambient_socket_origin(command: &Command) -> bool {
         Command::Checkout { .. }
         | Command::Local { .. }
         | Command::Guide
+        | Command::Owners
         | Command::Prs { .. }
+        | Command::Repos { .. }
         | Command::Serve { .. }
         | Command::StatePath { .. } => false,
     }
@@ -88,7 +94,9 @@ fn clear_matching_ambient_socket(command: &mut Command, ambient_socket: &str) {
         Command::Checkout { .. }
         | Command::Local { .. }
         | Command::Guide
+        | Command::Owners
         | Command::Prs { .. }
+        | Command::Repos { .. }
         | Command::Serve { .. }
         | Command::StatePath { .. } => return,
     };
@@ -120,6 +128,24 @@ fn answers_to_prs(answers: &Answers) -> Result<Command> {
         bail!("limit must be at least 1");
     }
     Ok(Command::Prs { repo, limit })
+}
+
+fn answers_to_repos(answers: &Answers) -> Result<Command> {
+    let owner = if has_answer_value(answers, "owner_scope", "true") {
+        let login = require_non_empty(answers, "owner")?;
+        review_forge_github::discovery::validate_owner_login(&login)?;
+        Some(login)
+    } else {
+        None
+    };
+    let raw_limit = answers.get("limit").map_or("100", String::as_str).trim();
+    let limit: u32 = raw_limit
+        .parse()
+        .with_context(|| format!("{raw_limit:?} is not a valid limit"))?;
+    if limit == 0 {
+        bail!("limit must be at least 1");
+    }
+    Ok(Command::Repos { owner, limit })
 }
 
 fn answers_to_checkout(answers: &Answers) -> Result<Command> {
