@@ -11,6 +11,10 @@ assert(select(2, jpr.parse_pr_arg("123")) == nil, "a bare number names no reposi
 local url_number, url_repo = jpr.parse_pr_arg("https://github.com/octo/gadgets/pull/12/files")
 assert(url_number == 12 and url_repo == "octo/gadgets", "a URL names its repository: " .. tostring(url_repo))
 assert(jpr.parse_pr_arg("abc") == nil, "not a number")
+assert(jpr.parse_pr_arg("0") == nil, "zero is not a valid PR ID")
+assert(jpr.parse_pr_arg("#0") == nil, "hash zero is not a valid PR ID")
+assert(jpr.parse_pr_arg("-5") == nil, "negative number is not a valid PR ID")
+assert(jpr.parse_pr_arg("3.14") == nil, "float is not a valid PR ID")
 assert(jpr.parse_pr_arg(nil) == nil, "missing")
 
 local cargo_toml = table.concat(vim.fn.readfile(root .. "/Cargo.toml"), "\n") .. "\n["
@@ -155,6 +159,36 @@ package.loaded["jpr.session"] = {
 }
 jpr.command({ "open", "https://github.com/octo/gadgets/pull/12" })
 assert(opened.number == 12 and opened.repo == "octo/gadgets", ":Jpr open passes the URL's repository on: " .. vim.inspect(opened))
+
+opened = {}
+jpr.command({ "123" })
+assert(opened.number == 123 and opened.repo == nil, ":Jpr 123 aliases :Jpr open 123: " .. vim.inspect(opened))
+
+opened = {}
+jpr.command({ "#456" })
+assert(opened.number == 456 and opened.repo == nil, ":Jpr #456 aliases :Jpr open #456: " .. vim.inspect(opened))
+
+opened = {}
+jpr.command({ "https://github.com/octo/gadgets/pull/78" })
+assert(opened.number == 78 and opened.repo == "octo/gadgets", ":Jpr <url> aliases :Jpr open <url>: " .. vim.inspect(opened))
+
+local before_invalid_pr_id = #messages
+jpr.command({ "0" })
+assert(#messages == before_invalid_pr_id + 1 and messages[#messages].level == vim.log.levels.ERROR, ":Jpr 0 emits ERROR")
+assert(messages[#messages].text:find("invalid pull request", 1, true) ~= nil, messages[#messages].text)
+
+jpr.command({ "-7" })
+assert(messages[#messages].level == vim.log.levels.ERROR, ":Jpr -7 emits ERROR")
+assert(messages[#messages].text:find("invalid pull request", 1, true) ~= nil, messages[#messages].text)
+
+jpr.command({ "3.14" })
+assert(messages[#messages].level == vim.log.levels.ERROR, ":Jpr 3.14 emits ERROR")
+assert(messages[#messages].text:find("invalid pull request", 1, true) ~= nil, messages[#messages].text)
+
+jpr.command({ "123", "extra" })
+assert(messages[#messages].level == vim.log.levels.ERROR, ":Jpr 123 extra emits ERROR")
+assert(messages[#messages].text:find("too many arguments", 1, true) ~= nil, messages[#messages].text)
+
 package.loaded["jpr.session"] = nil
 
 local calls = {}

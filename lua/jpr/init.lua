@@ -122,8 +122,12 @@ function M.parse_pr_arg(arg)
         return nil
     end
     local repo, url_number = arg:match("^%a+://[^/]+/([^/]+/[^/]+)/pull/(%d+)")
-    local number = url_number or arg:match("^#?(%d+)$") or arg:match("/pull/(%d+)")
-    return number and tonumber(number) or nil, repo
+    local raw_number = url_number or arg:match("^#?(%d+)$") or arg:match("/pull/(%d+)")
+    local parsed_number = raw_number and tonumber(raw_number) or nil
+    if not parsed_number or parsed_number < 1 then
+        return nil
+    end
+    return parsed_number, repo
 end
 
 local function filter_by_prefix(items, prefix)
@@ -289,6 +293,13 @@ local ZERO_ARG_SESSION_METHODS = {
     close = "close_current",
 }
 
+local function is_numeric_pr_attempt(token)
+    if type(token) ~= "string" then
+        return false
+    end
+    return tonumber(token) ~= nil or token:match("^#%-?%d") ~= nil
+end
+
 local function dispatch_direct_subcommand(session, args, cmd_opts, context)
     local subcommand = args[1]
     local canonical_subcommand = SUBCOMMAND_ALIASES[subcommand] or subcommand
@@ -310,6 +321,16 @@ local function dispatch_direct_subcommand(session, args, cmd_opts, context)
             return M.error((":Jpr %s does not accept arguments"):format(subcommand))
         end
         return session[method_name]()
+    end
+    local pr_number, pr_repo = M.parse_pr_arg(subcommand)
+    if pr_number then
+        if #args > 1 then
+            return M.error(("too many arguments for :Jpr %s"):format(subcommand))
+        end
+        return session.open(pr_number, pr_repo)
+    end
+    if is_numeric_pr_attempt(subcommand) then
+        return M.error(("invalid pull request %q; expected a positive PR number, #number, or pull request URL"):format(subcommand))
     end
     M.error(("unknown subcommand %q; expected one of: %s"):format(tostring(subcommand), table.concat(M.subcommands, ", ")))
 end
