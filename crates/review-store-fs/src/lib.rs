@@ -10,10 +10,12 @@ mod atomic;
 mod format;
 mod lock;
 mod paths;
+mod retarget;
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, RwLock};
 
 use anyhow::{Context, Result};
 use review_core::ports::{LocalStoreState, ReviewStore, StoreSnapshot};
@@ -24,7 +26,8 @@ pub use format::{
     VIEWED_VERSION,
 };
 pub use lock::LOCAL_LOCK_FILE;
-pub use paths::state_dir;
+pub use paths::{local_state_dir, state_dir};
+pub use retarget::StateRootConfig;
 
 /// The file, in a pull request's state directory, that holds the daemon and
 /// what it last saw.
@@ -42,23 +45,43 @@ pub const LOCAL_FILE: &str = "local.json";
 /// request's state directory.
 pub const ROUNDS_FILE: &str = "rounds.jsonl";
 
-/// A [`ReviewStore`] in one directory.
+/// A [`ReviewStore`] in one directory, optionally retargetable from a local
+/// review directory to a pull request's canonical state directory.
 #[derive(Debug, Clone)]
 pub struct FsStore {
-    dir: PathBuf,
+    dir: Arc<RwLock<PathBuf>>,
+    state_root: Option<StateRootConfig>,
+    pending_retired_dir: Arc<Mutex<Option<PathBuf>>>,
 }
 
 impl FsStore {
     /// A store in `dir`, created on the first save.
     #[must_use]
     pub fn new(dir: impl Into<PathBuf>) -> Self {
-        Self { dir: dir.into() }
+        Self {
+            dir: Arc::new(RwLock::new(dir.into())),
+            state_root: None,
+            pending_retired_dir: Arc::new(Mutex::new(None)),
+        }
     }
 
-    /// The directory this store writes.
+    /// A store in `dir` that can retarget itself to `pr-<number>` under `state_root`.
     #[must_use]
-    pub fn dir(&self) -> &Path {
-        &self.dir
+    pub fn new_with_root(dir: impl Into<PathBuf>, state_root: StateRootConfig) -> Self {
+        Self {
+            dir: Arc::new(RwLock::new(dir.into())),
+            state_root: Some(state_root),
+            pending_retired_dir: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    /// The directory this store currently writes.
+    #[must_use]
+    pub fn current_dir(&self) -> PathBuf {
+        self.dir
+            .read()
+            .expect("FsStore directory lock is poisoned")
+            .clone()
     }
 
     /// Acquires `local.lock`, loads `local.json` (or default when absent),
@@ -68,12 +91,13 @@ impl FsStore {
         &self,
         mutator: impl FnOnce(&mut LocalStoreState) -> Result<T>,
     ) -> Result<T> {
-        lock::with_local_lock(&self.dir, || {
-            let local_path = self.dir.join(LOCAL_FILE);
+        let dir = self.current_dir();
+        lock::with_local_lock(&dir, || {
+            let local_path = dir.join(LOCAL_FILE);
             refuse_newer_file(&local_path, LOCAL_VERSION)?;
             let mut local = load_file(&local_path, format::decode_local)?.unwrap_or_default();
             let output = mutator(&mut local)?;
-            atomic::write_atomic(&self.dir, LOCAL_FILE, &format::encode_local(&local)?)?;
+            atomic::write_atomic(&dir, LOCAL_FILE, &format::encode_local(&local)?)?;
             Ok(output)
         })
     }
@@ -81,42 +105,35 @@ impl FsStore {
 
 impl ReviewStore for FsStore {
     fn load(&self) -> Result<StoreSnapshot> {
-        let session = load_file(&self.dir.join(SESSION_FILE), format::decode_session)?;
-        let files = load_file(&self.dir.join(VIEWED_FILE), format::decode_files)?;
-        let registry = load_file(&self.dir.join(GITHUB_FILE), format::decode_registry)?;
-        let local = load_file(&self.dir.join(LOCAL_FILE), format::decode_local)?;
-        Ok(StoreSnapshot {
-            session: session.unwrap_or_default(),
-            files: files.unwrap_or_default(),
-            registry: registry.unwrap_or_default(),
-            local: local.unwrap_or_default(),
-        })
+        let dir = self.current_dir();
+        load_snapshot_from_dir(&dir)
     }
 
     fn save(&self, snapshot: &StoreSnapshot) -> Result<()> {
+        let dir = self.current_dir();
         // Check every file before writing any, so a refusal changes nothing.
-        refuse_newer_file(&self.dir.join(SESSION_FILE), SESSION_VERSION)?;
-        refuse_newer_file(&self.dir.join(VIEWED_FILE), VIEWED_VERSION)?;
-        refuse_newer_file(&self.dir.join(GITHUB_FILE), GITHUB_VERSION)?;
-        refuse_newer_file(&self.dir.join(LOCAL_FILE), LOCAL_VERSION)?;
+        refuse_newer_file(&dir.join(SESSION_FILE), SESSION_VERSION)?;
+        refuse_newer_file(&dir.join(VIEWED_FILE), VIEWED_VERSION)?;
+        refuse_newer_file(&dir.join(GITHUB_FILE), GITHUB_VERSION)?;
+        refuse_newer_file(&dir.join(LOCAL_FILE), LOCAL_VERSION)?;
         let [github, session, viewed, local] = snapshot_to_encoded_files(snapshot)?;
-        fs::create_dir_all(&self.dir)
-            .with_context(|| format!("creating {}", self.dir.display()))?;
+        fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
         for (name, bytes) in [github, session, viewed] {
-            atomic::write_atomic(&self.dir, name, &bytes)?;
+            atomic::write_atomic(&dir, name, &bytes)?;
         }
-        lock::with_local_lock(&self.dir, || {
-            refuse_newer_file(&self.dir.join(LOCAL_FILE), LOCAL_VERSION)?;
-            atomic::write_atomic(&self.dir, local.0, &local.1)
+        lock::with_local_lock(&dir, || {
+            refuse_newer_file(&dir.join(LOCAL_FILE), LOCAL_VERSION)?;
+            atomic::write_atomic(&dir, local.0, &local.1)
         })
     }
 
     fn append_round(&self, round: &AgentRound) -> Result<()> {
-        let path = self.dir.join(ROUNDS_FILE);
+        let dir = self.current_dir();
+        let path = dir.join(ROUNDS_FILE);
         let mut line = serde_json::to_string(round)
             .with_context(|| format!("encoding round for {}", path.display()))?;
         line.push('\n');
-        lock::with_local_lock(&self.dir, || {
+        lock::with_local_lock(&dir, || {
             let mut file = open_rounds_append(&path)?;
             let previous_len = file
                 .metadata()
@@ -129,12 +146,13 @@ impl ReviewStore for FsStore {
                 let _ = file.set_len(previous_len);
                 return Err(error).with_context(|| format!("appending {}", path.display()));
             }
-            atomic::sync_dir(&self.dir)
+            atomic::sync_dir(&dir)
         })
     }
 
     fn rounds(&self) -> Result<Vec<AgentRound>> {
-        let path = self.dir.join(ROUNDS_FILE);
+        let dir = self.current_dir();
+        let path = dir.join(ROUNDS_FILE);
         let Some(bytes) = atomic::read_bytes(&path)? else {
             return Ok(Vec::new());
         };
@@ -155,6 +173,57 @@ impl ReviewStore for FsStore {
             })
             .collect()
     }
+
+    fn retarget_to_pr(
+        &self,
+        owner: &str,
+        repo: &str,
+        number: u64,
+    ) -> Result<Option<StoreSnapshot>> {
+        let Some(state_root) = self.state_root.as_ref() else {
+            return Ok(None);
+        };
+        let old_dir = self.current_dir();
+        let Some((target_dir, existing)) =
+            retarget::prepare_retarget_to_pr(state_root, &old_dir, owner, repo, number)?
+        else {
+            return Ok(None);
+        };
+        *self
+            .dir
+            .write()
+            .expect("FsStore directory lock is poisoned") = target_dir;
+        *self
+            .pending_retired_dir
+            .lock()
+            .expect("FsStore retired-dir lock is poisoned") = Some(old_dir);
+        Ok(existing)
+    }
+
+    fn finalize_retarget(&self) -> Result<()> {
+        let retired = self
+            .pending_retired_dir
+            .lock()
+            .expect("FsStore retired-dir lock is poisoned")
+            .take();
+        if let Some(old_dir) = retired {
+            retarget::retire_old_local_dir(&old_dir);
+        }
+        Ok(())
+    }
+}
+
+pub(crate) fn load_snapshot_from_dir(dir: &Path) -> Result<StoreSnapshot> {
+    let session = load_file(&dir.join(SESSION_FILE), format::decode_session)?;
+    let files = load_file(&dir.join(VIEWED_FILE), format::decode_files)?;
+    let registry = load_file(&dir.join(GITHUB_FILE), format::decode_registry)?;
+    let local = load_file(&dir.join(LOCAL_FILE), format::decode_local)?;
+    Ok(StoreSnapshot {
+        session: session.unwrap_or_default(),
+        files: files.unwrap_or_default(),
+        registry: registry.unwrap_or_default(),
+        local: local.unwrap_or_default(),
+    })
 }
 
 /// Every file of `snapshot`, encoded before any is written, in the order
@@ -173,7 +242,7 @@ fn snapshot_to_encoded_files(snapshot: &StoreSnapshot) -> Result<[(&'static str,
 }
 
 /// Opens `path` for append, creating it with owner-only (`0600`) permissions on Unix.
-fn open_rounds_append(path: &Path) -> Result<fs::File> {
+pub(crate) fn open_rounds_append(path: &Path) -> Result<fs::File> {
     let mut options = OpenOptions::new();
     options.create(true).append(true);
     #[cfg(unix)]
@@ -199,7 +268,7 @@ fn load_file<T>(path: &Path, decode: fn(&[u8]) -> Result<T>) -> Result<Option<T>
 
 /// Fails when a newer build wrote `path`, so saving never drops what it added.
 /// A missing file, or one without a readable version, is left for the save to replace.
-fn refuse_newer_file(path: &Path, known: u32) -> Result<()> {
+pub(crate) fn refuse_newer_file(path: &Path, known: u32) -> Result<()> {
     let Some(bytes) = atomic::read_bytes(path)? else {
         return Ok(());
     };

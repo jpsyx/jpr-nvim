@@ -76,9 +76,16 @@ pub fn github_thread(id: &str, path: &str) -> Thread {
 }
 
 #[derive(Debug, Default)]
+enum CurrentBranchPr {
+    #[default]
+    UsePr,
+    Override(Option<Box<PullRequest>>),
+}
+
+#[derive(Debug, Default)]
 struct ForgeState {
     pr: Option<PullRequest>,
-    current_branch_pr_override: Option<Option<PullRequest>>,
+    current_branch_pr: CurrentBranchPr,
     pinned_repo: Option<String>,
     snapshot: ForgeSnapshot,
     failure: Option<String>,
@@ -125,12 +132,12 @@ impl FakeForge {
     pub fn clear_pr(&self) {
         let mut state = self.lock();
         state.pr = None;
-        state.current_branch_pr_override = Some(None);
+        state.current_branch_pr = CurrentBranchPr::Override(None);
     }
 
     /// Overrides what `current_branch_pr` returns.
     pub fn set_current_branch_pr(&self, pr: Option<PullRequest>) {
-        self.lock().current_branch_pr_override = Some(pr);
+        self.lock().current_branch_pr = CurrentBranchPr::Override(pr.map(Box::new));
     }
 
     /// Repository pinned via [`Forge::pin_repo`], if any.
@@ -199,9 +206,9 @@ impl Forge for FakeForge {
         if let Some(message) = state.failure.as_ref().or(state.read_failure.as_ref()) {
             return Err(anyhow!("{message}"));
         }
-        Ok(match &state.current_branch_pr_override {
-            Some(overridden) => overridden.clone(),
-            None => state.pr.clone(),
+        Ok(match &state.current_branch_pr {
+            CurrentBranchPr::UsePr => state.pr.clone(),
+            CurrentBranchPr::Override(overridden) => overridden.as_deref().cloned(),
         })
     }
 
