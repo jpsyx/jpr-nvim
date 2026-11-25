@@ -48,12 +48,13 @@ local function add_words(column, cell, gutter)
     end
 end
 
-local function record_code_row(column, path, gutter_length, text)
+local function record_code_row(column, path, gutter_length, text, change)
     column.code_rows[#column.code_rows + 1] = {
         line = #column.lines - 1,
         path = path,
         gutter_length = gutter_length,
         text = text,
+        change = change,
     }
 end
 
@@ -63,7 +64,7 @@ local function add_unified_row(column, row)
     local gutter = ("%5s %5s %s "):format(row.left and row.left.line or "", row.right and row.right.line or "", SIGN[cell.change])
     add_line(column, gutter .. cell.text, LINE_GROUP[cell.change])
     add_words(column, cell, #gutter)
-    record_code_row(column, row.path, #gutter, cell.text)
+    record_code_row(column, row.path, #gutter, cell.text, cell.change)
 end
 
 --- One side of a split row, or a filler line when that side has none.
@@ -74,7 +75,7 @@ local function add_split_cell(column, cell, path)
     local gutter = ("%5d %s "):format(cell.line, SIGN[cell.change])
     add_line(column, gutter .. cell.text, LINE_GROUP[cell.change])
     add_words(column, cell, #gutter)
-    record_code_row(column, path, #gutter, cell.text)
+    record_code_row(column, path, #gutter, cell.text, cell.change)
 end
 
 local function add_line_to_all_columns(columns, text, group)
