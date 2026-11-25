@@ -25,7 +25,7 @@ assert(
 assert(
     vim.deep_equal(
         jpr.complete("", "Jpr "),
-        { "open", "sync", "toggle", "stream", "comment", "suggest", "expand", "conversation", "submit", "push", "agent", "send", "prepass", "close", "keys" }
+        { "open", "local", "sync", "toggle", "stream", "comment", "suggest", "expand", "conversation", "submit", "push", "agent", "send", "prepass", "close", "keys" }
     ),
     "all subcommands"
 )

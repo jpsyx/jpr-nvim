@@ -88,6 +88,10 @@ local function build_title_from_anchor(anchor, origin)
     return badge .. " " .. location
 end
 
+local function is_unlinked_local_session(session)
+    return type(session) == "table" and session.mode == "local" and not (session.view and session.view.pr)
+end
+
 local function is_local_only_anchor(session, anchor)
     if type(anchor) ~= "table" or type(anchor.file) ~= "string" or anchor.file == "" then
         return false
@@ -101,7 +105,10 @@ local function is_local_only_anchor(session, anchor)
     return false
 end
 
-local function build_footer(allow_destination_toggle, is_local_only)
+local function build_footer(allow_destination_toggle, is_local_only, is_unlinked_local)
+    if is_unlinked_local then
+        return " <C-s> save · local review (no linked PR) · q cancel "
+    end
     if is_local_only then
         return " <C-s> save · local only (unpushed file) · q cancel "
     end
@@ -194,7 +201,7 @@ local function open_editor(session, opts)
         border = "rounded",
         title = " " .. opts.title .. " ",
         title_pos = "center",
-        footer = build_footer(opts.allow_destination_toggle, opts.is_local_only),
+        footer = build_footer(opts.allow_destination_toggle, opts.is_local_only, opts.is_unlinked_local),
         footer_pos = "center",
     })
     vim.api.nvim_set_option_value("wrap", true, { win = win, scope = "local" })
@@ -224,16 +231,19 @@ function M.open_new(session, anchor, opts)
         return require("jpr.session").report_read_only(session)
     end
     local open_opts = opts or {}
+    local is_unlinked_local = is_unlinked_local_session(session)
     local is_local_only = is_local_only_anchor(session, anchor)
+    local is_locked_local = is_unlinked_local or is_local_only
     local open_with_body = function(initial_text)
-        local origin = is_local_only and "local" or (open_opts.initial_origin or session.compose_destination or "github")
+        local origin = is_locked_local and "local" or (open_opts.initial_origin or session.compose_destination or "github")
         open_editor(session, {
             title = build_title_from_anchor(anchor, origin),
             initial_text = initial_text,
             anchor = anchor,
             origin = origin,
-            allow_destination_toggle = not is_local_only,
+            allow_destination_toggle = not is_locked_local,
             is_local_only = is_local_only,
+            is_unlinked_local = is_unlinked_local,
             on_submit = function(body, submit_origin)
                 require("jpr.session").request(session, "comment", {
                     anchor = anchor,

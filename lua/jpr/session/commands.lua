@@ -21,8 +21,9 @@ local function sync_session(session_mod, session)
         return session_mod.report_read_only(session)
     end
     if not session.client then
+        local reopen_hint = session.number and (":Jpr open %d"):format(session.number) or ":Jpr local"
         return jpr().error(
-            ("the review engine for PR #%d is not running; run :Jpr open %d"):format(session.number, session.number)
+            ("the review engine for %s is not running; run %s"):format(crash.build_session_label(session), reopen_hint)
         )
     end
     session.client:request("sync", nil, function(sync_error, view)
@@ -30,7 +31,11 @@ local function sync_session(session_mod, session)
             if session.loading then
                 require("jpr.views.loading").close(session)
             end
-            return jpr().error("sync failed: " .. crash.build_clean_text_from_raw(sync_error.message))
+            local clean_message = crash.build_clean_text_from_raw(sync_error.message)
+            if session.mode == "local" and clean_message:find("no open pull request found", 1, true) ~= nil then
+                return jpr().info(clean_message)
+            end
+            return jpr().error("sync failed: " .. clean_message)
         end
         session_mod.show(session, view)
     end)

@@ -23,15 +23,22 @@ end
 
 --- Builds a concise statusline summary for `session`, or `""` when `session` is nil.
 function M.build_statusline_from_session(session)
-    if type(session) ~= "table" or type(session.number) ~= "number" then
+    if type(session) ~= "table" then
         return ""
     end
     local view = type(session.view) == "table" and session.view or {}
-    local segments = { ("PR #%d"):format(session.number) }
+    local is_local = type(session.number) ~= "number"
+    local local_ctx = type(view.localContext) == "table" and view.localContext or nil
+    if is_local and session.mode ~= "local" and local_ctx == nil then
+        return ""
+    end
+    local branch = (local_ctx and local_ctx.branch) or session.branch or "local"
+    local prefix = is_local and ("LOCAL " .. tostring(branch)) or ("PR #" .. tostring(session.number))
+    local segments = { prefix }
     if session.is_read_only == true or view.isReadOnly == true then
         segments[#segments + 1] = "[read-only]"
     end
-    if type(view.pr) ~= "table" then
+    if type(view.pr) ~= "table" and local_ctx == nil then
         segments[#segments + 1] = "Loading…"
         return table.concat(segments, " · ")
     end

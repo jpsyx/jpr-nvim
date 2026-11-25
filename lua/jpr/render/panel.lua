@@ -107,7 +107,7 @@ end
 
 --- Adds one file's line to `content`: indent, viewed mark, modified mark, name,
 --- counts, threads, and optional local-only badge, with their highlights.
-local function add_file_line(content, file, name, indent, depth, parent_dir)
+local function add_file_line(content, file, name, indent, depth, parent_dir, is_unlinked_local)
     local mark = VIEWED_MARK[file.viewed] or " "
     local is_modified = file.isModified == true
     local modified_icon = "✎"
@@ -116,7 +116,7 @@ local function add_file_line(content, file, name, indent, depth, parent_dir)
     local stats = ("%s -%d"):format(plus, file.deletions)
     local threads_badge = M.build_threads_badge_from_file(file)
     local threads_suffix = threads_badge and (" " .. threads_badge) or ""
-    local local_badge = file.isLocalOnly == true and "[local]" or nil
+    local local_badge = (not is_unlinked_local and file.isLocalOnly == true) and "[local]" or nil
     local local_suffix = local_badge and (" " .. local_badge) or ""
     local shown_name = M.one_line(name)
     content.add_line(("%s%s %s%s  %s%s%s"):format(indent, mark, modified_prefix, shown_name, stats, threads_suffix, local_suffix))
@@ -175,7 +175,7 @@ local function add_directory_line(content, row, dir_path, parent_dir, is_collaps
     content.selectable_lines[#content.selectable_lines + 1] = line_1based
 end
 
-local function render_tree_rows(content, view, collapsed_dirs)
+local function render_tree_rows(content, view, collapsed_dirs, is_unlinked_local)
     local files = view.files or {}
     local tree = view.tree or M.create_flat_tree_from_files(files)
     local dir_stack = {}
@@ -193,7 +193,7 @@ local function render_tree_rows(content, view, collapsed_dirs)
         local parent_dir = #dir_stack > 0 and dir_stack[#dir_stack].path or nil
         local file = row.file and files[row.file + 1]
         if file then
-            add_file_line(content, file, row.name, ("  "):rep(row.depth), row.depth, parent_dir)
+            add_file_line(content, file, row.name, ("  "):rep(row.depth), row.depth, parent_dir, is_unlinked_local)
         else
             local segment = tostring(row.name):gsub("/+$", "")
             local dir_path = parent_dir and (parent_dir .. "/" .. segment) or segment
@@ -300,18 +300,31 @@ function M.build(view, now, opts)
         end
     end
     local pr = view.pr
-    content.add_line(pr and ("#%d %s"):format(pr.number, M.one_line(pr.title)) or "Loading pull request…", "JprTitle")
+    local local_ctx = type(view.localContext) == "table" and view.localContext or nil
+    local is_unlinked_local = pr == nil and local_ctx ~= nil
+    if pr then
+        content.add_line(("#%d %s"):format(pr.number, M.one_line(pr.title)), "JprTitle")
+    elseif local_ctx then
+        content.add_line(("LOCAL %s vs %s"):format(M.one_line(local_ctx.branch or ""), M.one_line(local_ctx.baseRef or "")), "JprTitle")
+    else
+        content.add_line("Loading pull request…", "JprTitle")
+    end
     add_progress_bar_line(content, view)
     content.add_line(M.build_counts_text(view), "JprMuted")
-    content.add_line(M.sync_text(view.sync, now))
+    if is_unlinked_local then
+        content.add_line("local only · :Jpr sync to link PR", "JprMuted")
+    else
+        content.add_line(M.sync_text(view.sync, now))
+    end
     content.add_line("")
     local conversation_count = view.conversationCount or 0
     local conversation_suffix = conversation_count > 0 and (" [%d]"):format(conversation_count) or ""
-    content.add_line("  💬 Conversation" .. conversation_suffix, "JprTitle")
+    local conversation_title = is_unlinked_local and "  💬 Local Notes" or "  💬 Conversation"
+    content.add_line(conversation_title .. conversation_suffix, "JprTitle")
     local conversation_line = #content.lines
     content.rows[conversation_line] = { kind = "conversation" }
     content.selectable_lines[#content.selectable_lines + 1] = conversation_line
-    render_tree_rows(content, view, collapsed_dirs)
+    render_tree_rows(content, view, collapsed_dirs, is_unlinked_local)
     return {
         lines = content.lines,
         highlights = content.highlights,

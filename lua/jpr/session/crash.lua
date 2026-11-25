@@ -17,15 +17,36 @@ function M.build_clean_text_from_raw(raw_text)
     return vim.trim((collapsed:gsub("%c", "")))
 end
 
---- Builds the state-directory crash log file path for pull request `pr_number`.
-function M.build_log_path_from_number(pr_number)
-    return vim.fn.stdpath("state") .. "/jpr/engine-pr-" .. tostring(pr_number) .. ".log"
+local function sanitize_log_slug(value)
+    local slug = tostring(value or "local"):gsub("[^%w%-_]+", "-")
+    slug = slug:gsub("^%-+", ""):gsub("%-+$", "")
+    return slug ~= "" and slug or "local"
+end
+
+--- Human-readable label for `session` (`PR #7` or `local review (feat/x)`).
+function M.build_session_label(session)
+    if type(session) == "table" and type(session.number) == "number" then
+        return ("PR #%d"):format(session.number)
+    end
+    local branch = type(session) == "table"
+            and ((session.view and session.view.localContext and session.view.localContext.branch) or session.branch)
+        or "worktree"
+    return ("local review (%s)"):format(M.build_clean_text_from_raw(branch))
+end
+
+--- Builds the state-directory crash log file path for pull request `pr_number`
+--- or local branch identifier when `pr_number` is nil/non-numeric.
+function M.build_log_path_from_number(pr_number, branch)
+    if type(pr_number) == "number" then
+        return vim.fn.stdpath("state") .. "/jpr/engine-pr-" .. tostring(pr_number) .. ".log"
+    end
+    return vim.fn.stdpath("state") .. "/jpr/engine-local-" .. sanitize_log_slug(branch) .. ".log"
 end
 
 --- Appends a timestamped crash entry (`exit_code` and `stderr`) for `pr_number`
 --- with mode `0700` directory / `0600` file permissions and returns the path.
-function M.append_crash_log(pr_number, exit_code, stderr)
-    local log_path = M.build_log_path_from_number(pr_number)
+function M.append_crash_log(pr_number, exit_code, stderr, branch)
+    local log_path = M.build_log_path_from_number(pr_number, branch)
     pcall(vim.fn.mkdir, vim.fs.dirname(log_path), "p", tonumber("700", 8))
     local timestamp = os.date("!%Y-%m-%dT%H:%M:%SZ")
     local lines = { ("[%s] engine exited with code %s"):format(timestamp, tostring(exit_code)) }
@@ -50,8 +71,8 @@ function M.transition_to_read_only(session, exit_code, log_path, extra_detail)
     local clean_detail = M.build_clean_text_from_raw(extra_detail)
     local suffix = clean_detail ~= "" and (": " .. clean_detail) or ""
     jpr().error(
-        ("the review engine for PR #%d crashed again (exit %s)%s; session is now read-only (see %s)"):format(
-            session.number,
+        ("the review engine for %s crashed again (exit %s)%s; session is now read-only (see %s)"):format(
+            M.build_session_label(session),
             tostring(exit_code),
             suffix,
             log_path
@@ -68,17 +89,18 @@ function M.handle_unexpected_exit(session, exit_code, stderr, callbacks)
     if callbacks.is_registered and not callbacks.is_registered(session) then
         return
     end
+    local label = M.build_session_label(session)
     if not session.ready then
         callbacks.forget(session)
         local clean_stderr = M.build_clean_text_from_raw(stderr)
         local detail = clean_stderr ~= "" and (": " .. clean_stderr) or ""
-        return jpr().error(("the review engine for PR #%d stopped (exit %s)%s"):format(session.number, tostring(exit_code), detail))
+        return jpr().error(("the review engine for %s stopped (exit %s)%s"):format(label, tostring(exit_code), detail))
     end
-    local log_path = M.append_crash_log(session.number, exit_code, stderr)
+    local log_path = M.append_crash_log(session.number, exit_code, stderr, session.branch)
     if not session.has_restarted then
         session.has_restarted = true
         session.client = nil
-        jpr().warn(("the review engine for PR #%d exited (code %s); restarting once (log: %s)"):format(session.number, tostring(exit_code), log_path))
+        jpr().warn(("the review engine for %s exited (code %s); restarting once (log: %s)"):format(label, tostring(exit_code), log_path))
         local did_spawn = callbacks.spawn(session)
         if not did_spawn then
             M.transition_to_read_only(session, exit_code, log_path)

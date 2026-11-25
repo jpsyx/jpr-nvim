@@ -20,12 +20,26 @@ function M.current()
     return M.by_tab[vim.api.nvim_get_current_tabpage()]
 end
 
+--- Unique buffer-name suffix for `session`: numeric PR number or `local-<tab>`.
+function M.buf_key(session)
+    if type(session) == "table" and type(session.number) == "number" then
+        return tostring(session.number)
+    end
+    return "local-" .. tostring(type(session) == "table" and session.tab or 0)
+end
+
+--- Human-readable label for `session` (`PR #7` or `local review (branch)`).
+function M.display_label(session)
+    return crash.build_session_label(session)
+end
+
 --- Reports that `session` is in read-only mode after an engine crash.
 function M.report_read_only(session)
+    local reopen_hint = session.number and (":Jpr open %d"):format(session.number) or ":Jpr local"
     return jpr().error(
-        ("PR #%d is in read-only mode after an engine crash; run :Jpr close and :Jpr open %d"):format(
-            session.number,
-            session.number
+        ("%s is in read-only mode after an engine crash; run :Jpr close and %s"):format(
+            M.display_label(session),
+            reopen_hint
         )
     )
 end
@@ -45,8 +59,9 @@ function M.request(session, method, params, on_result, on_error)
         if on_error then
             on_error()
         end
+        local reopen_hint = session.number and (":Jpr open %d"):format(session.number) or ":Jpr local"
         return jpr().error(
-            ("the review engine for PR #%d is not running; run :Jpr open %d"):format(session.number, session.number)
+            ("the review engine for %s is not running; run %s"):format(M.display_label(session), reopen_hint)
         )
     end
     session.client:request(method, params, function(request_error, result)
@@ -128,7 +143,7 @@ local function fail_handshake(session, client, error_message)
     if session.has_restarted and session.ready then
         session.client = nil
         client:stop()
-        local log_path = crash.append_crash_log(session.number, "handshake", error_message)
+        local log_path = crash.append_crash_log(session.number, "handshake", error_message, session.branch)
         return crash.transition_to_read_only(session, "handshake", log_path, error_message)
     end
     forget(session)
@@ -193,20 +208,33 @@ local function handshake(session, client)
                 M.show(session, view)
             end
         end)
-        M.sync(session)
+        if session.mode ~= "local" then
+            M.sync(session)
+        end
     end)
 end
 
-local function spawn_engine(session)
-    local spawned_client
-    local client, spawn_error = rpc.start({
+local function build_serve_args_from_session(session)
+    if session.mode == "local" then
+        local args = { jpr().binary_path(), "serve", "--local" }
+        if type(session.base_ref) == "string" and session.base_ref ~= "" then
+            vim.list_extend(args, { "--base", session.base_ref })
+        end
+        return args
+    end
+    return {
         jpr().binary_path(),
         "serve",
         "--pr",
         tostring(session.number),
         "--repo",
         session.repo,
-    }, {
+    }
+end
+
+local function spawn_engine(session)
+    local spawned_client
+    local client, spawn_error = rpc.start(build_serve_args_from_session(session), {
         cwd = session.worktree,
         on_notification = function(method, params)
             if session.closing or session.client ~= spawned_client then
@@ -277,6 +305,7 @@ local function prepare_session_tab(info, pending_session)
         session.tab = vim.api.nvim_get_current_tabpage()
         session.placeholder_buf = vim.api.nvim_get_current_buf()
     end
+    session.mode = "pr"
     session.number, session.repo, session.worktree = info.number, info.repo, info.worktree
     session.view, session.process = initial_view, nil
     -- Escaped: Ex commands expand `%` and `#` in a path.
@@ -317,28 +346,84 @@ function M.start(info, pending_session)
     spawn_engine(session)
 end
 
---- Whether the pull request's head or base commit moved between
+--- Opens a tab for an unlinked local worktree review and starts `serve --local`.
+--- info: { worktree, branch, baseRef, baseSha, repo? }.
+function M.start_local(info)
+    jpr().define_highlights()
+    setup_session_autocmds()
+    vim.cmd("tabnew")
+    local session = {
+        mode = "local",
+        tab = vim.api.nvim_get_current_tabpage(),
+        placeholder_buf = vim.api.nvim_get_current_buf(),
+        worktree = info.worktree,
+        branch = info.branch,
+        base_ref = info.baseRef,
+        repo = info.repo,
+        view = {
+            localContext = {
+                branch = info.branch,
+                baseRef = info.baseRef,
+                baseSha = info.baseSha,
+                repo = info.repo,
+            },
+        },
+    }
+    local is_tcd_ok, tcd_error = pcall(vim.cmd.tcd, vim.fn.fnameescape(info.worktree))
+    if not is_tcd_ok then
+        forget(session)
+        return jpr().error("could not enter worktree: " .. crash.build_clean_text_from_raw(tcd_error))
+    end
+    require("jpr.views.diff").attach(session)
+    local is_opened, open_error = pcall(panel.open, session)
+    if not is_opened then
+        forget(session)
+        return jpr().error("could not open the panel: " .. tostring(open_error))
+    end
+    spawn_engine(session)
+end
+
+--- Whether the pull request's head/base commit or local base SHA moved between
 --- `previous_view` and `view`, which changes every diff.
 function M.have_commits_changed(previous_view, view)
     local previous_pr, current_pr = previous_view and previous_view.pr, view.pr
-    if not previous_pr or not current_pr then
-        return false
+    if previous_pr and current_pr then
+        if previous_pr.headSha == nil and previous_pr.baseSha == nil then
+            return false
+        end
+        return previous_pr.headSha ~= current_pr.headSha or previous_pr.baseSha ~= current_pr.baseSha
     end
-    if previous_pr.headSha == nil and previous_pr.baseSha == nil then
-        return false
+    local previous_local = previous_view and previous_view.localContext
+    local current_local = view.localContext
+    if previous_local and current_local then
+        return previous_local.baseSha ~= current_local.baseSha
     end
-    return previous_pr.headSha ~= current_pr.headSha or previous_pr.baseSha ~= current_pr.baseSha
+    return (previous_local ~= nil and current_pr ~= nil)
+end
+
+local function upgrade_local_session_to_pr(session, pr)
+    session.mode = "pr"
+    session.number = pr.number
+    if type(pr.owner) == "string" and type(pr.repo) == "string" then
+        session.repo = pr.owner .. "/" .. pr.repo
+    end
+    local title = type(pr.title) == "string" and pr.title or ""
+    local suffix = title ~= "" and (": " .. crash.build_clean_text_from_raw(title)) or ""
+    jpr().info(("Linked to PR #%d%s"):format(pr.number, suffix))
 end
 
 --- Keeps `view` as the session's latest and redraws from it: the panel
---- always, and the stream and the diffs once the pull request is known (the
---- stream opens on the first such view, and is fetched again when it changes).
+--- always, and the stream and the diffs once the PR or local context is known.
 function M.show(session, view)
     if session.is_read_only and type(view) == "table" then
         view.isReadOnly = true
     end
     local previous_view = session.view
     local has_synced_pr = type(view.pr) == "table"
+    local has_local_context = type(view.localContext) == "table"
+    if has_synced_pr and session.mode == "local" then
+        upgrade_local_session_to_pr(session, view.pr)
+    end
     if
         not has_synced_pr
         and previous_view
@@ -350,7 +435,7 @@ function M.show(session, view)
     end
     session.view = view
     panel.render(session, view)
-    if not has_synced_pr or session.is_read_only then
+    if (not has_synced_pr and not has_local_context) or session.is_read_only then
         return
     end
     local stream = require("jpr.views.stream")
@@ -391,6 +476,7 @@ function M.on_exit(session, code, stderr, exited_client)
 end
 
 require("jpr.session.open").attach(M)
+require("jpr.session.open_local").attach(M)
 require("jpr.session.commands").attach(M, forget)
 require("jpr.session.comments").attach(M)
 

@@ -227,6 +227,10 @@ local function dispatch_optional_arg_subcommand(session, subcommand, argument, c
     if subcommand == "open" then
         return dispatch_open_subcommand(session, argument, context)
     end
+    if subcommand == "local" then
+        local base_ref = (type(argument) == "string" and vim.trim(argument) ~= "") and vim.trim(argument) or nil
+        return session.open_local(base_ref)
+    end
     if subcommand == "toggle" then
         if argument == nil or argument == "" then
             return session.toggle_view()
@@ -245,7 +249,7 @@ local function dispatch_optional_arg_subcommand(session, subcommand, argument, c
     return nil
 end
 
-local OPTIONAL_ARG_SUBCOMMANDS = { open = true, toggle = true, comment = true, agent = true }
+local OPTIONAL_ARG_SUBCOMMANDS = { open = true, ["local"] = true, toggle = true, comment = true, agent = true }
 local ZERO_ARG_SESSION_METHODS = {
     sync = "sync_current",
     stream = "stream_current",

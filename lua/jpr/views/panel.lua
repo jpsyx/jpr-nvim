@@ -222,7 +222,8 @@ end
 --- Opens the panel on the left of the current tab for `session`.
 function M.open(session)
     local buf = vim.api.nvim_create_buf(false, true)
-    local named, name_err = pcall(vim.api.nvim_buf_set_name, buf, ("jpr://panel/%d"):format(session.number))
+    local buf_key = require("jpr.session").buf_key(session)
+    local named, name_err = pcall(vim.api.nvim_buf_set_name, buf, "jpr://panel/" .. buf_key)
     if not named then
         vim.api.nvim_buf_delete(buf, { force = true })
         error(name_err, 0)

@@ -1,4 +1,4 @@
--- Declarative schema for all 15 `:Jpr` subcommands, driving the floating
+-- Declarative schema for all 16 `:Jpr` subcommands, driving the floating
 -- command palette, interactive steppers, and subcommand argument completion.
 local M = {}
 
@@ -270,12 +270,59 @@ local function create_keys_command_spec()
     }
 end
 
---- Builds the ordered list of declarative specs for all 15 `:Jpr` subcommands.
+local function validate_local_base_ref(value)
+    local trimmed = vim.trim(tostring(value or ""))
+    if trimmed == "" then
+        return false, "Enter a git ref such as develop, main, or HEAD."
+    end
+    if trimmed:sub(1, 1) == "-" or trimmed:find("%s") ~= nil or trimmed:find("%c") ~= nil then
+        return false, "Base git ref cannot start with '-' or contain whitespace."
+    end
+    return true
+end
+
+local function create_local_command_spec()
+    return {
+        id = "local",
+        label = "Review Current Worktree",
+        help = "Review the current worktree against its base branch (auto-attaches if an open PR exists).",
+        requires_session = false,
+        steps = {
+            {
+                id = "base_mode",
+                label = "Base Branch",
+                help = "Auto-detect the base branch (and attach to an open PR if one exists) or pick a custom ref.",
+                kind = "select",
+                default = "auto",
+                options = {
+                    { value = "auto", label = "Auto-detect base branch", badge = "[auto]", help = "Use develop if present else main, and auto-attach if an open PR exists." },
+                    { value = "custom", label = "Custom git ref (local only)", badge = "[custom]", help = "Diff against a specific git ref such as HEAD; stays local-only." },
+                },
+            },
+            {
+                id = "base",
+                label = "Base Git Ref",
+                help = "Enter the git ref to diff the current worktree against (for example develop, main, or HEAD).",
+                kind = "text",
+                default = "HEAD",
+                when = function(answers) return answers.base_mode == "custom" end,
+                validate = validate_local_base_ref,
+            },
+        },
+        execute = function(answers)
+            local base_ref = answers.base_mode == "custom" and vim.trim(tostring(answers.base or "")) or nil
+            return session_module().open_local(base_ref)
+        end,
+    }
+end
+
+--- Builds the ordered list of declarative specs for all 16 `:Jpr` subcommands.
 --- @return table[]
 function M.create_command_specs()
     return {
         create_open_command_spec(),
-        create_session_action_spec("sync", "Sync with GitHub", "Fetch the latest pull request commits, files, and review threads from GitHub.", "sync_current"),
+        create_local_command_spec(),
+        create_session_action_spec("sync", "Sync with GitHub", "Sync with GitHub (or detect and link an open PR when reviewing locally).", "sync_current"),
         create_toggle_command_spec(),
         create_session_action_spec("stream", "Open Stream View", "View all changed files stacked continuously in a single scrollable diff stream.", "stream_current"),
         create_comment_command_spec(),
@@ -304,7 +351,7 @@ function M.find_command_spec(id)
     return nil
 end
 
---- Returns the ordered list of all 15 `:Jpr` subcommand IDs.
+--- Returns the ordered list of all 16 `:Jpr` subcommand IDs.
 --- @return string[]
 function M.list_command_ids()
     local ids = {}

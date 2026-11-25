@@ -73,11 +73,14 @@ function M.create_agent_env_from_session(binary_path, socket, pr_number, current
         local binary_directory = vim.fn.fnamemodify(binary_path, ":p:h")
         updated_path = M.build_path_from_directory(binary_directory, active_path)
     end
-    return {
+    local env = {
         JPR_SOCKET = tostring(socket or ""),
-        JPR_PR = tostring(pr_number),
         PATH = updated_path,
     }
+    if pr_number ~= nil then
+        env.JPR_PR = tostring(pr_number)
+    end
+    return env
 end
 
 return M

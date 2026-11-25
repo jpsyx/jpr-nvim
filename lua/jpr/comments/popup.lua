@@ -168,6 +168,9 @@ local function promote_current_thread(session)
     if session.is_read_only then
         return require("jpr.session").report_read_only(session)
     end
+    if session.mode == "local" and not (session.view and session.view.pr) then
+        return require("jpr").info("cannot promote to GitHub in local review mode; run :Jpr sync once a PR is open")
+    end
     local entry = current_entry(session)
     if not entry then
         return

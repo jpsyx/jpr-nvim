@@ -55,19 +55,30 @@ end
 local function create_layout_from_threads(session, threads)
     local pr_threads = filter_pr_threads(threads)
     local layout = render.create_message_layout()
-    layout.add(("#%d PR Conversation (%d comments)"):format(session.number, count_messages(pr_threads)), "JprTitle")
+    local is_local = session.mode == "local" and not (session.view and session.view.pr)
+    local title = is_local
+            and ("LOCAL %s Notes (%d comments)"):format(tostring(session.branch or "worktree"), count_messages(pr_threads))
+        or ("#%d PR Conversation (%d comments)"):format(session.number, count_messages(pr_threads))
+    layout.add(title, "JprTitle")
     layout.add("")
     if #pr_threads == 0 then
-        layout.add("  (no PR conversation comments yet; press c to post one)", "JprMuted")
+        local empty_hint = is_local and "  (no local notes yet; press c to add one)"
+            or "  (no PR conversation comments yet; press c to post one)"
+        layout.add(empty_hint, "JprMuted")
         layout.add("")
     else
         for _, thread in ipairs(pr_threads) do
             append_thread(layout, thread)
         end
     end
-    local footer = has_local_thread(pr_threads)
-            and "[c]omment  [r]eply  [e]dit  [d]elete  [p]romote  [s]end  [+]react  [X]retry  [q]uit"
-        or "[c]omment  [e]dit  [d]elete  [+]react  [X]retry  [q]uit"
+    local footer
+    if is_local then
+        footer = "[c]omment  [r]eply  [e]dit  [d]elete  [s]end  [q]uit"
+    elseif has_local_thread(pr_threads) then
+        footer = "[c]omment  [r]eply  [e]dit  [d]elete  [p]romote  [s]end  [+]react  [X]retry  [q]uit"
+    else
+        footer = "[c]omment  [e]dit  [d]elete  [+]react  [X]retry  [q]uit"
+    end
     layout.add(footer, "JprMuted")
     return layout
 end
@@ -146,6 +157,9 @@ end
 local function promote_comment_thread(session)
     if session.is_read_only then
         return require("jpr.session").report_read_only(session)
+    end
+    if session.mode == "local" and not (session.view and session.view.pr) then
+        return require("jpr").info("cannot promote to GitHub in local review mode; run :Jpr sync once a PR is open")
     end
     local entry = current_entry(session)
     if not entry then
@@ -245,7 +259,8 @@ local function get_or_create_state(session)
         return existing
     end
     local buf = vim.api.nvim_create_buf(false, true)
-    pcall(vim.api.nvim_buf_set_name, buf, ("jpr://conversation/%d"):format(session.number))
+    local buf_key = require("jpr.session").buf_key(session)
+    pcall(vim.api.nvim_buf_set_name, buf, "jpr://conversation/" .. buf_key)
     vim.bo[buf].buftype = "nofile"
     vim.bo[buf].filetype = "markdown"
     vim.bo[buf].modifiable = true

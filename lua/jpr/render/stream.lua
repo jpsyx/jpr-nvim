@@ -267,9 +267,12 @@ end
 --- same key draws the same stream, so it need not be fetched again.
 function M.build_key_from_view(view)
     local local_unsent_count = type(view.localUnsentCount) == "number" and view.localUnsentCount or 0
+    local local_ctx = type(view.localContext) == "table" and view.localContext or nil
     local parts = {
         view.pr and view.pr.headSha or "",
         view.pr and view.pr.baseSha or "",
+        local_ctx and local_ctx.baseRef or "",
+        local_ctx and local_ctx.baseSha or "",
         tostring(view.threadCount or 0),
         tostring(view.draftCount or 0),
         tostring(local_unsent_count),

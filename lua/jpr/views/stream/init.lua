@@ -45,7 +45,8 @@ local function get_or_create_stream_buffer(session, key)
     end
     local buf = vim.api.nvim_create_buf(false, true)
     local suffix = key == "left" and "/base" or ""
-    pcall(vim.api.nvim_buf_set_name, buf, ("jpr://stream/%d%s"):format(session.number, suffix))
+    local buf_key = session_module().buf_key(session)
+    pcall(vim.api.nvim_buf_set_name, buf, ("jpr://stream/%s%s"):format(buf_key, suffix))
     vim.bo[buf].filetype = "jpr-stream"
     vim.bo[buf].modifiable = false
     M.map_keys(session, buf)
