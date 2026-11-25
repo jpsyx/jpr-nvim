@@ -26,8 +26,8 @@ local SEMANTIC_LINKS = {
 local DARK_TINTS = {
     add = 0x3fb950,
     delete = 0xf85149,
-    add_alpha = 0.14,
-    add_text_alpha = 0.28,
+    add_alpha = 0.24,
+    add_text_alpha = 0.38,
     delete_alpha = 0.14,
     delete_text_alpha = 0.28,
 }
@@ -35,22 +35,22 @@ local DARK_TINTS = {
 local LIGHT_TINTS = {
     add = 0x2ea043,
     delete = 0xcf222e,
-    add_alpha = 0.14,
-    add_text_alpha = 0.28,
+    add_alpha = 0.24,
+    add_text_alpha = 0.38,
     delete_alpha = 0.12,
     delete_text_alpha = 0.24,
 }
 
 local DARK_FALLBACK_DIFF_HIGHLIGHTS = {
-    JprDiffAdd = { bg = 0x243a2e },
-    JprDiffAddText = { bg = 0x2c4e38 },
+    JprDiffAdd = { bg = 0x274932 },
+    JprDiffAddText = { bg = 0x2c5d37 },
     JprDiffDelete = { bg = 0x3e2629 },
     JprDiffDeleteText = { bg = 0x5a2d33 },
 }
 
 local LIGHT_FALLBACK_DIFF_HIGHLIGHTS = {
-    JprDiffAdd = { bg = 0xe2f2e5 },
-    JprDiffAddText = { bg = 0xc4e4ca },
+    JprDiffAdd = { bg = 0xcde8d2 },
+    JprDiffAddText = { bg = 0xb0dbb8 },
     JprDiffDelete = { bg = 0xf9e4e6 },
     JprDiffDeleteText = { bg = 0xf3c9cd },
 }
