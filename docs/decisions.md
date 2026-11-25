@@ -1043,3 +1043,39 @@ column, while uncaptured `Normal` text still lifts at priority 45. Diagnostics
 
 **Revisit when.** Neovim exposes a native highlight contrast/blend modifier or
 reviewers ask for configurable contrast strength in `setup()`.
+
+## Neovim Command Palette shows only currently executable commands and options
+
+**Decision.** Bare `:Jpr` (`<leader>J`) filters out every command that cannot
+execute in the current tab state, repository context, and cursor view instead of
+rendering unavailable commands dimmed in `JprMuted`. `lua/jpr/tui/schema.lua`
+exposes pure `is_command_executable`, `get_active_commands`, and
+`get_active_options_from_step` predicates combining `requires_session`,
+`requires_git_repo`, and optional `when` functions on commands and select
+options. `lua/jpr/init.lua` captures tab/view context (`has_session`,
+`has_pending_tab`, `is_read_only`, `is_linked_pr`, `has_cached_conversation`,
+`local_unsent_count`, `is_on_diff_line`, `can_comment_file`,
+`is_in_changed_worktree_file`), `lua/jpr/tui/wizard/palette.lua` and
+`lua/jpr/tui/render.lua` operate strictly on the filtered executable list with
+no dimmed label branch, and `lua/jpr/tui/wizard/step_menu.lua` filters select
+options (so `:Jpr comment` on a stream file header shows only `[file]`).
+
+**Why.** Dimming unavailable palette entries in `JprMuted` while leaving
+available ones in normal text and the hovered entry in `JprTitle` looked like an
+unexplained visual hierarchy rather than a disabled state, and still allowed
+selecting non-executable items only to hit an error. Showing only actions that
+can run right now keeps the menu focused, consistent, and immediately readable.
+`:Jpr send` hides when `localUnsentCount == 0` because that count updates
+synchronously on every local thread change, whereas `:Jpr push` remains visible
+in linked PR sessions because `worktreeStatus.ahead` polls every 2 seconds and
+could briefly hide `push` immediately after a terminal commit.
+
+**Consequences.** Direct `:Jpr <subcommand>` execution and command-line tab
+completion remain available for all 16 subcommands, preserving full Schema-to-TUI
+and scriptability parity. Pending checkout tabs open the palette directly
+without bouncing to the repo picker so `:Jpr close` stays reachable while
+loading. Unselected palette command labels always use normal text and the
+hovered label uses `JprTitle`.
+
+**Revisit when.** Reviewers ask for a toggle inside the palette to inspect
+unavailable commands with inline reasons for why each is disabled.
