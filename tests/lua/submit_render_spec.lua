@@ -70,6 +70,18 @@ local pr_draft_row = helpers.find_line_number(built.lines, "PR: pr level")
 assert(pr_draft_row ~= nil and built.draft_anchors[pr_draft_row] == preview_allowed.drafts[3].anchor, "pr draft mapped")
 assert(helpers.find_line_number(built.lines, "  Looks solid") ~= nil, "body line 1 rendered")
 assert(helpers.find_line_number(built.lines, "  Line break") ~= nil, "body line 2 sanitized")
+local comment_row = helpers.find_line_number(built.lines, "  [x] 1. Comment")
+local approve_row = helpers.find_line_number(built.lines, "  [ ] 2. Approve")
+local request_row = helpers.find_line_number(built.lines, "  [ ] 3. Request changes")
+assert(type(built.event_lines) == "table", "event_lines map returned")
+assert(built.event_lines[comment_row] == "COMMENT", "comment event line mapped")
+assert(built.event_lines[approve_row] == "APPROVE", "approve event line mapped")
+assert(built.event_lines[request_row] == "REQUEST_CHANGES", "request changes event line mapped")
+local summary_header_row = helpers.find_line_number(built.lines, "Summary Body (press e to edit):")
+local summary_line_row = helpers.find_line_number(built.lines, "  Looks solid")
+assert(type(built.summary_lines) == "table" and built.summary_lines[summary_header_row] == true, "summary header mapped")
+assert(built.summary_lines[summary_line_row] == true, "summary body line mapped")
+assert(built.footer_line == #built.lines, "footer_line points to last line")
 
 -- 2. Zero drafts and own PR restrictions.
 local preview_own_empty = {

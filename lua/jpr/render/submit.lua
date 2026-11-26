@@ -14,7 +14,7 @@ local function sanitize_body_line(line)
     return (tostring(line):gsub("\r$", ""):gsub("[\r\n]+", " "))
 end
 
-local function append_events(add, preview, selected_event)
+local function append_events(layout, add, preview, selected_event)
     add("Review Action (press 1/2/3):", "JprTitle")
     for _, option in ipairs(EVENTS) do
         local is_restricted = option.id ~= "COMMENT" and not preview.canApproveOrRequestChanges
@@ -23,6 +23,7 @@ local function append_events(add, preview, selected_event)
         local note = is_restricted and " (unavailable on your own PR)" or ""
         local group = is_restricted and "JprMuted" or (is_selected and "JprViewed" or nil)
         add(("  %s %s. %s%s"):format(mark, option.key, option.label, note), group)
+        layout.event_lines[#layout.lines] = option.id
     end
 end
 
@@ -44,23 +45,33 @@ local function append_drafts(layout, add, preview)
     end
 end
 
-local function append_body(add, body_lines)
+local function append_body(layout, add, body_lines)
     add("Summary Body (press e to edit):", "JprTitle")
+    layout.summary_lines[#layout.lines] = true
     local has_body = body_lines and #body_lines > 0 and vim.trim(table.concat(body_lines, "\n")) ~= ""
     if not has_body then
         add("  (optional for Approve / Drafts; required for empty Comment)", "JprMuted")
+        layout.summary_lines[#layout.lines] = true
         return
     end
     for _, line in ipairs(body_lines) do
         add("  " .. sanitize_body_line(line))
+        layout.summary_lines[#layout.lines] = true
     end
 end
 
---- Builds the `:Jpr submit` modal lines, highlights, and cursor-line to draft
---- anchor map from `preview`, `selected_event`, and `body_lines`.
---- @return table { lines: string[], highlights: { line, col_start, col_end, group }[], draft_anchors: table<integer, table> }
+--- Builds the `:Jpr submit` modal lines, highlights, and click-target maps
+--- from `preview`, `selected_event`, and `body_lines`.
+--- @return table { lines: string[], highlights: table[], draft_anchors: table<integer, table>, event_lines: table<integer, string>, summary_lines: table<integer, boolean>, footer_line: integer }
 function M.build(preview, selected_event, body_lines)
-    local layout = { lines = {}, highlights = {}, draft_anchors = {} }
+    local layout = {
+        lines = {},
+        highlights = {},
+        draft_anchors = {},
+        event_lines = {},
+        summary_lines = {},
+        footer_line = 0,
+    }
     local add = function(text, group)
         layout.lines[#layout.lines + 1] = text
         if group then
@@ -77,13 +88,14 @@ function M.build(preview, selected_event, body_lines)
         add("Blocked: " .. one_line(current_preview.blockedReason), "JprError")
         add("")
     end
-    append_events(add, current_preview, selected_event)
+    append_events(layout, add, current_preview, selected_event)
     add("")
     append_drafts(layout, add, current_preview)
     add("")
-    append_body(add, body_lines)
+    append_body(layout, add, body_lines)
     add("")
     add("[1/2/3] action  [e] summary  [<CR>] open draft / submit  [<C-s>] submit  [q] cancel", "JprMuted")
+    layout.footer_line = #layout.lines
     return layout
 end
 

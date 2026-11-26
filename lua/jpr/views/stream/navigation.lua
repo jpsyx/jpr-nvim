@@ -1,6 +1,7 @@
 -- Cursor jumps, target file opening, viewed-state toggling, and buffer keymaps
 -- for stream buffers (`jpr.views.stream`).
 local main_window = require("jpr.views.main_window")
+local mouse = require("jpr.mouse")
 local render = require("jpr.render.stream")
 
 local M = {}
@@ -102,6 +103,30 @@ local function toggle_viewed(session)
     )
 end
 
+local function is_stream_window(session, win)
+    local state = session and session.stream
+    if not state or not win or not vim.api.nvim_win_is_valid(win) then
+        return false
+    end
+    local buf = vim.api.nvim_win_get_buf(win)
+    return buf == state.buffers.main or buf == state.buffers.left
+end
+
+local function handle_double_click(stream_mod, session)
+    local click = mouse.get_click()
+    if not click or not is_stream_window(session, click.winid) or type(click.line) ~= "number" or click.line < 1 then
+        return mouse.passthrough("<2-LeftMouse>")
+    end
+    if vim.api.nvim_get_current_win() ~= click.winid then
+        pcall(vim.api.nvim_set_current_win, click.winid)
+    end
+    mouse.set_cursor_from_click(click.winid, click)
+    if vim.fn.foldclosed(click.line) ~= -1 then
+        return stream_mod.toggle_fold(session, "za")
+    end
+    stream_mod.open_target(session)
+end
+
 --- The stream's keys on `buf`.
 local function map_keys(stream_mod, session, buf)
     local function map(lhs, action, desc)
@@ -110,6 +135,9 @@ local function map_keys(stream_mod, session, buf)
         end, { buffer = buf, desc = desc, nowait = true })
     end
     map("<CR>", stream_mod.open_target, "Open the file at this line")
+    map("<2-LeftMouse>", function(current_session)
+        handle_double_click(stream_mod, current_session)
+    end, "Double-click to open file or toggle fold")
     map("v", stream_mod.toggle_viewed, "Toggle viewed and go to the next unviewed file")
     map("]f", function(current_session) stream_mod.jump(current_session, "files", 1) end, "Next file")
     map("[f", function(current_session) stream_mod.jump(current_session, "files", -1) end, "Previous file")
