@@ -185,6 +185,17 @@ pub trait Forge: Send {
     /// the forge, at once.
     fn set_viewed(&self, pr: &PullRequest, path: &str, viewed: bool) -> Result<()>;
 
+    /// Marks every path in `paths` viewed (`true`) or unviewed (`false`) on the
+    /// forge. Adapters may batch this into fewer remote round-trips; the
+    /// default implementation falls back to sequential [`Self::set_viewed`]
+    /// calls.
+    fn set_viewed_many(&self, pr: &PullRequest, paths: &[String], viewed: bool) -> Result<()> {
+        for path in paths {
+            self.set_viewed(pr, path, viewed)?;
+        }
+        Ok(())
+    }
+
     /// Creates a draft review thread in `pending_review_id` (creating a pending
     /// review on `pr.head_sha` first when `None`).
     fn create_review_thread(

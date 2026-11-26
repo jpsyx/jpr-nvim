@@ -14,6 +14,33 @@ fn reads_strings_booleans_and_modes() {
 }
 
 #[test]
+fn viewed_paths_extractor_accepts_single_path_or_non_empty_paths_array() {
+    assert_eq!(
+        get_viewed_paths_from_params(&json!({ "path": "src/a.rs", "viewed": true })).unwrap(),
+        vec!["src/a.rs"]
+    );
+    assert_eq!(
+        get_viewed_paths_from_params(&json!({ "paths": ["src/a.rs", "src/b.rs"], "viewed": true }))
+            .unwrap(),
+        vec!["src/a.rs", "src/b.rs"]
+    );
+    for invalid in [
+        json!({ "viewed": true }),
+        json!({ "path": "src/a.rs", "paths": ["src/b.rs"], "viewed": true }),
+        json!({ "paths": [], "viewed": true }),
+        json!({ "paths": [1], "viewed": true }),
+        json!({ "path": 1, "viewed": true }),
+        Value::Null,
+    ] {
+        assert_eq!(
+            get_viewed_paths_from_params(&invalid).unwrap_err().code,
+            RpcError::INVALID_PARAMS,
+            "{invalid}"
+        );
+    }
+}
+
+#[test]
 fn missing_or_mistyped_params_are_invalid() {
     let params = json!({ "path": 7, "mode": "sideways" });
     for error in [

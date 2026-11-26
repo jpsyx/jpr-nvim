@@ -22,6 +22,9 @@ return function(context)
         assert(keys_spec.label == "Keyboard Shortcuts", "keys command has human-readable label")
         assert(keys_spec.requires_session == false, "keys command does not require a session")
 
+        local stream_spec = commands_schema.find_command_spec("stream")
+        assert(stream_spec ~= nil and stream_spec.label == "Full Branch Diff", "stream command labeled Full Branch Diff")
+
         for _, spec in ipairs(specs) do
             assert(spec.label ~= spec.id, "label must be human-readable and distinct from id: " .. spec.id)
             assert(type(spec.help) == "string" and spec.help:match("%S") ~= nil, "help must be non-empty: " .. spec.id)
@@ -203,10 +206,42 @@ return function(context)
         end
     end
 
+    local function test_full_diff_command_hides_in_palette_when_stream_is_visible()
+        local tab = vim.api.nvim_get_current_tabpage()
+        local stream_buf = vim.api.nvim_create_buf(false, true)
+        local file_buf = vim.api.nvim_create_buf(false, true)
+        local previous_buf = vim.api.nvim_get_current_buf()
+        local original_by_tab = session.by_tab[tab]
+
+        session.by_tab[tab] = { number = 7, repo = "octo/widgets", tab = tab, stream = { buffers = { main = stream_buf } } }
+        local is_ok, call_error = pcall(function()
+            vim.api.nvim_win_set_buf(0, stream_buf)
+            jpr.command({})
+            assert(wizard.is_open() == true, "palette opens when stream is visible")
+            assert(helpers.palette_results_text():find("Full Branch Diff", 1, true) == nil, "Full Branch Diff hidden while stream is visible")
+            wizard.close()
+
+            vim.api.nvim_win_set_buf(0, file_buf)
+            jpr.command({})
+            assert(wizard.is_open() == true, "palette opens when viewing a single file")
+            assert(helpers.palette_results_text():find("Full Branch Diff  [stream]", 1, true) ~= nil, "Full Branch Diff shown when not in stream")
+            wizard.close()
+        end)
+
+        session.by_tab[tab] = original_by_tab
+        vim.api.nvim_win_set_buf(0, previous_buf)
+        pcall(vim.api.nvim_buf_delete, stream_buf, { force = true })
+        pcall(vim.api.nvim_buf_delete, file_buf, { force = true })
+        if not is_ok then
+            error(call_error, 0)
+        end
+    end
+
     test_command_specs_validate_and_match_jpr_subcommands()
     test_format_pr_updated_date_extracts_iso_date_or_falls_back_to_unknown()
     test_bare_jpr_opens_palette_with_only_executable_commands_outside_session()
     test_palette_multi_step_commands_preselect_and_dispatch_smart_defaults()
     test_direct_subcommand_args_bypass_modal_and_reject_invalid_values()
     test_comment_smart_default_preselects_line_on_diff_line()
+    test_full_diff_command_hides_in_palette_when_stream_is_visible()
 end

@@ -10,6 +10,7 @@ local M = {}
 --- Add a row to accept another typed name without a palette entry or a
 --- completion candidate. Keys are the alias; values are canonical command ids.
 local COMMAND_ALIASES = {
+    full = "stream",
     review = "open",
     self = "local",
 }
@@ -255,7 +256,7 @@ function M.create_command_specs()
         create_local_command_spec(),
         create_session_action_spec("sync", "Sync with GitHub", "Sync with GitHub (or detect and link an open PR when reviewing locally).", "sync_current", predicates.is_live_session),
         create_toggle_command_spec(),
-        create_session_action_spec("stream", "Open Stream View", "View all changed files stacked continuously in a single scrollable diff stream.", "stream_current", predicates.is_live_session),
+        create_session_action_spec("stream", "Full Branch Diff", "Return to the full branch diff view showing all changed files in a continuous scroll.", "stream_current", predicates.is_stream_executable),
         create_comment_command_spec(),
         create_session_action_spec("suggest", "Suggest Code Change", "Draft a review comment pre-filled with a GitHub suggestion block for the current line.", "suggest_current", predicates.is_suggest_executable),
         create_session_action_spec("expand", "Expand Inline Threads", "Toggle inline expansion of review threads across diff and stream buffers.", "expand_current"),

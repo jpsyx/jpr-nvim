@@ -1,5 +1,7 @@
 //! Marking files viewed, and the queue of marks the forge has not accepted.
 
+use std::collections::HashSet;
+
 use anyhow::{Result, bail};
 use review_model::{Event, SessionView};
 
@@ -11,39 +13,101 @@ impl ReviewSession {
     /// forge. Local-only worktree files update `local_viewed` in `local.json`
     /// without calling or queueing on the forge.
     pub fn set_viewed(&mut self, path: &str, viewed: bool) -> Result<SessionView> {
-        if self.is_linked() {
-            let pr = self.synced_pr()?.clone();
-            if let Some(file) = self.saved.files.iter_mut().find(|file| file.path == path) {
-                file.viewed = viewed_flag_to_state(viewed);
-                let queue = &mut self.saved.registry.queued_viewed;
-                let auth_message = match self.ports.forge.set_viewed(&pr, path, viewed) {
-                    Ok(()) => {
-                        queue.remove(path);
-                        None
-                    }
-                    Err(error) => {
-                        queue.insert(path.to_owned(), viewed);
-                        crate::is_auth_error(&error).then(|| format!("{error:#}"))
-                    }
-                };
-                let view = self.save_and_announce_viewed()?;
-                if let Some(message) = auth_message {
-                    self.publish(&Event::SyncFailed {
-                        message,
-                        auth_required: true,
-                        is_background: false,
-                    });
-                }
-                return Ok(view);
+        self.set_viewed_paths(&[path.to_owned()], viewed)
+    }
+
+    /// Marks every path in `paths` viewed (`true`) or unviewed (`false`)
+    /// atomically: validates every path before mutating state, batches linked
+    /// PR files needing remote sync into one [`Forge::set_viewed_many`] call,
+    /// updates local-only files in `local.json`, saves once, and emits a single
+    /// [`Event::ViewedChanged`].
+    pub fn set_viewed_paths(&mut self, paths: &[String], viewed: bool) -> Result<SessionView> {
+        let unique_paths = deduplicate_paths(paths)?;
+        let (linked_paths, local_paths) = self.classify_viewed_paths(&unique_paths)?;
+        let auth_message = self.apply_linked_viewed_paths(&linked_paths, viewed)?;
+        self.apply_local_viewed_paths(&local_paths, viewed);
+        let view = self.save_and_announce_viewed()?;
+        if let Some(message) = auth_message {
+            self.publish(&Event::SyncFailed {
+                message,
+                auth_required: true,
+                is_background: false,
+            });
+        }
+        Ok(view)
+    }
+
+    fn classify_viewed_paths(&self, paths: &[String]) -> Result<(Vec<String>, Vec<String>)> {
+        let is_linked = self.is_linked();
+        if is_linked {
+            self.synced_pr()?;
+        }
+        let mut linked_paths = Vec::new();
+        let mut local_paths = Vec::new();
+        for path in paths {
+            if is_linked && self.saved.files.iter().any(|file| file.path == *path) {
+                linked_paths.push(path.clone());
+            } else if self.local_files.iter().any(|file| file.path == *path) {
+                local_paths.push(path.clone());
+            } else {
+                bail!("{path} is not a file changed in this review");
             }
         }
-        if let Some(local_file) = self.local_files.iter_mut().find(|file| file.path == path) {
-            let state = viewed_flag_to_state(viewed);
-            local_file.viewed = state;
-            self.saved.local.local_viewed.insert(path.to_owned(), state);
-            return self.save_and_announce_viewed();
+        Ok((linked_paths, local_paths))
+    }
+
+    fn apply_linked_viewed_paths(
+        &mut self,
+        linked_paths: &[String],
+        viewed: bool,
+    ) -> Result<Option<String>> {
+        if linked_paths.is_empty() {
+            return Ok(None);
         }
-        bail!("{path} is not a file changed in this review");
+        let pr = self.synced_pr()?.clone();
+        let target_state = viewed_flag_to_state(viewed);
+        let mut forge_paths = Vec::new();
+        for path in linked_paths {
+            if let Some(file) = self.saved.files.iter_mut().find(|file| file.path == *path) {
+                let needs_remote = file.viewed != target_state
+                    || self.saved.registry.queued_viewed.contains_key(path);
+                file.viewed = target_state;
+                if needs_remote {
+                    forge_paths.push(path.clone());
+                }
+            }
+        }
+        if forge_paths.is_empty() {
+            return Ok(None);
+        }
+        let queue = &mut self.saved.registry.queued_viewed;
+        match self.ports.forge.set_viewed_many(&pr, &forge_paths, viewed) {
+            Ok(()) => {
+                for path in &forge_paths {
+                    queue.remove(path);
+                }
+                Ok(None)
+            }
+            Err(error) => {
+                for path in &forge_paths {
+                    queue.insert(path.clone(), viewed);
+                }
+                Ok(crate::is_auth_error(&error).then(|| format!("{error:#}")))
+            }
+        }
+    }
+
+    fn apply_local_viewed_paths(&mut self, local_paths: &[String], viewed: bool) {
+        let target_state = viewed_flag_to_state(viewed);
+        for path in local_paths {
+            if let Some(local_file) = self.local_files.iter_mut().find(|file| file.path == *path) {
+                local_file.viewed = target_state;
+                self.saved
+                    .local
+                    .local_viewed
+                    .insert(path.clone(), target_state);
+            }
+        }
     }
 
     /// Whether any viewed mark or comment operation is waiting for the forge,
@@ -119,6 +183,20 @@ impl ReviewSession {
         });
         Ok(view)
     }
+}
+
+fn deduplicate_paths(paths: &[String]) -> Result<Vec<String>> {
+    if paths.is_empty() {
+        bail!("expected at least one file path");
+    }
+    let mut seen = HashSet::with_capacity(paths.len());
+    let mut unique = Vec::with_capacity(paths.len());
+    for path in paths {
+        if seen.insert(path.as_str()) {
+            unique.push(path.clone());
+        }
+    }
+    Ok(unique)
 }
 
 #[cfg(test)]
@@ -281,5 +359,114 @@ mod tests {
         let view = fakes.open().view();
         assert_eq!(view.files[0].viewed, ViewedState::Unviewed);
         assert_eq!(view.queued_count, 1);
+    }
+
+    #[test]
+    fn batched_viewed_skips_unchanged_remote_files_and_emits_one_event() {
+        let fakes = Fakes::new(100);
+        let mut session = fakes.open_synced();
+        let events = session.subscribe();
+        let view = session
+            .set_viewed_paths(&["src/a.rs".to_owned(), "src/b.rs".to_owned()], true)
+            .unwrap();
+        assert_eq!(
+            fakes.forge.viewed_batch_calls(),
+            [(vec!["src/b.rs".to_owned()], true)]
+        );
+        assert_eq!(view.viewed_count, 2);
+        assert_eq!(
+            events.try_recv().unwrap(),
+            Event::ViewedChanged {
+                view: Box::new(view)
+            }
+        );
+        assert!(events.try_recv().is_err(), "only one ViewedChanged event");
+    }
+
+    #[test]
+    fn batched_viewed_handles_mixed_linked_and_local_only_files_in_one_save() {
+        let fakes = Fakes::new(100);
+        fakes
+            .workspace
+            .put_disk("src/local_new.rs", "fn local() {}\n");
+        let mut session = fakes.open_synced();
+        session.refresh_worktree(&[]).unwrap();
+        let events = session.subscribe();
+        let view = session
+            .set_viewed_paths(
+                &["src/b.rs".to_owned(), "src/local_new.rs".to_owned()],
+                true,
+            )
+            .unwrap();
+        assert_eq!(
+            fakes.forge.viewed_batch_calls(),
+            [(vec!["src/b.rs".to_owned()], true)]
+        );
+        assert_eq!(view.viewed_count, 3);
+        assert_eq!(
+            fakes
+                .store
+                .saved()
+                .local
+                .local_viewed
+                .get("src/local_new.rs"),
+            Some(&ViewedState::Viewed)
+        );
+        assert!(matches!(
+            events.try_recv().unwrap(),
+            Event::ViewedChanged { .. }
+        ));
+        assert!(events.try_recv().is_err(), "only one ViewedChanged event");
+    }
+
+    #[test]
+    fn batched_viewed_validates_atomically_and_rejects_empty_or_unknown_paths() {
+        let fakes = Fakes::new(100);
+        let mut session = fakes.open_synced();
+        assert!(session.set_viewed_paths(&[], true).is_err());
+        assert!(
+            session
+                .set_viewed_paths(&["src/b.rs".to_owned(), "nope.rs".to_owned()], true)
+                .is_err()
+        );
+        assert_eq!(fakes.forge.viewed_batch_calls(), Vec::new());
+        assert_eq!(session.view().files[1].viewed, ViewedState::Unviewed);
+    }
+
+    #[test]
+    fn batched_viewed_deduplicates_queues_failures_and_emits_one_auth_event() {
+        let fakes = Fakes::new(100);
+        let mut session = fakes.open_synced();
+        fakes.forge.fail_auth_with(Some("gh auth login required"));
+        let events = session.subscribe();
+        let view = session
+            .set_viewed_paths(
+                &[
+                    "src/a.rs".to_owned(),
+                    "src/a.rs".to_owned(),
+                    "src/b.rs".to_owned(),
+                ],
+                false,
+            )
+            .unwrap();
+        assert_eq!(view.viewed_count, 0);
+        assert_eq!(view.queued_count, 1);
+        assert_eq!(
+            fakes.store.saved().registry.queued_viewed.get("src/a.rs"),
+            Some(&false)
+        );
+        assert!(matches!(
+            events.try_recv().unwrap(),
+            Event::ViewedChanged { .. }
+        ));
+        assert!(matches!(
+            events.try_recv().unwrap(),
+            Event::SyncFailed {
+                auth_required: true,
+                is_background: false,
+                ..
+            }
+        ));
+        assert!(events.try_recv().is_err());
     }
 }

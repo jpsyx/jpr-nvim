@@ -55,10 +55,10 @@ function M.apply(session, win)
             give_up(session, win, record, path)
             return require("jpr").error(("the engine sent no diff for %s"):format(path))
         end
+        require("jpr").bind_buffer_keys(buf)
         if diff.binary then
             return require("jpr").info(("%s is a binary file; it has no diff"):format(path))
         end
-        require("jpr").bind_buffer_keys(buf)
         if mode == "unified" then
             M.draw_overlay(buf, diff, win)
             diff_threads.draw_unified_threads(session, win, buf, diff)
@@ -256,7 +256,12 @@ function M.reconcile(session)
         return
     end
     for _, win in ipairs(vim.api.nvim_tabpage_list_wins(session.tab)) do
-        M.apply(session, win)
+        local buf = vim.api.nvim_win_get_buf(win)
+        if M.buffer_to_changed_path(session, buf) then
+            M.apply(session, win)
+        elseif vim.bo[buf].buftype == "" and vim.api.nvim_buf_get_name(buf) ~= "" then
+            require("jpr").bind_tab_aware_full_diff_key(buf)
+        end
     end
 end
 

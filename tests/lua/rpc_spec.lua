@@ -28,7 +28,7 @@ end)
 assert(vim.wait(2000, function()
     return initialize_answer ~= nil
 end), "initialize is answered")
-assert(initialize_answer.err == nil and initialize_answer.result.protocolVersion == 9, vim.inspect(initialize_answer))
+assert(initialize_answer.err == nil and initialize_answer.result.protocolVersion == 10, vim.inspect(initialize_answer))
 
 local synced
 client:request("sync", nil, function(err, result)

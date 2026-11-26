@@ -43,6 +43,8 @@ M.defaults = {
         comment = "gc",
         suggest_comment = "gC",
         file_comment = "gf",
+        full_diff = "gF",
+        toggle_viewed = "gv",
         thread_popup = "gt",
         next_thread = "]t",
         prev_thread = "[t",
@@ -129,10 +131,29 @@ function M.bind_buffer_keys(buf)
     bind_plug_key(buf, { "n", "x" }, keys.comment, "<Plug>(jpr-comment)", "New GitHub draft comment")
     bind_plug_key(buf, { "n", "x" }, keys.suggest_comment, "<Plug>(jpr-suggest-comment)", "New GitHub suggestion comment")
     bind_plug_key(buf, "n", keys.file_comment, "<Plug>(jpr-file-comment)", "New file-level GitHub comment")
+    bind_plug_key(buf, "n", keys.full_diff, "<Plug>(jpr-full-diff)", "Switch to the full branch diff view")
+    bind_plug_key(buf, "n", keys.toggle_viewed, "<Plug>(jpr-toggle-viewed)", "Toggle viewed for the current file")
     bind_plug_key(buf, "n", keys.thread_popup, "<Plug>(jpr-thread-popup)", "Open review thread popup")
     bind_plug_key(buf, "n", keys.next_thread, "<Plug>(jpr-next-thread)", "Next review thread")
     bind_plug_key(buf, "n", keys.prev_thread, "<Plug>(jpr-prev-thread)", "Previous review thread")
     M.bind_session_keys(buf)
+end
+
+--- Binds `keys.full_diff` on a non-changed worktree buffer `buf` with an expr
+--- guard so it opens the full diff inside review tabs and falls back to native
+--- `keys.full_diff` in non-review tabs.
+function M.bind_tab_aware_full_diff_key(buf)
+    local full_diff_key = M.config.keys and M.config.keys.full_diff
+    if type(full_diff_key) ~= "string" or full_diff_key == "" then
+        return
+    end
+    vim.keymap.set("n", full_diff_key, function()
+        local session_module = package.loaded["jpr.session"]
+        if session_module and session_module.current() ~= nil then
+            return "<Plug>(jpr-full-diff)"
+        end
+        return full_diff_key
+    end, { buffer = buf, expr = true, remap = true, silent = true, nowait = true, desc = "Switch to the full branch diff view" })
 end
 
 --- The PR number in a `:Jpr open` argument: `123`, `#123`, or a pull request
@@ -413,6 +434,8 @@ function M.action(name)
         file_comment = function()
             session.comment_current({ file = true })
         end,
+        full_diff = session.stream_current,
+        toggle_viewed = session.toggle_viewed_current,
         thread_popup = session.popup_current,
         next_thread = function()
             session.jump_thread_current(1)

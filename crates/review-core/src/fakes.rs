@@ -96,6 +96,7 @@ struct ForgeState {
     auth_failure: Option<String>,
     next_id: u64,
     viewed_calls: Vec<(String, bool)>,
+    viewed_batch_calls: Vec<(Vec<String>, bool)>,
 }
 
 /// A forge that answers from memory, for session and server tests. Clones
@@ -191,6 +192,12 @@ impl FakeForge {
         self.lock().viewed_calls.clone()
     }
 
+    /// Every batched `set_viewed_many` call the forge accepted, in order.
+    #[must_use]
+    pub fn viewed_batch_calls(&self) -> Vec<(Vec<String>, bool)> {
+        self.lock().viewed_batch_calls.clone()
+    }
+
     fn lock(&self) -> MutexGuard<'_, ForgeState> {
         self.state.lock().expect("the fake forge lock is poisoned")
     }
@@ -263,6 +270,33 @@ impl Forge for FakeForge {
         for file in &mut state.snapshot.files {
             if file.path == path {
                 file.viewed = marked;
+            }
+        }
+        drop(state);
+        Ok(())
+    }
+
+    fn set_viewed_many(&self, _pr: &PullRequest, paths: &[String], viewed: bool) -> Result<()> {
+        if paths.is_empty() {
+            return Ok(());
+        }
+        let mut state = self.lock();
+        if let Some(message) = &state.auth_failure {
+            return Err(anyhow::Error::new(crate::ForgeAuthError::new(
+                message.clone(),
+            )));
+        }
+        if let Some(message) = state.failure.as_ref().or(state.write_failure.as_ref()) {
+            return Err(anyhow!("{message}"));
+        }
+        state.viewed_batch_calls.push((paths.to_vec(), viewed));
+        let marked = crate::viewed::viewed_flag_to_state(viewed);
+        for path in paths {
+            state.viewed_calls.push((path.clone(), viewed));
+            for file in &mut state.snapshot.files {
+                if file.path == *path {
+                    file.viewed = marked;
+                }
             }
         }
         drop(state);

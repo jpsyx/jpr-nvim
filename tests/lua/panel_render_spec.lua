@@ -327,4 +327,48 @@ assert(
     vim.inspect(highlighted(joined_and_local, "JprThreadLocal"))
 )
 
+local dir_files = {
+    { path = "src/a.rs", additions = 1, deletions = 0, viewed = "VIEWED" },
+    { path = "src/sub/b.rs", additions = 2, deletions = 1, viewed = "UNVIEWED" },
+    { path = "src/sub/deep/c.rs", additions = 1, deletions = 0, viewed = "DISMISSED" },
+    { path = "src_other/d.rs", additions = 1, deletions = 0, viewed = "UNVIEWED" },
+    { path = "docs/x/y.md", additions = 1, deletions = 0, viewed = "VIEWED" },
+}
+local src_toggle = panel.collect_directory_toggle_from_files(dir_files, "src")
+assert(
+    src_toggle ~= nil
+        and src_toggle.viewed == true
+        and vim.deep_equal(src_toggle.paths, { "src/a.rs", "src/sub/b.rs", "src/sub/deep/c.rs" }),
+    "mixed dir marks all nested descendants viewed without prefix collision: " .. vim.inspect(src_toggle)
+)
+local docs_toggle = panel.collect_directory_toggle_from_files(dir_files, "docs/x")
+assert(
+    docs_toggle ~= nil
+        and docs_toggle.viewed == false
+        and vim.deep_equal(docs_toggle.paths, { "docs/x/y.md" }),
+    "all-viewed joined dir unmarks descendants: " .. vim.inspect(docs_toggle)
+)
+assert(panel.collect_directory_toggle_from_files(dir_files, "missing") == nil, "empty dir returns nil")
+
+local nav_view = {
+    files = {
+        { path = "README.md", additions = 1, deletions = 0, viewed = "UNVIEWED" },
+        { path = "src/a.rs", additions = 1, deletions = 0, viewed = "VIEWED" },
+        { path = "src/b.rs", additions = 1, deletions = 0, viewed = "DISMISSED" },
+    },
+    tree = {
+        { depth = 0, name = "src" },
+        { depth = 1, name = "a.rs", file = 1 },
+        { depth = 1, name = "b.rs", file = 2 },
+        { depth = 0, name = "README.md", file = 0 },
+    },
+}
+assert(panel.find_next_unviewed_path(nav_view, "src/a.rs") == "src/b.rs", "next unviewed follows tree order and treats DISMISSED as unviewed")
+assert(panel.find_next_unviewed_path(nav_view, "README.md") == "src/b.rs", "wraps around from last tree entry to earlier unviewed file")
+local all_viewed_view = {
+    files = { { path = "README.md", viewed = "VIEWED" }, { path = "src/a.rs", viewed = "VIEWED" } },
+    tree = { { depth = 0, name = "src" }, { depth = 1, name = "a.rs", file = 1 }, { depth = 0, name = "README.md", file = 0 } },
+}
+assert(panel.find_next_unviewed_path(all_viewed_view, "src/a.rs") == nil, "nil when every file is viewed")
+
 print("panel_render_spec: ok")

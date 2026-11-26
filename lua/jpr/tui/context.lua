@@ -87,6 +87,8 @@ function M.create_context_from_session(session, cmd_opts)
             and type(current_session.view) == "table"
             and tonumber(current_session.view.localUnsentCount)
         or 0
+    local is_stream_visible = current_session ~= nil
+        and require("jpr.views.stream").is_visible(current_session) == true
     return {
         cmd_opts = cmd_opts,
         has_session = current_session ~= nil,
@@ -100,6 +102,7 @@ function M.create_context_from_session(session, cmd_opts)
         is_on_diff_line = cursor_view.is_on_diff_line,
         can_comment_file = cursor_view.can_comment_file,
         is_in_changed_worktree_file = cursor_view.is_in_changed_worktree_file,
+        is_stream_visible = is_stream_visible,
     }
 end
 

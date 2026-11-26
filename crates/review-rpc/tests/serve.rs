@@ -20,7 +20,7 @@ use support::{
 fn initialize_reports_the_protocol_and_server_versions() {
     let written = run(&request(1, "initialize"), &forge());
     let result = &response(&written, 1)["result"];
-    assert_eq!(result["protocolVersion"], 9);
+    assert_eq!(result["protocolVersion"], 10);
     assert_eq!(result["version"], "9.9.9");
 }
 
@@ -152,7 +152,30 @@ fn missing_or_mistyped_params_are_errors_and_serving_goes_on() {
             "{error}"
         );
     }
-    assert_eq!(response(&written, 5)["result"]["protocolVersion"], 9);
+    assert_eq!(response(&written, 5)["result"]["protocolVersion"], 10);
+}
+
+#[test]
+fn set_viewed_accepts_multiple_paths_and_emits_one_viewed_changed_event() {
+    let forge = forge();
+    forge.set_snapshot(changed_snapshot());
+    let input = request(1, "sync")
+        + &build_request_with_params(
+            2,
+            "setViewed",
+            r#"{"paths":["src/a.rs","src/b.rs"],"viewed":true}"#,
+        )
+        + &build_request_with_params(3, "setViewed", r#"{"paths":[],"viewed":true}"#);
+    let written = run(&input, &forge);
+    assert_eq!(response(&written, 2)["result"]["viewedCount"], 2);
+    let viewed_event_count = written
+        .iter()
+        .filter(|message| {
+            message["method"] == "event" && message["params"]["type"] == "viewedChanged"
+        })
+        .count();
+    assert_eq!(viewed_event_count, 1, "{written:?}");
+    assert_eq!(response(&written, 3)["error"]["code"], -32602);
 }
 
 #[test]

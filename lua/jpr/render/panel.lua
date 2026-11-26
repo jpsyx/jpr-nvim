@@ -105,6 +105,75 @@ function M.create_flat_tree_from_files(files)
     return rows
 end
 
+--- Collects all descendant changed file paths under `dir_path` together with
+--- the target viewed flag (`true` if any descendant is not `VIEWED`, `false` if
+--- all descendants are already `VIEWED`), or `nil` when zero files match.
+function M.collect_directory_toggle_from_files(files, dir_path)
+    if type(dir_path) ~= "string" then
+        return nil
+    end
+    local normalized = dir_path:gsub("/+$", "")
+    if normalized == "" then
+        return nil
+    end
+    local prefix = normalized .. "/"
+    local paths = {}
+    local has_unviewed = false
+    for _, file in ipairs(files or {}) do
+        if type(file) == "table" and type(file.path) == "string" and vim.startswith(file.path, prefix) then
+            paths[#paths + 1] = file.path
+            if file.viewed ~= "VIEWED" then
+                has_unviewed = true
+            end
+        end
+    end
+    if #paths == 0 then
+        return nil
+    end
+    return { paths = paths, viewed = has_unviewed }
+end
+
+local function list_ordered_files_from_view(view)
+    local files = type(view) == "table" and view.files or {}
+    local tree = type(view) == "table" and view.tree or nil
+    if type(tree) ~= "table" or #tree == 0 then
+        return files
+    end
+    local ordered = {}
+    for _, row in ipairs(tree) do
+        local file = row.file ~= nil and files[row.file + 1] or nil
+        if file then
+            ordered[#ordered + 1] = file
+        end
+    end
+    return #ordered > 0 and ordered or files
+end
+
+--- Finds the next unviewed file path after `current_path` in tree display
+--- order, wrapping around to earlier files when none follow, or `nil` when
+--- every file is `VIEWED`.
+function M.find_next_unviewed_path(view, current_path)
+    local ordered = list_ordered_files_from_view(view)
+    local total = #ordered
+    if total == 0 then
+        return nil
+    end
+    local start_index = 0
+    for index, file in ipairs(ordered) do
+        if file.path == current_path then
+            start_index = index
+            break
+        end
+    end
+    for offset = 1, total do
+        local candidate = ordered[((start_index + offset - 1) % total) + 1]
+        if candidate.path ~= current_path and candidate.viewed ~= "VIEWED" then
+            return candidate.path
+        end
+    end
+    return nil
+end
+
 --- Adds one file's line to `content`: indent, viewed mark, modified mark, name,
 --- counts, threads, and optional local-only badge, with their highlights.
 local function add_file_line(content, file, name, indent, depth, parent_dir, is_unlinked_local)

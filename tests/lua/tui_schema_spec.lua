@@ -329,6 +329,15 @@ local gated_commands = {
     { id = "local", label = "Local", help = "Local review.", requires_session = false, requires_git_repo = true },
     { id = "sync", label = "Sync", help = "Sync PR.", requires_session = true },
     {
+        id = "stream",
+        label = "Full Branch Diff",
+        help = "Return to full diff.",
+        requires_session = true,
+        when = function(context)
+            return not (context and context.is_stream_visible == true)
+        end,
+    },
+    {
         id = "submit",
         label = "Submit",
         help = "Submit PR review.",
@@ -351,9 +360,11 @@ assert(schema.is_command_executable(gated_commands[1], {}) == true, "uncondition
 assert(schema.is_command_executable(gated_commands[2], { is_git_repo = false }) == false, "requires_git_repo fails when is_git_repo == false")
 assert(schema.is_command_executable(gated_commands[2], {}) == true, "requires_git_repo defaults to true when is_git_repo is omitted")
 assert(schema.is_command_executable(gated_commands[3], { has_session = false }) == false, "requires_session fails without session")
-assert(schema.is_command_executable(gated_commands[4], { has_session = true, is_linked_pr = false }) == false, "command.when filters unlinked session")
-assert(schema.is_command_executable(gated_commands[4], { has_session = true, is_linked_pr = true, is_read_only = true }) == false, "command.when filters read-only session")
-assert(schema.is_command_executable(gated_commands[4], { has_session = true, is_linked_pr = true }) == true, "command.when allows matching context")
+assert(schema.is_command_executable(gated_commands[4], { has_session = true, is_stream_visible = true }) == false, "command.when hides stream when already visible")
+assert(schema.is_command_executable(gated_commands[4], { has_session = true, is_stream_visible = false }) == true, "command.when shows stream when not visible")
+assert(schema.is_command_executable(gated_commands[5], { has_session = true, is_linked_pr = false }) == false, "command.when filters unlinked session")
+assert(schema.is_command_executable(gated_commands[5], { has_session = true, is_linked_pr = true, is_read_only = true }) == false, "command.when filters read-only session")
+assert(schema.is_command_executable(gated_commands[5], { has_session = true, is_linked_pr = true }) == true, "command.when allows matching context")
 
 assert(
     vim.deep_equal(extract_command_ids(schema.get_active_commands(gated_commands, { has_session = false, is_git_repo = false })), { "open" }),
@@ -365,17 +376,17 @@ assert(
 )
 assert(
     vim.deep_equal(
-        extract_command_ids(schema.get_active_commands(gated_commands, { has_session = true, is_git_repo = true, is_linked_pr = false })),
+        extract_command_ids(schema.get_active_commands(gated_commands, { has_session = true, is_git_repo = true, is_linked_pr = false, is_stream_visible = true })),
         { "open", "local", "sync" }
     ),
-    "hides PR-only submit in unlinked local session"
+    "hides PR-only submit in unlinked local session and hides stream when visible"
 )
 assert(
     vim.deep_equal(
-        extract_command_ids(schema.get_active_commands(gated_commands, { has_session = true, is_git_repo = true, is_linked_pr = true })),
-        { "open", "local", "sync", "submit" }
+        extract_command_ids(schema.get_active_commands(gated_commands, { has_session = true, is_git_repo = true, is_linked_pr = true, is_stream_visible = false })),
+        { "open", "local", "sync", "stream", "submit" }
     ),
-    "includes all executable commands in linked PR session"
+    "includes all executable commands in linked PR session when stream is not visible"
 )
 
 -- 9. get_active_options_from_step filters select options by option.when without mutating step.options.
@@ -393,5 +404,4 @@ local gated_step = {
 local file_only_options = schema.get_active_options_from_step(gated_step, {}, { is_on_diff_line = false, can_comment_file = true })
 assert(#file_only_options == 2 and file_only_options[1].value == "file" and file_only_options[2].value == "always", "filters select options by when")
 assert(#gated_step.options == 3, "step.options is not mutated")
-
 print("tui_schema_spec: ok")

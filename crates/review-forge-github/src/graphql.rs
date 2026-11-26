@@ -2,13 +2,14 @@
 //! answers. Queries address the pull request by its node id.
 
 use std::collections::HashSet;
+use std::fmt::Write as _;
 
 use anyhow::{Context, Result, anyhow};
 use review_model::{
     Anchor, AnchorKind, ChangedFile, MentionCandidate, Message, MessageSync, Origin, Reaction,
     ReactionContent, Side, Thread, ThreadState, ViewedState,
 };
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 /// The authenticated viewer's login and pending review on a pull request, if any.
 pub const PENDING_REVIEW: &str = r"query($pr: ID!) {
@@ -84,6 +85,41 @@ pub const UNMARK_VIEWED: &str = r"mutation($pr: ID!, $path: String!) {
 #[must_use]
 pub const fn viewed_flag_to_mutation(viewed: bool) -> &'static str {
     if viewed { MARK_VIEWED } else { UNMARK_VIEWED }
+}
+
+/// Maximum number of aliased viewed mutations packed into one GraphQL request.
+pub const BATCH_VIEWED_CHUNK_SIZE: usize = 50;
+
+/// Builds one parameterized aliased GraphQL mutation marking every path in
+/// `paths` viewed (`true`) or unviewed (`false`).
+///
+/// File paths are placed exclusively in the returned JSON variables map so
+/// untrusted filenames never enter the GraphQL document text.
+#[must_use]
+pub fn build_batch_viewed_mutation(
+    pr_node_id: &str,
+    paths: &[String],
+    viewed: bool,
+) -> (String, Value) {
+    let field = if viewed {
+        "markFileAsViewed"
+    } else {
+        "unmarkFileAsViewed"
+    };
+    let mut header = String::from("mutation($pr: ID!");
+    let mut body = String::new();
+    let mut variables = Map::with_capacity(paths.len() + 1);
+    variables.insert("pr".to_owned(), Value::String(pr_node_id.to_owned()));
+    for (index, path) in paths.iter().enumerate() {
+        let _ = write!(header, ", $p{index}: String!");
+        let _ = writeln!(
+            body,
+            "  f{index}: {field}(input: {{ pullRequestId: $pr, path: $p{index} }}) {{ clientMutationId }}"
+        );
+        variables.insert(format!("p{index}"), Value::String(path.clone()));
+    }
+    let query = format!("{header}) {{\n{body}}}");
+    (query, Value::Object(variables))
 }
 
 /// One page of `THREADS`: the head commit, the threads, and the next cursor.

@@ -158,9 +158,10 @@ local function add_line_threads(layout, row, line, is_expanded)
     append_eol_mark(layout.columns[2], line, right_threads)
 end
 
---- Folds lines `first_line` to `last_line` when a folded file's body has any.
+--- Folds lines `first_line` to `last_line` when a folded file has body lines
+--- below its header.
 local function close_fold(layout, first_line, last_line)
-    if first_line and first_line <= last_line then
+    if first_line and first_line < last_line then
         layout.folds[#layout.folds + 1] = { first = first_line, last = last_line }
     end
 end
@@ -213,7 +214,7 @@ function M.create_layout_from_stream(stream, opts)
         local line = #layout.columns[1].lines + 1
         if row.kind == "file" then
             close_fold(layout, fold_start, line - 1)
-            fold_start = row.folded and line + 1 or nil
+            fold_start = row.folded and line or nil
             add_line_to_all_columns(layout.columns, M.build_file_header(row), "JprFileHeader")
             layout.files[#layout.files + 1] = { line = line, path = row.path, viewed = row.viewed }
             layout.targets[line] = { path = row.path, line = 1 }
@@ -237,11 +238,18 @@ function M.find_file_at_line(layout, line)
     return found
 end
 
---- The first file after `line` that is not viewed, for moving on once a
---- file is marked viewed.
+--- The first file after `line` that is not viewed, wrapping around to earlier
+--- files when none follow, for moving on once a file is marked viewed.
 function M.find_next_unviewed_file(layout, line)
+    local current = M.find_file_at_line(layout, line)
+    local current_line = current and current.line or line
     for _, file in ipairs(layout.files) do
-        if file.line > line and file.viewed ~= "VIEWED" then
+        if file.line > current_line and file.viewed ~= "VIEWED" then
+            return file
+        end
+    end
+    for _, file in ipairs(layout.files) do
+        if file.line < current_line and file.viewed ~= "VIEWED" then
             return file
         end
     end

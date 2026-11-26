@@ -251,7 +251,12 @@ local function bind_keys(session, buf)
     map("X", function() retry_comment(session) end, "Retry failed PR comment")
     map("q", function() M.close(session) end, "Close PR conversation")
     map("?", function() require("jpr.views.cheatsheet").open() end, "Show Jpr keyboard shortcuts")
-    require("jpr").bind_session_keys(buf)
+    local jpr = require("jpr")
+    jpr.bind_session_keys(buf)
+    local full_diff_key = jpr.config.keys and jpr.config.keys.full_diff
+    if type(full_diff_key) == "string" and full_diff_key ~= "" then
+        vim.keymap.set("n", full_diff_key, "<Plug>(jpr-full-diff)", { buffer = buf, remap = true, silent = true, nowait = true, desc = "Switch to the full branch diff view" })
+    end
 end
 
 local function get_or_create_state(session)

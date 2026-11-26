@@ -16,6 +16,13 @@ function M.is_live_linked_pr_session(context)
     return M.is_live_session(context) and context.is_linked_pr == true
 end
 
+--- Returns `true` when `:Jpr stream` can return to the full branch diff view.
+--- @param context table|nil
+--- @return boolean
+function M.is_stream_executable(context)
+    return M.is_live_session(context) and context.is_stream_visible ~= true
+end
+
 --- Returns `true` when `:Jpr comment` can anchor to the cursor's line or file.
 --- @param context table|nil
 --- @return boolean

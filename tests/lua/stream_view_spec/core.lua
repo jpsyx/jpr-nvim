@@ -94,8 +94,9 @@ return function(context)
     local leave_autocmds = vim.api.nvim_get_autocmds({ event = "BufWinLeave", buffer = review.stream.buffers.main })
     assert(#leave_autocmds == 1, "one BufWinLeave: " .. #leave_autocmds)
 
-    -- ]h skips the hunks of a viewed file's closed fold, and <CR> anywhere in
-    -- that fold opens the file at its top rather than at the hidden line.
+    -- ]h skips the hunks of a viewed file's closed fold, a collapsed viewed file
+    -- renders as a single header line (no +-- banner) with zo still expanding it,
+    -- and <CR> on that fold opens the file at its top rather than at the hidden line.
     vim.fn.writefile({ "1", "2", "3", "4", "5", "6" }, worktree .. "/b.md")
     local folded_stream = {
         mode = "unified",
@@ -108,12 +109,28 @@ return function(context)
     stream_view.draw(review, folded_stream, {})
     stream_win = vim.fn.win_findbuf(review.stream.buffers.main)[1]
     vim.api.nvim_set_current_win(stream_win)
-    assert(vim.fn.foldclosed(5) == 5 and vim.fn.foldclosedend(5) == 8, "b.md's body is folded")
+    assert(vim.fn.foldclosed(4) == 4 and vim.fn.foldclosedend(4) == 8, "b.md folds from its header line through its body")
+    vim.cmd("redraw")
+    local fold_top, fold_left = unpack(vim.fn.win_screenpos(stream_win))
+    local function read_fold_row(row)
+        local cells = {}
+        for column = fold_left, fold_left + vim.api.nvim_win_get_width(stream_win) - 1 do
+            cells[#cells + 1] = vim.fn.screenstring(fold_top + row - 1, column)
+        end
+        return table.concat(cells)
+    end
+    assert(vim.startswith(read_fold_row(4), "▸ ✓ b.md  +1 -0"), "collapsed file shows header only: " .. read_fold_row(4))
+    assert(vim.startswith(read_fold_row(5), "▾   c.md  +1 -0"), "no extra +-- fold banner below collapsed file: " .. read_fold_row(5))
     vim.api.nvim_win_set_cursor(stream_win, { 2, 0 })
     stream_view.jump(review, "hunks", 1)
     assert(vim.api.nvim_win_get_cursor(stream_win)[1] == 10, "]h skips the folded hunks: " .. vim.api.nvim_win_get_cursor(stream_win)[1])
     stream_view.jump(review, "hunks", -1)
     assert(vim.api.nvim_win_get_cursor(stream_win)[1] == 2, "[h skips them too")
+    vim.api.nvim_win_set_cursor(stream_win, { 4, 0 })
+    vim.cmd("normal! zo")
+    assert(vim.fn.foldclosed(4) == -1, "zo opens the collapsed file in place")
+    vim.cmd("normal! zc")
+    assert(vim.fn.foldclosed(4) == 4, "zc collapses the file again")
     vim.api.nvim_win_set_cursor(stream_win, { 7, 0 })
     stream_view.open_target(review)
     assert(vim.fn.resolve(vim.api.nvim_buf_get_name(0)) == vim.fn.resolve(worktree .. "/b.md"), "<CR> on the fold opens b.md")
@@ -166,6 +183,16 @@ return function(context)
     end
     assert(vim.startswith(screen_row(1), "▾   evil^[.md"), screen_row(1))
     assert(vim.startswith(screen_row(3), "          1 + ^[[2J^M^@x"), screen_row(3))
+
+    -- A folded header with control bytes also renders sanitized via foldtext().
+    stream_view.draw(review, {
+        mode = "unified",
+        rows = { create_file_row("evil\27.md", true), create_hunk_row("evil\27.md", 1), create_added_row("evil\27.md", 1, "x") },
+    }, {})
+    stream_win = vim.fn.win_findbuf(review.stream.buffers.main)[1]
+    vim.cmd("redraw")
+    assert(not screen_row(1):find("[%z\1-\31\127]"), "folded header has no raw control character")
+    assert(vim.startswith(screen_row(1), "▸ ✓ evil^[.md"), "folded header sanitized: " .. screen_row(1))
 
     -- A stream buffer wiped from under the session is made again by :Jpr stream.
     vim.api.nvim_buf_delete(review.stream.buffers.main, { force = true })
@@ -288,7 +315,7 @@ return function(context)
     stream_view.open_target(review)
     assert(vim.fn.resolve(vim.api.nvim_buf_get_name(0)) == vim.fn.resolve(worktree .. "/fresh.md"), "fresh.md opens")
     local opened_win = vim.api.nvim_get_current_win()
-    for _, name in ipairs({ "wrap", "number", "signcolumn", "cursorline", "foldmethod", "scrollbind", "cursorbind" }) do
+    for _, name in ipairs({ "wrap", "number", "signcolumn", "cursorline", "foldmethod", "foldtext", "fillchars", "foldminlines", "scrollbind", "cursorbind" }) do
         local own = vim.api.nvim_get_option_value(name, { win = opened_win, scope = "global" })
         assert(vim.wo[opened_win][name] == own, name .. " is the stream's, not the window's own")
     end

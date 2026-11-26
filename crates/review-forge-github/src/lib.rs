@@ -197,6 +197,24 @@ impl Forge for GhForge {
         Ok(())
     }
 
+    fn set_viewed_many(&self, pr: &PullRequest, paths: &[String], viewed: bool) -> Result<()> {
+        match paths {
+            [] => Ok(()),
+            [single] => self.set_viewed(pr, single, viewed),
+            many => {
+                let mark = if viewed { "viewed" } else { "unviewed" };
+                for chunk in many.chunks(graphql::BATCH_VIEWED_CHUNK_SIZE) {
+                    let (query, variables) =
+                        graphql::build_batch_viewed_mutation(&pr.node_id, chunk, viewed);
+                    self.graphql(&query, &variables).with_context(|| {
+                        format!("marking {} files {mark} on GitHub", chunk.len())
+                    })?;
+                }
+                Ok(())
+            }
+        }
+    }
+
     fn create_review_thread(
         &self,
         pr: &PullRequest,

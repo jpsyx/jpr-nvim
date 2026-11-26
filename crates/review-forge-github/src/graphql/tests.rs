@@ -289,3 +289,33 @@ fn mentions_put_participants_first_and_deduplicate_assignable_users() {
         ]
     );
 }
+
+#[test]
+fn batch_viewed_mutation_uses_parameterized_variables_and_aliases() {
+    let paths = vec!["src/a.rs".to_owned(), "src/b\"quote\\x.rs".to_owned()];
+    let (query, variables) = build_batch_viewed_mutation("PR_7", &paths, true);
+    assert!(query.contains("mutation($pr: ID!, $p0: String!, $p1: String!)"));
+    assert!(
+        query.contains("f0: markFileAsViewed(input: { pullRequestId: $pr, path: $p0 })"),
+        "{query}"
+    );
+    assert!(
+        query.contains("f1: markFileAsViewed(input: { pullRequestId: $pr, path: $p1 })"),
+        "{query}"
+    );
+    assert!(
+        !query.contains("src/a.rs") && !query.contains("quote"),
+        "paths must never be interpolated into GraphQL text: {query}"
+    );
+    assert_eq!(variables["pr"], "PR_7");
+    assert_eq!(variables["p0"], "src/a.rs");
+    assert_eq!(variables["p1"], "src/b\"quote\\x.rs");
+
+    let (unmark_query, _) = build_batch_viewed_mutation("PR_7", &paths, false);
+    assert!(
+        unmark_query.contains("f0: unmarkFileAsViewed(")
+            && unmark_query.contains("f1: unmarkFileAsViewed("),
+        "{unmark_query}"
+    );
+    assert_eq!(BATCH_VIEWED_CHUNK_SIZE, 50);
+}

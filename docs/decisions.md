@@ -1124,3 +1124,54 @@ with zero external fuzzy-finder dependencies.
 **Consequences.** Zero Rust or protocol changes are needed (`PROTOCOL_VERSION` stays `9`). Closing the agent split via `:q`, `<C-q>`, `<M-q>`, `<C-w>c`, `<C-\>`, or `ga` hides only the window while Claude keeps running; only `:Jpr close` or exiting the CLI stops the process. Neither `gS` nor `gs` can send anything without explicit confirmation stating how many threads or draft comments will be sent.
 
 **Revisit when.** Upstream `toggleterm.nvim` filters `hidden = true` terminals in `ui.find_open_windows()`, or coding agent CLIs expose a structured non-PTY prompt submission channel for live interactive sessions.
+
+## Batched directory viewed toggling, single-line stream folds, and next-file advancement (`PROTOCOL_VERSION = 10`)
+
+**Decision.** Directory-level viewed toggling (`v` / `gv`), single-line
+collapsed viewed files in the full branch diff view, and returning to full diff
+view (`gF`, `:Jpr full`, conditional `"Full Branch Diff"` palette entry) follow
+three coordinated rules:
+
+1. **Batched engine + parameterized aliased GraphQL (`PROTOCOL_VERSION = 10`).**
+   `setViewed` accepts either `{ "path": string, "viewed": bool }` or
+   `{ "paths": string[], "viewed": bool }`. `ReviewSession::set_viewed_paths`
+   validates every path atomically before mutating state, skips remote calls
+   for linked PR files already in the target state, updates `[local]` files in
+   `local.json`, calls `Forge::set_viewed_many` (which packs up to 50 aliased
+   `markFileAsViewed`/`unmarkFileAsViewed` mutations per GraphQL request using
+   strictly parameterized `$p0`, `$p1`, ... variables), saves once, and emits a
+   single `viewedChanged` event.
+2. **Header-inclusive manual folding with virtual-text `foldtext()`.**
+   In `jpr.render.stream`, viewed files fold from their header line through
+   their last body row (`first = header_line`, `last = body_end`). Stream
+   windows set local `foldminlines = 0`, `fillchars` with `fold: `, and
+   `foldtext()` returning `{ { vim.fn.strtrans(getline(v:foldstart)), "JprFileHeader" } }`
+   so each collapsed viewed file renders as one clean `▸ ✓ path  +N -M` line
+   with no `+-- N lines` banner while keeping `zo`/`zc`/`za` peeking (synced
+   across split stream panes) and restoring prior window options when opening a
+   real file.
+3. **Auto-advance to next unviewed file and conditional full-diff navigation.**
+   Marking a file viewed (via `gv` in single-file editor/base buffers, `v`/`gv`
+   in the stream, or `v` in the sidebar while that single file is open)
+   automatically advances to the next unviewed file in tree display order (with
+   wrap-around), or opens the full branch diff view with `"all files viewed"`
+   when none remain; unmarking keeps focus on the current file. The `"Full
+   Branch Diff"` (`[stream]`) palette entry hides via `command.when(context)`
+   while `stream.is_visible(session)` is true, while `gF` (tab-aware on
+   unchanged worktree buffers) and `:Jpr full` always return to the full diff.
+
+**Why.** Looping single-file `setViewed` calls from Lua would spawn N
+sequential `gh` subprocesses, save 4 JSON files N times, and trigger N full
+stream recomputations on a directory toggle. Folding from the header line with
+virtual-text `foldtext()` removes visual noise from collapsed files without
+losing `zo` inspection or file-header `]f`/`[f` navigation. Advancing away from
+a newly viewed file keeps reviewers moving forward through a PR without extra
+keystrokes.
+
+**Consequences.** `PROTOCOL_VERSION` advances to `10`, and toggling a directory
+containing both pushed PR files and `[local]` files repaints the sidebar and
+visible full diff view once.
+
+**Revisit when.** GitHub introduces a native multi-path `markFilesAsViewed`
+GraphQL mutation, or a second frontend needs server-driven directory prefix
+expansion directly over RPC.
