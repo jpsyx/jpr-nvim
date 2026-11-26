@@ -42,7 +42,13 @@
      or enum controls downstream options, so irrelevant steps are skipped and
      abandoned branch answers are pruned on completion.
   5. Neovim-conventional keyboard controls:
-     - Normal-mode menus and toggles: `j`/`k`/`<Down>`/`<Up>` move,
+     - Command Palette (type-to-filter): opens ready to type to fuzzy-filter
+       commands by label or `[id]`, `<C-j>`/`<Down>` and `<C-k>`/`<Up>` move
+       selection, `<C-u>` clears the entire filter input, `<CR>`/`<Tab>`
+       confirm, `<S-Tab>` Back (when applicable), `<Esc>` drops to Normal mode
+       in Neovim (where `j`/`k`/`gg`/`G`/`l`/`h`/`q`/`<Esc>` work) and closes
+       in CLI.
+     - Normal-mode stepper menus and toggles: `j`/`k`/`<Down>`/`<Up>` move,
        `h`/`<Left>`/`<S-Tab>` Back, `l`/`<Right>`/`<Tab>`/`<CR>` Confirm or
        Forward, `gg`/`<Home>` first item, `G`/`<End>` last item, `q`/`<Esc>`
        Cancel.

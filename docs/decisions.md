@@ -1079,3 +1079,31 @@ hovered label uses `JprTitle`.
 
 **Revisit when.** Reviewers ask for a toggle inside the palette to inspect
 unavailable commands with inline reasons for why each is disabled.
+
+## VS Code-style type-to-filter Command Palette in Neovim and CLI
+
+**Decision.** Both the Neovim `:Jpr` Command Palette and the Rust CLI
+`jpr-review` Command Palette open ready to type and fuzzy-filter commands by
+`label` and `[id]`, using a shared deterministic subsequence scorer
+(`lua/jpr/tui/fuzzy.lua` and `crates/cli-tui/src/state/fuzzy.rs`). In Neovim,
+the palette renders as a stacked two-window floating modal (a 1-line editable
+prompt window on top in Insert mode plus a read-only scrollable results window
+below) where `<C-j>`/`<Down>` and `<C-k>`/`<Up>` move selection, `<C-u>` clears
+the entire filter line regardless of Insert-start position, `<CR>`/`<Tab>`
+confirm, and `<Esc>` drops to Normal mode before `<Esc>` or `q` closes. In
+`cli-tui`, `KeyMode::Palette` routes printable typing to `PaletteState`'s filter
+query, `Ctrl+j`/`Ctrl+k` to list navigation, and `Ctrl+u` to `KeyAction::ClearLine`.
+
+**Why.** Scanning a 16-command menu with `j`/`k` is slower than typing 2-4
+letters to jump straight to a command. A stacked two-window modal in Neovim
+preserves native scrolling and `cursorline` on small viewports while preventing
+Insert-mode edits from corrupting command rows, and keeping `<Esc>` -> Normal
+mode preserves Neovim modal muscle memory consistent with `:Jpr` text steps.
+
+**Consequences.** Wizard stepper menus (`select`, `toggle`, `async_select`) keep
+their existing Normal-mode navigation unchanged, while both top-level Command
+Palettes share identical fuzzy ranking and `Ctrl+j`/`Ctrl+k`/`Ctrl+u` controls
+with zero external fuzzy-finder dependencies.
+
+**Revisit when.** Users ask for type-to-filter inside long async pickers such as
+`:Jpr open` PR lists or repository pickers.

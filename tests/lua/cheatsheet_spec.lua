@@ -98,6 +98,8 @@ local EXPECTED_DEFAULT_ITEMS = {
     "Resolve or unresolve thread",
     "1 / 2 / 3",
     "Command Palette & Steppers",
+    "<C-j> / <C-k>",
+    "<C-u>",
     "<leader>J",
     ":Jpr",
     ":Jpr keys",
