@@ -454,13 +454,60 @@ local calls_while_hidden = threads_calls
 conversation.refresh(review)
 assert(threads_calls == calls_while_hidden, "refresh does nothing while conversation is hidden")
 
--- Reopen, then q closes cleanly and wipes buffer; M.close also wipes buffer.
+-- Reopen, then test mouse clicks (message select, footer actions, outside passthrough), and q/close.
 session.conversation_current()
-local reopened_buf = vim.api.nvim_win_get_buf(main_window.find(review))
-assert(vim.api.nvim_buf_is_valid(reopened_buf), "conversation reopened")
+assert(vim.wait(3000, function()
+    local cur_buf = vim.api.nvim_win_get_buf(main_window.find(review))
+    return table.concat(vim.api.nvim_buf_get_lines(cur_buf, 0, -1, false), "\n"):find("Offline follow-up", 1, true) ~= nil
+end), "reopened conversation draws")
+local reopened_win = main_window.find(review)
+local reopened_buf = vim.api.nvim_win_get_buf(reopened_win)
+vim.api.nvim_set_current_win(reopened_win)
+local mouse_mod = require("jpr.mouse")
+local original_getmousepos = vim.fn.getmousepos
+local original_passthrough = mouse_mod.passthrough
+local conv_passthrough = {}
+mouse_mod.passthrough = function(key) conv_passthrough[#conv_passthrough + 1] = key end
+local conv_mouse_ok, conv_mouse_err = pcall(function()
+    local clines = vim.api.nvim_buf_get_lines(reopened_buf, 0, -1, false)
+    local own_line = helpers.find_line_number(clines, "Offline follow-up")
+    assert(own_line ~= nil, "found own message line")
+    vim.fn.getmousepos = function() return { winid = reopened_win, line = own_line, column = 3 } end
+    helpers.press_key("<LeftMouse>")
+    assert(vim.api.nvim_win_get_cursor(reopened_win)[1] == own_line, "clicking conversation message moves cursor")
+
+    -- Clicking outside conversation window passes through <LeftMouse>.
+    vim.fn.getmousepos = function() return { winid = review.panel.win, line = 1, column = 1 } end
+    helpers.press_key("<LeftMouse>")
+    assert(#conv_passthrough == 1 and conv_passthrough[1] == "<LeftMouse>", "outside conversation click passes through")
+
+    -- Clicking [c]omment in footer opens compose float; cancel compose.
+    local comment_col = clines[#clines]:find("[c]omment", 1, true)
+    assert(comment_col ~= nil, "found [c]omment in conversation footer")
+    vim.fn.getmousepos = function() return { winid = reopened_win, line = #clines, column = comment_col + 2 } end
+    helpers.press_key("<LeftMouse>")
+    local compose_win = helpers.find_floating_win("PR Conversation")
+    assert(compose_win ~= nil, "clicking [c]omment in footer opens compose float")
+    helpers.press_key("q")
+    assert(not vim.api.nvim_win_is_valid(compose_win), "closed compose float")
+
+    -- Clicking [q]uit in footer closes conversation buffer.
+    vim.api.nvim_set_current_win(reopened_win)
+    local quit_col = clines[#clines]:find("[q]uit", 1, true)
+    vim.fn.getmousepos = function() return { winid = reopened_win, line = #clines, column = quit_col + 1 } end
+    helpers.press_key("<LeftMouse>")
+    assert(not vim.api.nvim_buf_is_valid(reopened_buf), "clicking [q]uit in conversation footer closes buffer")
+end)
+vim.fn.getmousepos = original_getmousepos
+mouse_mod.passthrough = original_passthrough
+assert(conv_mouse_ok, tostring(conv_mouse_err))
+
+session.conversation_current()
+local q_buf = vim.api.nvim_win_get_buf(main_window.find(review))
+assert(vim.api.nvim_buf_is_valid(q_buf), "conversation reopened for q")
 vim.api.nvim_set_current_win(main_window.find(review))
 helpers.press_key("q")
-assert(not vim.api.nvim_buf_is_valid(reopened_buf), "q wipes conversation buffer")
+assert(not vim.api.nvim_buf_is_valid(q_buf), "q wipes conversation buffer")
 assert(vim.api.nvim_win_is_valid(review.panel.win), "panel stays open after q")
 
 session.conversation_current()

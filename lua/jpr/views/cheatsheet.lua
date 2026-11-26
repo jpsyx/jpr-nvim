@@ -1,4 +1,6 @@
 -- Centered, scrollable keyboard shortcuts cheatsheet modal (`:Jpr keys` and `?`).
+local mouse = require("jpr.mouse")
+
 local M = {}
 
 local namespace = vim.api.nvim_create_namespace("jpr-cheatsheet")
@@ -31,6 +33,7 @@ local function create_diff_section_from_keys(keys)
             create_key_entry_from_binding(configured.next_thread, "Next review thread"),
             create_key_entry_from_binding(configured.prev_thread, "Previous review thread"),
             { key = "<CR>", desc = "Open real file at cursor (stream)" },
+            { key = "<2-LeftMouse>", desc = "Open real file or toggle closed fold (stream)" },
             { key = "v", desc = "Toggle viewed and jump to next unviewed (stream)" },
             { key = "]f / [f", desc = "Next / previous file (stream)" },
             { key = "]h / [h", desc = "Next / previous hunk (stream)" },
@@ -97,6 +100,7 @@ local function create_sections_from_config(config)
                 { key = "h / <Left>", desc = "Collapse directory or jump to parent" },
                 { key = "l / <Right>", desc = "Expand directory or step into first child" },
                 { key = "<CR> / o", desc = "Open file or PR conversation (<CR> toggles dir)" },
+                { key = "<LeftMouse>", desc = "Click file/conversation to open, or dir to toggle" },
                 { key = "r", desc = "Rename or move file / directory" },
                 { key = "a", desc = "Create file or directory" },
                 { key = "v", desc = "Toggle file or directory viewed" },
@@ -120,6 +124,7 @@ local function create_sections_from_config(config)
                 { key = "l/<Right>/<Tab>/<CR>", desc = "Confirm / next step" },
                 { key = "h/<Left>/<S-Tab>", desc = "Back" },
                 { key = "gg / G", desc = "First / last item (<Home> / <End>)" },
+                { key = "<LeftMouse>", desc = "Click command, option, or footer hint (click outside to close)" },
                 { key = "q / <Esc>", desc = "Close (<Esc> drops to Normal first in palette/text)" },
             },
         },
@@ -231,11 +236,28 @@ local function apply_layout_to_buffer(buf, layout)
     end
 end
 
+local function handle_cheatsheet_click()
+    local click = mouse.get_click()
+    if not click then
+        return
+    end
+    if not active_state or not mouse.is_click_in_window(click, active_state.win) then
+        return M.close()
+    end
+    mouse.set_cursor_from_click(active_state.win, click)
+end
+
 local function bind_cheatsheet_keys(buf)
     local map_opts = { buffer = buf, nowait = true, silent = true, desc = "Close Jpr keyboard shortcuts" }
     for _, lhs in ipairs({ "q", "<Esc>", "?" }) do
         vim.keymap.set("n", lhs, M.close, map_opts)
     end
+    vim.keymap.set("n", "<LeftMouse>", handle_cheatsheet_click, {
+        buffer = buf,
+        nowait = true,
+        silent = true,
+        desc = "Place cursor inside cheatsheet or click outside to close",
+    })
 end
 
 local function register_cleanup_guards(state)

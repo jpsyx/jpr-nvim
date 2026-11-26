@@ -318,5 +318,52 @@ return function(context)
     end), "editMessage submitted from popup compose")
     assert(helpers.read_requests(log, "editMessage")[edits_before + 1].params.messageId == "M_1B")
 
+    -- 12. Mouse clicks in thread popup: select message, click footer actions preserving target, click outside closes.
+    local original_getmousepos = vim.fn.getmousepos
+    local popup_mouse_ok, popup_mouse_err = pcall(function()
+        vim.api.nvim_set_current_win(win)
+        vim.api.nvim_win_set_cursor(win, { 3, 0 })
+        session.popup_current()
+        local pwin = helpers.find_floating_win()
+        assert(pwin ~= nil and vim.api.nvim_win_is_valid(pwin), "popup opens for mouse test")
+        local plines = win_lines(pwin)
+        local line_t2 = helpers.find_line_number(plines, "line 1")
+        assert(line_t2 ~= nil, "found T_TWO message line")
+
+        -- Clicking message line selects that message.
+        vim.fn.getmousepos = function() return { winid = pwin, line = line_t2, column = 4 } end
+        helpers.press_key("<LeftMouse>")
+        assert(vim.api.nvim_win_get_cursor(pwin)[1] == line_t2, "clicking message line moves cursor to T_TWO")
+
+        -- Clicking [R]esolve in footer resolves T_TWO (preserving previously selected message).
+        local footer_line = #plines
+        local resolve_col = plines[footer_line]:find("[R]esolve", 1, true)
+        assert(resolve_col ~= nil, "found [R]esolve token in popup footer")
+        local resolve_before = helpers.count_requests(log, '"method":"setResolved"', '"threadId":"T_TWO"')
+        vim.fn.getmousepos = function() return { winid = pwin, line = footer_line, column = resolve_col + 2 } end
+        helpers.press_key("<LeftMouse>")
+        assert(vim.wait(3000, function()
+            return helpers.count_requests(log, '"method":"setResolved"', '"threadId":"T_TWO"') == resolve_before + 1
+        end), "clicking [R]esolve in popup footer targets previously selected T_TWO")
+
+        -- Clicking [q]uit in footer closes popup.
+        plines = win_lines(pwin)
+        local quit_col = plines[#plines]:find("[q]uit", 1, true)
+        vim.fn.getmousepos = function() return { winid = pwin, line = #plines, column = quit_col + 1 } end
+        helpers.press_key("<LeftMouse>")
+        assert(not vim.api.nvim_win_is_valid(pwin), "clicking [q]uit in popup footer closes popup")
+
+        -- Clicking outside popup closes it.
+        vim.api.nvim_set_current_win(win)
+        vim.api.nvim_win_set_cursor(win, { 3, 0 })
+        session.popup_current()
+        local out_pwin = helpers.find_floating_win()
+        vim.fn.getmousepos = function() return { winid = win, line = 1, column = 1 } end
+        helpers.press_key("<LeftMouse>")
+        assert(not vim.api.nvim_win_is_valid(out_pwin), "clicking outside popup closes it")
+    end)
+    vim.fn.getmousepos = original_getmousepos
+    assert(popup_mouse_ok, tostring(popup_mouse_err))
+
     review.client.request = original_request
 end
