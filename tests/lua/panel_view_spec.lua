@@ -363,6 +363,60 @@ assert(vim.wait(3000, function()
     return vim.api.nvim_win_call(live_stream_win, function() return vim.fn.foldclosed(1) == -1 end)
 end), "visible full diff view repaints to expand newly unviewed directory files")
 
+-- Mouse click support in the sidebar panel.
+local mouse_mod = require("jpr.mouse")
+local original_getmousepos = vim.fn.getmousepos
+local original_passthrough = mouse_mod.passthrough
+local passthrough_calls = {}
+mouse_mod.passthrough = function(key)
+    passthrough_calls[#passthrough_calls + 1] = key or "<LeftMouse>"
+end
+local mouse_ok, mouse_err = pcall(function()
+    vim.api.nvim_set_current_win(panel_win)
+    local left_mouse_map = vim.fn.maparg("<LeftMouse>", "n", false, true)
+    assert(type(left_mouse_map) == "table" and type(left_mouse_map.callback) == "function", "<LeftMouse> mapped on panel")
+
+    -- Single-click on collapsed src/ directory expands it, then clicking again collapses and re-expands it.
+    assert(review.panel.collapsed_dirs["src"] == true, "src/ starts collapsed from prior test")
+    vim.fn.getmousepos = function() return { winid = panel_win, line = 7, column = 3 } end
+    left_mouse_map.callback()
+    assert(review.panel.collapsed_dirs["src"] == nil, "single-click on collapsed dir expands it")
+    left_mouse_map.callback()
+    assert(review.panel.collapsed_dirs["src"] == true, "single-click on expanded dir collapses it")
+    left_mouse_map.callback()
+    assert(review.panel.collapsed_dirs["src"] == nil, "single-click re-expands src/ so src/a.rs is visible")
+
+    -- Single-click on a file row opens that file in the main window.
+    vim.fn.getmousepos = function() return { winid = panel_win, line = 8, column = 5 } end
+    left_mouse_map.callback()
+    assert(vim.fn.resolve(vim.api.nvim_buf_get_name(0)) == vim.fn.resolve(worktree .. "/src/a.rs"), "single-click opens src/a.rs")
+
+    -- Single-click on the Conversation row opens PR conversation.
+    vim.api.nvim_set_current_win(panel_win)
+    local conv_line = review.panel.conversation_line
+    assert(conv_line ~= nil, "conversation_line is set")
+    vim.fn.getmousepos = function() return { winid = panel_win, line = conv_line, column = 4 } end
+    left_mouse_map.callback()
+    assert(vim.wait(3000, function()
+        return review.conversation ~= nil and review.conversation.buf ~= nil and vim.api.nvim_buf_is_valid(review.conversation.buf)
+    end), "single-click on Conversation opens PR conversation")
+
+    -- Single-click on a non-selectable header line keeps selection unchanged.
+    vim.api.nvim_set_current_win(panel_win)
+    vim.api.nvim_win_set_cursor(panel_win, { 8, 0 })
+    vim.fn.getmousepos = function() return { winid = panel_win, line = 1, column = 2 } end
+    left_mouse_map.callback()
+    assert(vim.api.nvim_win_get_cursor(panel_win)[1] == 8, "click on non-selectable header preserves selection")
+
+    -- Single-click outside panel_win forwards natively via passthrough.
+    vim.fn.getmousepos = function() return { winid = live_stream_win, line = 2, column = 1 } end
+    left_mouse_map.callback()
+    assert(#passthrough_calls == 1 and passthrough_calls[1] == "<LeftMouse>", "outside click passes through <LeftMouse>")
+end)
+vim.fn.getmousepos = original_getmousepos
+mouse_mod.passthrough = original_passthrough
+assert(mouse_ok, tostring(mouse_err))
+
 os.remove(stream_payload)
 os.remove(set_viewed_payload)
 vim.env.FAKE_ENGINE_STREAM_FILE = nil

@@ -1,5 +1,6 @@
 -- The PR panel window: draws render.panel output as a vertical-only collapsible
 -- menu, opens files/conversation, toggles directories, and toggles viewed on v.
+local mouse = require("jpr.mouse")
 local render = require("jpr.render.panel")
 
 local M = {}
@@ -176,6 +177,22 @@ local function handle_enter_key(session)
     M.open_file_under_cursor(session)
 end
 
+local function handle_left_click(session)
+    local panel = session.panel
+    local click = mouse.get_click()
+    if not panel or not click then
+        return
+    end
+    if not mouse.is_click_in_window(click, panel.win) then
+        return mouse.passthrough("<LeftMouse>")
+    end
+    if panel.rows[click.line] == nil then
+        return
+    end
+    set_cursor_line(panel, click.line)
+    handle_enter_key(session)
+end
+
 local function bind_navigation_keymaps(session, buf)
     local map = function(lhs, rhs, desc)
         vim.keymap.set("n", lhs, rhs, { buffer = buf, nowait = true, silent = true, desc = desc })
@@ -201,6 +218,9 @@ local function bind_action_keymaps(session, buf)
     vim.keymap.set("n", "<CR>", function()
         handle_enter_key(session)
     end, { buffer = buf, nowait = true, silent = true, desc = "Open the conversation or file, or toggle directory" })
+    vim.keymap.set("n", "<LeftMouse>", function()
+        handle_left_click(session)
+    end, { buffer = buf, nowait = true, silent = true, desc = "Click to open file or toggle directory" })
     vim.keymap.set("n", "o", function()
         handle_open_key(session)
     end, { buffer = buf, nowait = true, silent = true, desc = "Open the conversation or file under the cursor" })
