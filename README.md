@@ -49,6 +49,8 @@ With [lazy.nvim](https://github.com/folke/lazy.nvim):
     --   comment = "gc",
     --   suggest_comment = "gC",
     --   file_comment = "gf",
+    --   full_diff = "gF",
+    --   toggle_viewed = "gv",
     --   thread_popup = "gt",
     --   next_thread = "]t",
     --   prev_thread = "[t",
@@ -81,7 +83,7 @@ binary manually.
 | `:Jpr sync` | Sync with GitHub now (it also syncs every minute in PR mode; in an unlinked local session, probes GitHub for an open PR on the branch and upgrades the live session in-place, pushing locally viewed files to GitHub) |
 | `:Jpr push` | Push committed `HEAD` to the pull request's remote branch and resync (never auto-commits dirty files) |
 | `:Jpr toggle [unified \| split]` | Flip every diff between unified and split, or jump directly to `unified` or `split`; the choice is remembered |
-| `:Jpr stream` | Show the stream of every change beside the panel |
+| `:Jpr stream` (alias: `:Jpr full`, default key: `gF`) | Return to the full branch diff view showing all changed files in a continuous scroll (shown in the Command Palette as `"Full Branch Diff"` whenever not already visible) |
 | `:[range]Jpr comment [line \| file \| suggest]` | Open the compose float for a draft or local comment on the cursor line or visual range, or pass `line`, `file`, or `suggest` directly |
 | `:Jpr suggest` | Turn an uncommitted edit around the cursor into a GitHub draft suggestion and revert just that hunk |
 | `:Jpr expand` | Toggle inline expansion of review thread messages across diff and stream buffers |
@@ -102,7 +104,7 @@ The left sidebar panel acts as a vertical-only collapsible menu:
 | `<CR>` / `o` | Open the PR conversation view or file from the worktree (`<CR>` also toggles directories) |
 | `r` | Rename or move the file or directory under the cursor (inline input + automatic LSP import updates) |
 | `a` | Create a new file or directory (inline input; trailing `/` creates a directory + LSP `willCreateFiles`/`didCreateFiles`) |
-| `v` | Toggle viewed for the file under the cursor |
+| `v` | Toggle viewed for the file or directory (recursively across subdirectories) under the cursor |
 | `?` | Show the keyboard shortcuts cheatsheet |
 
 Inline rename (`r`) and create (`a`) follow three path rules with live
@@ -149,6 +151,8 @@ In both changed diff buffers (and their base split buffers) and the stream:
 | `gc` (normal/visual) | `<Plug>(jpr-comment)` | New draft or local comment on the cursor line or visual range |
 | `gC` (normal/visual) | `<Plug>(jpr-suggest-comment)` | New draft comment pre-filled with a `suggestion` block |
 | `gf` | `<Plug>(jpr-file-comment)` | New file-level draft or local comment |
+| `gF` | `<Plug>(jpr-full-diff)` | Return to the full branch diff view |
+| `gv` | `<Plug>(jpr-toggle-viewed)` | Toggle viewed for the current file (advancing to the next unviewed file when marking viewed) |
 | `gt` | `<Plug>(jpr-thread-popup)` | Open the floating thread popup at the cursor |
 | `]t` / `[t` | `<Plug>(jpr-next-thread)` / `<Plug>(jpr-prev-thread)` | Jump to the next / previous review thread |
 

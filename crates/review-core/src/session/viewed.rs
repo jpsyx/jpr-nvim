@@ -393,7 +393,10 @@ mod tests {
         session.refresh_worktree(&[]).unwrap();
         let events = session.subscribe();
         let view = session
-            .set_viewed_paths(&["src/b.rs".to_owned(), "src/local_new.rs".to_owned()], true)
+            .set_viewed_paths(
+                &["src/b.rs".to_owned(), "src/local_new.rs".to_owned()],
+                true,
+            )
             .unwrap();
         assert_eq!(
             fakes.forge.viewed_batch_calls(),
