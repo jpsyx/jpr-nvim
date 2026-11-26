@@ -216,6 +216,7 @@ local function bind_action_keymaps(session, buf)
     vim.keymap.set("n", "?", function()
         require("jpr.views.cheatsheet").open()
     end, { buffer = buf, nowait = true, silent = true, desc = "Show Jpr keyboard shortcuts" })
+    require("jpr").bind_session_keys(buf)
 end
 
 --- Opens the panel on the left of the current tab for `session`.

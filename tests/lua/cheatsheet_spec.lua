@@ -97,6 +97,11 @@ local EXPECTED_DEFAULT_ITEMS = {
     "@ / <C-x><C-o>",
     "Resolve or unresolve thread",
     "1 / 2 / 3",
+    "Review Session & Agent",
+    "gS",
+    "gs",
+    "ga",
+    "Hide agent terminal window without quitting",
     "Command Palette & Steppers",
     "<leader>J",
     ":Jpr",
@@ -134,6 +139,9 @@ local function test_custom_and_disabled_keys_render_dynamically()
             thread_popup = nil,
             next_thread = "]n",
             prev_thread = "[n",
+            send_agent = "<leader>s",
+            submit_review = false,
+            toggle_agent = "gA",
         },
     }
     local layout = cheatsheet.create_layout_from_config(custom_config)
@@ -143,6 +151,11 @@ local function test_custom_and_disabled_keys_render_dynamically()
     assert(text:find("gS", 1, true) ~= nil, "custom suggest_comment key rendered")
     assert(text:find("]n", 1, true) ~= nil, "custom next_thread key rendered")
     assert(text:find("[n", 1, true) ~= nil, "custom prev_thread key rendered")
+    assert(text:find("<leader>s", 1, true) ~= nil, "custom send_agent key rendered")
+    assert(text:find("gA", 1, true) ~= nil, "custom toggle_agent key rendered")
+    local submit_line = find_line_index(layout.lines, "Submit GitHub review")
+    assert(submit_line ~= nil and layout.lines[submit_line + 1]:find("(disabled)", 1, true) ~= nil, "disabled submit_review renders (disabled)")
+    assert(find_highlight(layout, submit_line, "(disabled)", "JprMuted"), "disabled submit_review uses JprMuted")
 
     local comment_line = find_line_index(layout.lines, "New draft comment")
     assert(comment_line ~= nil and find_highlight(layout, comment_line, "<leader>c", "JprHunk"), "custom key uses JprHunk")

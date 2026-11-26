@@ -17,12 +17,18 @@ M.defaults = {
     -- Interactive agent CLI for `:Jpr agent`, `:Jpr send`, and `:Jpr prepass`:
     -- "claude" or "codex".
     agent = "claude",
-    -- Command or path invoked for Claude Code in the agent panel.
+    -- Executable name, command string with flags, or argv list for Claude Code.
     claude_cmd = "claude",
-    -- Command or path invoked for Codex in the agent panel.
+    -- Executable name, command string with flags, or argv list for Codex.
     codex_cmd = "codex",
-    -- Width in columns of the right-hand `:Jpr agent` vertical split.
-    agent_width = 56,
+    -- Layout direction for the coding agent terminal: "vertical", "horizontal",
+    -- "float", or "tab".
+    agent_direction = "vertical",
+    -- Width in columns for vertical split; nil computes ~40% of editor columns.
+    agent_width = nil,
+    -- Whether to lazy-load toggleterm.nvim (if installed) before spawning the
+    -- agent terminal so user TermOpen mappings and shading attach automatically.
+    agent_load_toggleterm = true,
     -- The diff view until the reviewer flips it with :Jpr toggle, which is
     -- then remembered: "unified" or "split".
     view = "unified",
@@ -40,6 +46,9 @@ M.defaults = {
         thread_popup = "gt",
         next_thread = "]t",
         prev_thread = "[t",
+        send_agent = "gS",
+        submit_review = "gs",
+        toggle_agent = "ga",
     },
 }
 
@@ -93,26 +102,37 @@ function M.binary_path()
     return require("jpr.binary").get_binary_path_from_config(M.config)
 end
 
---- Binds configured comment and thread keys in buffer `buf` to their
---- `<Plug>(jpr-*)` mappings, skipping any entry set to `false`.
+local function bind_plug_key(buf, modes, lhs, plug, desc)
+    if type(lhs) == "string" and lhs ~= "" then
+        vim.keymap.set(
+            modes,
+            lhs,
+            plug,
+            { buffer = buf, remap = true, silent = true, nowait = true, desc = desc }
+        )
+    end
+end
+
+--- Binds review-wide session keys (`send_agent`, `submit_review`,
+--- `toggle_agent`) on `buf`, skipping any entry set to `false` or empty.
+function M.bind_session_keys(buf)
+    local keys = M.config.keys or {}
+    bind_plug_key(buf, "n", keys.send_agent, "<Plug>(jpr-send-agent)", "Send local threads to coding agent")
+    bind_plug_key(buf, "n", keys.submit_review, "<Plug>(jpr-submit-review)", "Open GitHub review submission modal")
+    bind_plug_key(buf, "n", keys.toggle_agent, "<Plug>(jpr-toggle-agent)", "Toggle coding agent terminal panel")
+end
+
+--- Binds configured comment, thread, and review session keys in buffer `buf`
+--- to their `<Plug>(jpr-*)` mappings, skipping any entry set to `false`.
 function M.bind_buffer_keys(buf)
     local keys = M.config.keys or {}
-    local map = function(modes, lhs, plug, desc)
-        if lhs and lhs ~= false then
-            vim.keymap.set(
-                modes,
-                lhs,
-                plug,
-                { buffer = buf, remap = true, silent = true, nowait = true, desc = desc }
-            )
-        end
-    end
-    map({ "n", "x" }, keys.comment, "<Plug>(jpr-comment)", "New GitHub draft comment")
-    map({ "n", "x" }, keys.suggest_comment, "<Plug>(jpr-suggest-comment)", "New GitHub suggestion comment")
-    map("n", keys.file_comment, "<Plug>(jpr-file-comment)", "New file-level GitHub comment")
-    map("n", keys.thread_popup, "<Plug>(jpr-thread-popup)", "Open review thread popup")
-    map("n", keys.next_thread, "<Plug>(jpr-next-thread)", "Next review thread")
-    map("n", keys.prev_thread, "<Plug>(jpr-prev-thread)", "Previous review thread")
+    bind_plug_key(buf, { "n", "x" }, keys.comment, "<Plug>(jpr-comment)", "New GitHub draft comment")
+    bind_plug_key(buf, { "n", "x" }, keys.suggest_comment, "<Plug>(jpr-suggest-comment)", "New GitHub suggestion comment")
+    bind_plug_key(buf, "n", keys.file_comment, "<Plug>(jpr-file-comment)", "New file-level GitHub comment")
+    bind_plug_key(buf, "n", keys.thread_popup, "<Plug>(jpr-thread-popup)", "Open review thread popup")
+    bind_plug_key(buf, "n", keys.next_thread, "<Plug>(jpr-next-thread)", "Next review thread")
+    bind_plug_key(buf, "n", keys.prev_thread, "<Plug>(jpr-prev-thread)", "Previous review thread")
+    M.bind_session_keys(buf)
 end
 
 --- The PR number in a `:Jpr open` argument: `123`, `#123`, or a pull request
@@ -430,6 +450,9 @@ function M.action(name)
         prev_thread = function()
             session.jump_thread_current(-1)
         end,
+        send_agent = session.send_current,
+        submit_review = session.submit_current,
+        toggle_agent = session.agent_current,
     }
     local handler = dispatch[name]
     if handler then

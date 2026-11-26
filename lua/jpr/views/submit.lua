@@ -1,6 +1,7 @@
 -- Floating review submission modal (`:Jpr submit`): shows pending drafts,
--- blocked reasons, action selection (COMMENT / APPROVE / REQUEST_CHANGES), and
--- an editable review summary buffer.
+-- blocked reasons, action selection (COMMENT / APPROVE / REQUEST_CHANGES), an
+-- editable review summary buffer, and a final confirmation dialog.
+local confirm = require("jpr.views.confirm")
 local main_window = require("jpr.views.main_window")
 local render = require("jpr.render.submit")
 
@@ -8,12 +9,27 @@ local M = {}
 
 local namespace = vim.api.nvim_create_namespace("jpr-submit")
 
+local EVENT_LABELS = {
+    COMMENT = "Comment",
+    APPROVE = "Approve",
+    REQUEST_CHANGES = "Request changes",
+}
+
 local function next_request_id(session)
     if not session then
         return 0
     end
     session.submit_request_id = (session.submit_request_id or 0) + 1
     return session.submit_request_id
+end
+
+local function close_confirm(state)
+    local dialog = state and state.confirm
+    if not dialog then
+        return
+    end
+    state.confirm = nil
+    confirm.close(dialog)
 end
 
 local function close_editor(state)
@@ -36,6 +52,7 @@ local function close_active_submit(session)
         return
     end
     session.submit = nil
+    close_confirm(state)
     close_editor(state)
     if state.win and vim.api.nvim_win_is_valid(state.win) then
         pcall(vim.api.nvim_win_close, state.win, true)
@@ -87,20 +104,23 @@ local function select_event(state, event)
     paint_modal(state)
 end
 
-local function submit_review(session, state)
-    if state.in_flight then
+local function build_submit_confirm_headline(event, draft_count, body)
+    local action_label = EVENT_LABELS[event] or tostring(event)
+    local count = tonumber(draft_count) or 0
+    local draft_noun = count == 1 and "draft comment" or "draft comments"
+    local has_summary = vim.trim(body) ~= ""
+    if count == 0 and has_summary then
+        return ("Submit %s review with 0 draft comments (summary only) to GitHub?"):format(action_label)
+    end
+    if has_summary then
+        return ("Submit %s review with %d %s and a summary to GitHub?"):format(action_label, count, draft_noun)
+    end
+    return ("Submit %s review with %d %s to GitHub?"):format(action_label, count, draft_noun)
+end
+
+local function execute_submit_review(session, state, body)
+    if state.in_flight or session.closing or session.submit ~= state then
         return
-    end
-    local blocked_reason = state.preview.blockedReason
-    if blocked_reason and blocked_reason ~= "" then
-        return require("jpr").error(blocked_reason)
-    end
-    if state.event ~= "COMMENT" and not state.preview.canApproveOrRequestChanges then
-        return require("jpr").info("cannot approve or request changes on your own PR")
-    end
-    local body = table.concat(state.body_lines or {}, "\n")
-    if state.event == "COMMENT" and (state.preview.draftCount or 0) == 0 and vim.trim(body) == "" then
-        return require("jpr").error("a comment review with zero drafts needs a summary body")
     end
     state.in_flight = true
     require("jpr.session").request(session, "submitReview", {
@@ -115,7 +135,53 @@ local function submit_review(session, state)
         require("jpr").info("review submitted")
     end, function()
         state.in_flight = false
+        if session.submit == state and state.win and vim.api.nvim_win_is_valid(state.win) then
+            pcall(vim.api.nvim_set_current_win, state.win)
+        end
     end)
+end
+
+local function submit_review(session, state)
+    if state.in_flight or confirm.is_open(state.confirm) then
+        return
+    end
+    local blocked_reason = state.preview.blockedReason
+    if blocked_reason and blocked_reason ~= "" then
+        return require("jpr").error(blocked_reason)
+    end
+    if state.event ~= "COMMENT" and not state.preview.canApproveOrRequestChanges then
+        return require("jpr").info("cannot approve or request changes on your own PR")
+    end
+    local body = table.concat(state.body_lines or {}, "\n")
+    local draft_count = state.preview.draftCount or 0
+    if state.event == "COMMENT" and draft_count == 0 and vim.trim(body) == "" then
+        return require("jpr").error("a comment review with zero drafts needs a summary body")
+    end
+    local dialog
+    dialog = confirm.open({
+        title = " Confirm GitHub Review Submission ",
+        headline = build_submit_confirm_headline(state.event, draft_count, body),
+        confirm_label = "Submit to GitHub",
+        confirm_badge = "[submit]",
+        confirm_help = "Publish this review and its pending draft comments on GitHub.",
+        cancel_label = "Cancel",
+        cancel_help = "Return to the Submit Review preview without publishing.",
+        on_confirm = function()
+            if state.confirm == dialog then
+                state.confirm = nil
+            end
+            execute_submit_review(session, state, body)
+        end,
+        on_cancel = function()
+            if state.confirm == dialog then
+                state.confirm = nil
+            end
+            if session.submit == state and state.win and vim.api.nvim_win_is_valid(state.win) then
+                pcall(vim.api.nvim_set_current_win, state.win)
+            end
+        end,
+    })
+    state.confirm = dialog
 end
 
 local function activate_cursor_row(session, state)
@@ -253,6 +319,7 @@ local function open_modal(session, preview)
         callback = function()
             if session.submit == state then
                 session.submit = nil
+                close_confirm(state)
                 close_editor(state)
             end
         end,

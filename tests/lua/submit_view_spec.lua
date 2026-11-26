@@ -27,6 +27,10 @@ local function find_summary_editor_win()
     return helpers.find_floating_win("Review Summary")
 end
 
+local function find_submit_confirm_win()
+    return helpers.find_floating_win("Confirm GitHub Review Submission")
+end
+
 local function win_lines(win)
     return vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(win), 0, -1, false)
 end
@@ -300,6 +304,26 @@ helpers.press_key("<C-s>")
 mock_submit_error = { code = -32000, message = "GitHub rejected submit" }
 errors = {}
 helpers.press_key("<C-s>")
+local confirm_win = find_submit_confirm_win()
+assert(confirm_win ~= nil and vim.api.nvim_win_is_valid(confirm_win), "<C-s> opens GitHub submit confirmation modal")
+local confirm_text = table.concat(win_lines(confirm_win), "\n")
+assert(
+    confirm_text:find("Submit Approve review with 1 draft comment and a summary to GitHub?", 1, true) ~= nil,
+    "confirmation names exact action, draft count, and summary: " .. confirm_text
+)
+assert(submit_calls == calls_before_empty, "opening confirmation sends no submitReview RPC yet")
+
+-- Canceling confirmation via q returns focus to Submit Review with state preserved.
+helpers.press_key("q")
+assert(find_submit_confirm_win() == nil, "q closes submit confirmation modal")
+assert(vim.api.nvim_get_current_win() == retry_modal_win, "canceling confirmation restores focus to Submit Review")
+assert(helpers.find_line_number(win_lines(retry_modal_win), "  Ship it!") ~= nil, "summary preserved after cancel")
+assert(submit_calls == calls_before_empty, "canceled confirmation sends no submitReview RPC")
+
+-- Confirming via <C-s> then <CR> triggers submitReview; failure keeps Submit Review open for retry.
+helpers.press_key("<C-s>")
+assert(find_submit_confirm_win() ~= nil, "reopened submit confirmation modal")
+helpers.press_key("<CR>")
 assert(vim.wait(3000, function() return #errors == 1 end), "submitReview error reported")
 assert(errors[1]:find("GitHub rejected submit", 1, true) ~= nil, vim.inspect(errors))
 assert(vim.api.nvim_win_is_valid(retry_modal_win), "modal stays open after submitReview error")
@@ -309,13 +333,27 @@ mock_submit_error = nil
 review.client.request = original_request
 local real_submits_before = #helpers.read_requests(log, "submitReview")
 helpers.press_key("<C-s>")
+assert(find_submit_confirm_win() ~= nil, "retry opens submit confirmation modal")
+helpers.press_key("<CR>")
 assert(vim.wait(3000, function()
     return not vim.api.nvim_win_is_valid(retry_modal_win) and #helpers.read_requests(log, "submitReview") == real_submits_before + 1
 end), "retry submitReview succeeds and closes modal")
 local sent_submit = helpers.read_requests(log, "submitReview")[real_submits_before + 1].params
 assert(sent_submit.event == "APPROVE" and sent_submit.body == "Ship it!", vim.inspect(sent_submit))
 
--- 7f. In-flight guard ignores duplicate <C-s> and editor `e` while pending, and closes on completion.
+-- 7f. Closing Submit Review while confirmation is open closes both modals without calling submitReview.
+session.submit_current()
+assert(vim.wait(3000, function() return find_submit_win() ~= nil end), "modal opens for close-with-confirm test")
+local close_confirm_modal_win = find_submit_win()
+local submits_before_close = #helpers.read_requests(log, "submitReview")
+helpers.press_key("<C-s>")
+assert(find_submit_confirm_win() ~= nil, "confirmation open before M.close")
+submit_view.close(review)
+assert(not vim.api.nvim_win_is_valid(close_confirm_modal_win), "M.close closes Submit Review")
+assert(find_submit_confirm_win() == nil, "M.close also closes open confirmation modal")
+assert(#helpers.read_requests(log, "submitReview") == submits_before_close, "M.close never triggers submitReview")
+
+-- 7g. In-flight guard ignores duplicate <C-s> and editor `e` while pending, and closes on completion.
 review.client.request = function(client_self, method, params, callback)
     if method == "submitPreview" then
         vim.schedule(function()
@@ -337,6 +375,8 @@ local inflight_modal_win = find_submit_win()
 hold_submit_callback = true
 local calls_before_inflight = submit_calls
 vim.api.nvim_win_set_cursor(inflight_modal_win, { 1, 0 })
+helpers.press_key("<CR>")
+assert(find_submit_confirm_win() ~= nil, "non-draft <CR> opens confirmation modal")
 helpers.press_key("<CR>")
 helpers.press_key("<C-s>")
 helpers.press_key("e")
