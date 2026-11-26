@@ -247,11 +247,11 @@ with_stubs({
         on_authenticated = function() end,
         on_cancel = function() cancelled = cancelled + 1 end,
     })
-    local mwin = helpers.current_float_win()
-    local mlines = helpers.current_lines()
-    local cancel_col = mlines[#mlines]:find("[q/Esc] cancel", 1, true)
+    local modal_win = helpers.current_float_win()
+    local modal_lines = helpers.current_lines()
+    local cancel_col = modal_lines[#modal_lines]:find("[q/Esc] cancel", 1, true)
     assert(cancel_col ~= nil, "found [q/Esc] cancel in auth footer")
-    vim.fn.getmousepos = function() return { winid = mwin, line = #mlines, column = cancel_col + 2 } end
+    vim.fn.getmousepos = function() return { winid = modal_win, line = #modal_lines, column = cancel_col + 2 } end
     helpers.press_key("<LeftMouse>")
     assert(cancelled == 1 and not auth.is_active(), "footer [q/Esc] cancel click cancels auth modal")
 

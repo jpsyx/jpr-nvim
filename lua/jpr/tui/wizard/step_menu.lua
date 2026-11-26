@@ -126,10 +126,7 @@ local function handle_menu_click(controller, state, go_back, confirm)
         confirm()
         return
     end
-    local lines = state.layout and state.layout.lines or {}
-    local footer_line = #lines
-    local spans = mouse.parse_footer_actions(lines[footer_line], STEP_FOOTER_SPECS)
-    local action = mouse.hit_test_footer_action(footer_line, spans, click.line, click.column)
+    local action = mouse.hit_test_footer_line(state.layout and state.layout.lines, STEP_FOOTER_SPECS, click)
     if action == "back" then
         go_back()
     elseif action == "confirm" then

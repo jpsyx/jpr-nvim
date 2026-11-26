@@ -132,6 +132,27 @@ local function activate_selected(state, callbacks)
     end
 end
 
+local function handle_auth_click(state, callbacks, cancel)
+    local click = mouse.get_click()
+    if not click then
+        return
+    end
+    if not mouse.is_click_in_window(click, state.win) then
+        return cancel()
+    end
+    local clicked_index = state.layout and state.layout.item_for_line[click.line]
+    if clicked_index ~= nil then
+        state.selected_index = clicked_index
+        return activate_selected(state, callbacks)
+    end
+    local action = mouse.hit_test_footer_line(state.layout and state.layout.lines, MODAL_FOOTER_SPECS, click)
+    if action == "confirm" then
+        activate_selected(state, callbacks)
+    elseif action == "cancel" then
+        cancel()
+    end
+end
+
 local function bind_modal_keys(state, callbacks)
     local map = function(lhs, handler)
         vim.keymap.set("n", lhs, handler, { buffer = state.buf, nowait = true, silent = true })
@@ -147,36 +168,13 @@ local function bind_modal_keys(state, callbacks)
         M.close(state)
         callbacks.on_cancel()
     end
-    local handle_click = function()
-        local click = mouse.get_click()
-        if not click then
-            return
-        end
-        if not mouse.is_click_in_window(click, state.win) then
-            return cancel()
-        end
-        local clicked_index = state.layout and state.layout.item_for_line[click.line]
-        if clicked_index ~= nil then
-            state.selected_index = clicked_index
-            return activate_selected(state, callbacks)
-        end
-        local lines = state.layout and state.layout.lines or {}
-        local footer_line = #lines
-        local spans = mouse.parse_footer_actions(lines[footer_line], MODAL_FOOTER_SPECS)
-        local action = mouse.hit_test_footer_action(footer_line, spans, click.line, click.column)
-        if action == "confirm" then
-            activate_selected(state, callbacks)
-        elseif action == "cancel" then
-            cancel()
-        end
-    end
     for _, lhs in ipairs({ "j", "<Down>" }) do map(lhs, function() move_to(state.selected_index + 1) end) end
     for _, lhs in ipairs({ "k", "<Up>" }) do map(lhs, function() move_to(state.selected_index - 1) end) end
     for _, lhs in ipairs({ "gg", "<Home>" }) do map(lhs, function() move_to(1) end) end
     for _, lhs in ipairs({ "G", "<End>" }) do map(lhs, function() move_to(#OPTIONS) end) end
     for _, lhs in ipairs({ "<CR>", "l", "<Right>", "<Tab>" }) do map(lhs, confirm) end
     for _, lhs in ipairs({ "q", "<Esc>" }) do map(lhs, cancel) end
-    map("<LeftMouse>", handle_click)
+    map("<LeftMouse>", function() handle_auth_click(state, callbacks, cancel) end)
 end
 
 local function register_modal_autocmds(state, callbacks)

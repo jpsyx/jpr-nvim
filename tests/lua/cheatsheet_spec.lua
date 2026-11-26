@@ -297,11 +297,11 @@ end
 
 local function test_cheatsheet_mouse_outside_click_closes_and_inside_stays_open()
     local original_getmousepos = vim.fn.getmousepos
-    local ok, err = pcall(function()
+    local is_ok, test_error = pcall(function()
         cheatsheet.open()
         assert(cheatsheet.is_open() == true, "cheatsheet opens for mouse test")
-        local cwin = vim.api.nvim_get_current_win()
-        vim.fn.getmousepos = function() return { winid = cwin, line = 2, column = 3 } end
+        local cheatsheet_win = vim.api.nvim_get_current_win()
+        vim.fn.getmousepos = function() return { winid = cheatsheet_win, line = 2, column = 3 } end
         press_normal_key("<LeftMouse>")
         assert(cheatsheet.is_open() == true, "clicking inside cheatsheet keeps it open")
 
@@ -311,7 +311,7 @@ local function test_cheatsheet_mouse_outside_click_closes_and_inside_stays_open(
     end)
     vim.fn.getmousepos = original_getmousepos
     cheatsheet.close()
-    assert(ok, tostring(err))
+    assert(is_ok, tostring(test_error))
 end
 
 test_default_layout_contains_all_sections_and_real_keybindings()

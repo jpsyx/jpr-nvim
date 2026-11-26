@@ -174,10 +174,7 @@ local function create_palette_actions(controller, state)
 end
 
 local function dispatch_palette_footer_click(controller, state, actions, click)
-    local lines = state.layout and state.layout.lines or {}
-    local footer_line = #lines
-    local spans = mouse.parse_footer_actions(lines[footer_line], PALETTE_FOOTER_SPECS)
-    local action = mouse.hit_test_footer_action(footer_line, spans, click.line, click.column)
+    local action = mouse.hit_test_footer_line(state.layout and state.layout.lines, PALETTE_FOOTER_SPECS, click)
     if action == "clear" then
         actions.clear_filter()
     elseif action == "back" and actions.go_back then

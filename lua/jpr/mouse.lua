@@ -57,12 +57,31 @@ function M.hit_test_footer_action(footer_line, spans, line, col)
     return nil
 end
 
+--- Returns the matched action id when `click` hits a parsed footer token on
+--- `footer_line` (defaulting to `#lines`, the last rendered line), or `nil`.
+--- @param lines string[]|nil
+--- @param specs { token: string, action: string }[]
+--- @param click table|nil
+--- @param footer_line integer|nil
+--- @return string|nil
+function M.hit_test_footer_line(lines, specs, click, footer_line)
+    if type(lines) ~= "table" or #lines == 0 or type(click) ~= "table" then
+        return nil
+    end
+    local target_line = type(footer_line) == "number" and footer_line or #lines
+    if click.line ~= target_line then
+        return nil
+    end
+    local spans = M.parse_footer_actions(lines[target_line], specs)
+    return M.hit_test_footer_action(target_line, spans, click.line, click.column)
+end
+
 --- Safely reads `vim.fn.getmousepos()`, returning the table or `nil`.
 --- @return table|nil
 function M.get_click()
-    local is_ok, pos = pcall(vim.fn.getmousepos)
-    if is_ok and type(pos) == "table" then
-        return pos
+    local is_ok, position = pcall(vim.fn.getmousepos)
+    if is_ok and type(position) == "table" then
+        return position
     end
     return nil
 end

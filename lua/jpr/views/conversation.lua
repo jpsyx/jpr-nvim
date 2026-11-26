@@ -268,19 +268,17 @@ local function handle_conversation_click(session)
     if not state or not click then
         return
     end
-    local is_in_conv = click.winid ~= nil
+    local is_in_conversation = click.winid ~= nil
         and vim.api.nvim_win_is_valid(click.winid)
         and vim.api.nvim_win_get_buf(click.winid) == state.buf
         and type(click.line) == "number"
         and click.line >= 1
-    if not is_in_conv then
+    if not is_in_conversation then
         return mouse.passthrough("<LeftMouse>")
     end
     local lines = state.layout and state.layout.lines or {}
-    local footer_line = #lines
-    if click.line == footer_line then
-        local spans = mouse.parse_footer_actions(lines[footer_line], CONVERSATION_FOOTER_SPECS)
-        local action = mouse.hit_test_footer_action(footer_line, spans, click.line, click.column)
+    if click.line == #lines then
+        local action = mouse.hit_test_footer_line(lines, CONVERSATION_FOOTER_SPECS, click)
         local handler = action and CONVERSATION_FOOTER_HANDLERS[action]
         if handler then
             handler(session)

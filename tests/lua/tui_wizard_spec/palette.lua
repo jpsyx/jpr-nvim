@@ -272,12 +272,11 @@ return function(context)
         wizard.close()
     end
 
-    local function test_palette_and_wizard_menu_mouse_clicks()
+    local function test_palette_clicks_activate_commands_run_footer_actions_and_close_outside()
         local executed_calls = {}
         local commands = create_palette_commands(executed_calls)
         local original_getmousepos = vim.fn.getmousepos
-        local ok, err = pcall(function()
-            -- 1. Clicking a command row from Insert mode on prompt_buf activates that command.
+        local is_ok, test_error = pcall(function()
             wizard.open_palette(commands, { has_session = true })
             local results_win = helpers.palette_results_win()
             local sync_line = helpers.find_line_number(helpers.palette_results_lines(), "Sync with GitHub")
@@ -287,7 +286,6 @@ return function(context)
             assert(wizard.is_open() == false, "Insert-mode click on results row activates command and closes palette")
             assert(#executed_calls == 1 and executed_calls[1].id == "sync", "clicked sync command executed")
 
-            -- 2. Clicking [C-u] clear and [Esc] normal/close in palette footer works.
             wizard.open_palette(commands, { has_session = true })
             local prompt_win = helpers.current_float_win()
             local prompt_buf = vim.api.nvim_win_get_buf(prompt_win)
@@ -304,19 +302,26 @@ return function(context)
 
             lines = helpers.palette_results_lines()
             footer_line = #lines
-            local esc_col = lines[footer_line]:find("[Esc] normal/close", 1, true)
-            assert(esc_col ~= nil, "found [Esc] normal/close token in palette footer")
-            vim.fn.getmousepos = function() return { winid = results_win, line = footer_line, column = esc_col + 1 } end
+            local escape_col = lines[footer_line]:find("[Esc] normal/close", 1, true)
+            assert(escape_col ~= nil, "found [Esc] normal/close token in palette footer")
+            vim.fn.getmousepos = function() return { winid = results_win, line = footer_line, column = escape_col + 1 } end
             helpers.press_key("<LeftMouse>")
             assert(wizard.is_open() == false, "clicking [Esc] normal/close closes palette")
 
-            -- 3. Clicking outside both palette windows closes palette.
             wizard.open_palette(commands, { has_session = true })
             vim.fn.getmousepos = function() return { winid = 999999, line = 1, column = 1 } end
             helpers.press_key("<LeftMouse>")
             assert(wizard.is_open() == false, "clicking outside palette closes it")
+        end)
+        vim.fn.getmousepos = original_getmousepos
+        wizard.close()
+        assert(is_ok, tostring(test_error))
+    end
 
-            -- 4. Wizard menu stepper: click option selects & confirms; click footer back returns; click outside closes.
+    local function test_wizard_menu_clicks_select_options_run_footer_actions_and_close_outside()
+        local commands = create_palette_commands({})
+        local original_getmousepos = vim.fn.getmousepos
+        local is_ok, test_error = pcall(function()
             local stepped_answers = nil
             local multi_command = {
                 id = "mode",
@@ -350,7 +355,6 @@ return function(context)
             assert(wizard.is_open() == false, "clicking step option completes single-step wizard")
             assert(stepped_answers ~= nil and stepped_answers.mode == "split", "clicked option value committed")
 
-            -- Click [h] palette in step footer returns to palette.
             wizard.open_command(multi_command, {}, { has_session = true }, {
                 can_return_to_palette = true,
                 palette_commands = commands,
@@ -365,7 +369,6 @@ return function(context)
             helpers.press_key("<LeftMouse>")
             assert(wizard.is_open() == true and helpers.palette_results_win() ~= nil, "clicking [h] palette returns to palette")
 
-            -- Click outside wizard menu closes it.
             wizard.open_command(multi_command, {}, {})
             vim.fn.getmousepos = function() return { winid = 999999, line = 1, column = 1 } end
             helpers.press_key("<LeftMouse>")
@@ -373,7 +376,7 @@ return function(context)
         end)
         vim.fn.getmousepos = original_getmousepos
         wizard.close()
-        assert(ok, tostring(err))
+        assert(is_ok, tostring(test_error))
     end
 
     test_palette_renders_floating_window_wraps_hover_navigation_and_closes_without_executing()
@@ -385,5 +388,6 @@ return function(context)
     test_zero_step_command_executes_immediately_and_prunes_stale_answers()
     test_empty_palette_renders_placeholder_and_ignores_navigation()
     test_modal_opened_by_command_execute_remains_open()
-    test_palette_and_wizard_menu_mouse_clicks()
+    test_palette_clicks_activate_commands_run_footer_actions_and_close_outside()
+    test_wizard_menu_clicks_select_options_run_footer_actions_and_close_outside()
 end

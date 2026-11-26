@@ -61,6 +61,21 @@ assert(mouse.hit_test_footer_action(10, spans, 9, 1) == nil, "wrong line misses"
 assert(mouse.hit_test_footer_action(10, spans, 10, 0) == nil, "zero column misses")
 assert(mouse.hit_test_footer_action(nil, spans, 10, 1) == nil, "nil footer_line misses")
 
+-- 3b. hit_test_footer_line resolves tokens directly on the last line or an explicit footer_line.
+local modal_lines = { "Title", "", popup_footer }
+assert(
+    mouse.hit_test_footer_line(modal_lines, popup_specs, { line = 3, column = 3 }) == "reply",
+    "hit_test_footer_line defaults to last line"
+)
+assert(
+    mouse.hit_test_footer_line(modal_lines, popup_specs, { line = 2, column = 3 }) == nil,
+    "hit_test_footer_line returns nil on non-footer lines"
+)
+assert(
+    mouse.hit_test_footer_line({ popup_footer, "trailing" }, popup_specs, { line = 1, column = 3 }, 1) == "reply",
+    "hit_test_footer_line honors explicit footer_line override"
+)
+
 -- 4. set_cursor_from_click clamps row/column safely inside a real buffer window.
 local buf = vim.api.nvim_create_buf(false, true)
 vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "alpha", "beta gamma", "delta" })
@@ -80,14 +95,14 @@ local original_feedkeys = vim.api.nvim_feedkeys
 vim.api.nvim_feedkeys = function(keys, mode, escape_ks)
     fed[#fed + 1] = { keys = keys, mode = mode, escape_ks = escape_ks }
 end
-local ok, err = pcall(function()
+local is_ok, feed_error = pcall(function()
     mouse.passthrough()
     mouse.passthrough("<2-LeftMouse>")
 end)
 vim.api.nvim_feedkeys = original_feedkeys
-assert(ok, tostring(err))
+assert(is_ok, tostring(feed_error))
 assert(#fed == 2, "passthrough invoked nvim_feedkeys twice")
 assert(fed[1].keys == vim.keycode("<LeftMouse>") and fed[1].mode == "n" and fed[1].escape_ks == false, "default LeftMouse passthrough")
 assert(fed[2].keys == vim.keycode("<2-LeftMouse>") and fed[2].mode == "n" and fed[2].escape_ks == false, "2-LeftMouse passthrough")
 
-print("mouse_spec.lua: ok")
+print("mouse_spec: ok")

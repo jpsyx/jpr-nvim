@@ -235,10 +235,8 @@ local function handle_popup_click(session)
         return M.close(session)
     end
     local lines = popup.layout and popup.layout.lines or {}
-    local footer_line = #lines
-    if click.line == footer_line then
-        local spans = mouse.parse_footer_actions(lines[footer_line], POPUP_FOOTER_SPECS)
-        local action = mouse.hit_test_footer_action(footer_line, spans, click.line, click.column)
+    if click.line == #lines then
+        local action = mouse.hit_test_footer_line(lines, POPUP_FOOTER_SPECS, click)
         local handler = action and POPUP_FOOTER_HANDLERS[action]
         if handler then
             handler(session)

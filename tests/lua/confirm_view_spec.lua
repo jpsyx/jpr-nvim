@@ -138,7 +138,7 @@ local function test_open_confirm_cancel_close_and_winclosed()
 
     -- Mouse clicks: footer [q/Esc] cancel and outside click both invoke on_cancel once.
     local original_getmousepos = vim.fn.getmousepos
-    local mouse_ok, mouse_err = pcall(function()
+    local is_mouse_ok, mouse_error = pcall(function()
         confirms, cancels = 0, 0
         local footer_state = confirm.open({
             title = " Footer Cancel ",
@@ -147,10 +147,10 @@ local function test_open_confirm_cancel_close_and_winclosed()
             on_confirm = function() confirms = confirms + 1 end,
             on_cancel = function() cancels = cancels + 1 end,
         })
-        local flines = helpers.current_lines()
-        local cancel_col = flines[#flines]:find("[q/Esc] cancel", 1, true)
+        local footer_lines = helpers.current_lines()
+        local cancel_col = footer_lines[#footer_lines]:find("[q/Esc] cancel", 1, true)
         assert(cancel_col ~= nil, "found [q/Esc] cancel in confirm footer")
-        vim.fn.getmousepos = function() return { winid = footer_state.win, line = #flines, column = cancel_col + 2 } end
+        vim.fn.getmousepos = function() return { winid = footer_state.win, line = #footer_lines, column = cancel_col + 2 } end
         helpers.press_key("<LeftMouse>")
         assert(confirms == 0 and cancels == 1 and confirm.is_open(footer_state) == false, "footer cancel click cancels modal")
 
@@ -167,7 +167,7 @@ local function test_open_confirm_cancel_close_and_winclosed()
         assert(confirms == 0 and cancels == 1 and confirm.is_open(outside_state) == false, "outside click cancels confirm modal")
     end)
     vim.fn.getmousepos = original_getmousepos
-    assert(mouse_ok, tostring(mouse_err))
+    assert(is_mouse_ok, tostring(mouse_error))
 end
 
 test_layout_renders_headline_items_selection_and_hover_help()

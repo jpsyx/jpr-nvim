@@ -304,9 +304,7 @@ local function handle_modal_click(session, state)
     if rendered.summary_lines and rendered.summary_lines[click.line] then
         return open_summary_editor(session, state)
     end
-    local footer_line = rendered.footer_line
-    local spans = mouse.parse_footer_actions(rendered.lines[footer_line], SUBMIT_FOOTER_SPECS)
-    local action = mouse.hit_test_footer_action(footer_line, spans, click.line, click.column)
+    local action = mouse.hit_test_footer_line(rendered.lines, SUBMIT_FOOTER_SPECS, click, rendered.footer_line)
     if action == "summary" then
         open_summary_editor(session, state)
     elseif action == "submit" then

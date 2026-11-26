@@ -371,7 +371,7 @@ local passthrough_calls = {}
 mouse_mod.passthrough = function(key)
     passthrough_calls[#passthrough_calls + 1] = key or "<LeftMouse>"
 end
-local mouse_ok, mouse_err = pcall(function()
+local is_mouse_ok, mouse_error = pcall(function()
     vim.api.nvim_set_current_win(panel_win)
     local left_mouse_map = vim.fn.maparg("<LeftMouse>", "n", false, true)
     assert(type(left_mouse_map) == "table" and type(left_mouse_map.callback) == "function", "<LeftMouse> mapped on panel")
@@ -393,9 +393,9 @@ local mouse_ok, mouse_err = pcall(function()
 
     -- Single-click on the Conversation row opens PR conversation.
     vim.api.nvim_set_current_win(panel_win)
-    local conv_line = review.panel.conversation_line
-    assert(conv_line ~= nil, "conversation_line is set")
-    vim.fn.getmousepos = function() return { winid = panel_win, line = conv_line, column = 4 } end
+    local conversation_line = review.panel.conversation_line
+    assert(conversation_line ~= nil, "conversation_line is set")
+    vim.fn.getmousepos = function() return { winid = panel_win, line = conversation_line, column = 4 } end
     left_mouse_map.callback()
     assert(vim.wait(3000, function()
         return review.conversation ~= nil and review.conversation.buf ~= nil and vim.api.nvim_buf_is_valid(review.conversation.buf)
@@ -415,7 +415,7 @@ local mouse_ok, mouse_err = pcall(function()
 end)
 vim.fn.getmousepos = original_getmousepos
 mouse_mod.passthrough = original_passthrough
-assert(mouse_ok, tostring(mouse_err))
+assert(is_mouse_ok, tostring(mouse_error))
 
 os.remove(stream_payload)
 os.remove(set_viewed_payload)
