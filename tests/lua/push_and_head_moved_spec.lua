@@ -24,8 +24,9 @@ end
 local function create_fake_agent_script(script_path, capture_file)
     local lines = {
         "#!/bin/sh",
+        "printf '%s\\n' \"$*\" > " .. vim.fn.shellescape(capture_file),
         "stty raw -echo 2>/dev/null || true",
-        "exec cat > " .. vim.fn.shellescape(capture_file),
+        "exec cat >> " .. vim.fn.shellescape(capture_file),
     }
     vim.fn.writefile(lines, script_path)
     vim.uv.fs_chmod(script_path, 493)
@@ -257,9 +258,9 @@ local function assert_restore_conflict_ask_agent_dispatches_safe_paths(context)
     assert(vim.deep_equal(prepare_requests[1].params.paths, { "README.md" }), "passes validated conflictedPaths")
     assert(prepare_requests[1].params.agent == "claude", "passes configured agent")
 
-    local expected_pattern = "\27%[200~Resolve conflicts in README%.md\27%[201~[\r\n]"
+    local expected_needle = "-- Resolve conflicts in README.md"
     assert(vim.wait(3000, function()
-        return read_bytes(context.capture_file):find(expected_pattern) ~= nil
+        return read_bytes(context.capture_file):find(expected_needle, 1, true) ~= nil
     end), "delivers conflict prompt to agent terminal: " .. vim.inspect(read_bytes(context.capture_file)))
 
     local confirm_request = helpers.read_requests(context.engine_log, "confirmSend")[1]

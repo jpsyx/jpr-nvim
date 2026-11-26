@@ -196,13 +196,14 @@ end
 --- Finds any valid window currently displaying `agent_state.buf`, preferring
 --- `agent_state.win` when valid.
 function M.find_agent_window(agent_state)
-    if not agent_state or not agent_state.buf or not vim.api.nvim_buf_is_valid(agent_state.buf) then
+    if not agent_state then
         return nil
     end
     if agent_state.win and vim.api.nvim_win_is_valid(agent_state.win) then
-        if vim.api.nvim_win_get_buf(agent_state.win) == agent_state.buf then
-            return agent_state.win
-        end
+        return agent_state.win
+    end
+    if not agent_state.buf or not vim.api.nvim_buf_is_valid(agent_state.buf) then
+        return nil
     end
     local windows = vim.fn.win_findbuf(agent_state.buf)
     for _, candidate in ipairs(windows) do
@@ -354,6 +355,9 @@ function M.show(session, agent_state, opts)
     local origin_win = vim.api.nvim_get_current_win()
 
     local existing_win = M.find_agent_window(agent_state)
+    if not existing_win and agent_state.win and vim.api.nvim_win_is_valid(agent_state.win) then
+        existing_win = agent_state.win
+    end
     if existing_win then
         if vim.api.nvim_win_get_buf(existing_win) ~= agent_state.buf then
             pcall(vim.api.nvim_win_set_buf, existing_win, agent_state.buf)

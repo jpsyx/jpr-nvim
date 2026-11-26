@@ -24,6 +24,7 @@ local function create_fake_agent_script(script_path, metadata_log, capture_file)
     local lines = {
         "#!/bin/sh",
         "printf '%s\\n' \"$PWD|$JPR_SOCKET|$JPR_PR|$*\" >> " .. vim.fn.shellescape(metadata_log),
+        "printf '\\033[?2004h'",
         "stty raw -echo 2>/dev/null || true",
         "exec cat > " .. vim.fn.shellescape(capture_file),
     }
@@ -66,6 +67,8 @@ local function test_pure_helpers()
     assert(agent.profile_to_submit_bytes({ submitKey = "tab" }) == "\t", "tab submit byte")
     assert(agent.profile_to_submit_bytes({ submitKey = "enter" }) == "\r", "enter submit byte")
     assert(agent.profile_to_submit_bytes(nil) == "\r", "default submit byte")
+    assert(type(agent.parse_command_argv) == "function", "exports parse_command_argv")
+    assert(type(agent.is_claude_vim_mode_enabled) == "function", "exports is_claude_vim_mode_enabled")
 end
 
 local function test_launch_argv_missing_session_id()
@@ -105,6 +108,10 @@ local function setup_session_environment()
         codex_cmd = fake_agent,
         agent = "claude",
         agent_width = 50,
+        agent_load_toggleterm = false,
+        agent_submit_delay_ms = 20,
+        agent_ready_settle_ms = 10,
+        agent_ready_timeout_ms = 200,
     })
 
     local errors = {}
@@ -129,75 +136,104 @@ local function setup_session_environment()
     }
 end
 
-local function test_agent_toggle_and_environment(context)
+local function test_cold_start_confirm_cancel_and_cli_prompt(context)
+    local review = context.review
+    local origin_win = vim.api.nvim_get_current_win()
+
+    -- 1. Canceling confirmation leaves review.agent nil and sends zero confirmSend RPCs.
+    session.send_current()
+    assert(vim.wait(3000, function()
+        return helpers.find_floating_win("Send to Coding Agent") ~= nil
+    end), "send opens confirmation modal")
+    local modal_text = helpers.current_text()
+    assert(modal_text:find("Send 1 local review thread to Claude?", 1, true) ~= nil, "modal shows exact count: " .. modal_text)
+    helpers.press_key("q")
+    assert(helpers.find_floating_win("Send to Coding Agent") == nil, "q closes confirmation modal")
+    assert(review.agent == nil, "canceled send never spawns agent")
+    assert(#helpers.read_requests(context.engine_log, "confirmSend") == 0, "canceled send never calls confirmSend")
+
+    -- 2. Confirming cold-start send passes -- <prompt> in CLI argv, preserves focus, sets bufhidden=hide, and confirms.
+    vim.api.nvim_set_current_win(origin_win)
+    session.send_current()
+    assert(vim.wait(3000, function()
+        return helpers.find_floating_win("Send to Coding Agent") ~= nil
+    end), "second send opens confirmation modal")
+    helpers.press_key("<CR>")
+
+    assert(vim.wait(3000, function()
+        return #helpers.read_requests(context.engine_log, "confirmSend") == 1
+    end), "confirmed cold-start send confirms round")
+    assert(review.agent ~= nil and review.agent.win ~= nil and vim.api.nvim_win_is_valid(review.agent.win), "agent split opened")
+    assert(vim.api.nvim_get_current_win() == origin_win, "cold-start send preserves focus in review buffer")
+    assert(vim.bo[review.agent.buf].bufhidden == "hide", "agent terminal sets bufhidden = hide")
+
+    assert(vim.wait(3000, function()
+        return vim.fn.filereadable(context.metadata_log) == 1 and #vim.fn.readfile(context.metadata_log) == 1
+    end), "fake agent recorded cold-start launch metadata")
+    local metadata_line = vim.fn.readfile(context.metadata_log)[1]
+    local expected_cwd = vim.uv.fs_realpath(context.worktree) or context.worktree
+    assert(metadata_line:find(expected_cwd .. "|/tmp/jpr-fake.sock|7|", 1, true) == 1, "agent env and cwd: " .. metadata_line)
+    assert(metadata_line:find("--session-id 00000000-0000-4000-8000-000000000001 -- Review local thread loc-1", 1, true) ~= nil, "cold-start passed -- prompt: " .. metadata_line)
+
+    local first_confirm = helpers.read_requests(context.engine_log, "confirmSend")[1]
+    assert(first_confirm.params.kind == "send", "confirmSend kind is send")
+    assert(vim.deep_equal(first_confirm.params.threadIds, { "loc-1" }), "confirmSend includes loc-1")
+end
+
+local function test_agent_toggle_winclose_and_warm_send_prepass(context)
     local review = context.review
     local main_window_module = require("jpr.views.main_window")
-    session.agent_current()
-    assert(vim.wait(3000, function()
-        return review.agent ~= nil and review.agent.win ~= nil and vim.api.nvim_win_is_valid(review.agent.win)
-    end), ":Jpr agent opens right split")
-
     local agent_window = review.agent.win
     local agent_buffer = review.agent.buf
     local agent_job = review.agent.job
+
     assert(vim.w[agent_window].jpr_side == true, "agent window marked as jpr_side")
     assert(vim.wo[agent_window].winfixwidth == true, "agent window sets winfixwidth")
     assert(main_window_module.find(review) ~= agent_window, "main_window.find skips agent side window")
     assert(vim.api.nvim_win_get_position(agent_window)[2] > vim.api.nvim_win_get_position(review.panel.win)[2], "agent split is on the right")
 
-    assert(vim.wait(3000, function()
-        return vim.fn.filereadable(context.metadata_log) == 1 and #vim.fn.readfile(context.metadata_log) == 1
-    end), "fake agent recorded launch metadata")
-    local metadata_line = vim.fn.readfile(context.metadata_log)[1]
-    local expected_cwd = vim.uv.fs_realpath(context.worktree) or context.worktree
-    assert(metadata_line:find(expected_cwd .. "|/tmp/jpr-fake.sock|7|", 1, true) == 1, "agent env and cwd: " .. metadata_line)
-    assert(metadata_line:find("--session-id 00000000-0000-4000-8000-000000000001", 1, true), "agent argv: " .. metadata_line)
+    -- Closing the window directly (:q / nvim_win_close) keeps the job alive.
+    vim.api.nvim_win_close(agent_window, true)
+    assert(vim.wait(1000, function() return review.agent.win == nil end), "WinClosed hides without killing job")
+    assert(vim.api.nvim_buf_is_valid(agent_buffer) and agent.has_live_agent(review), "buffer and job stay alive after window close")
 
+    -- Toggle reopens the exact same buffer and job without spawning a second process.
     session.agent_current()
-    assert(review.agent.win == nil and not vim.api.nvim_win_is_valid(agent_window), "second :Jpr agent hides window")
-    assert(vim.api.nvim_buf_is_valid(agent_buffer) and not review.agent.exited, "terminal buffer and job stay alive when hidden")
-
-    session.agent_current()
-    assert(review.agent.win ~= nil and vim.api.nvim_win_is_valid(review.agent.win), "third :Jpr agent re-shows window")
+    vim.cmd("stopinsert")
+    assert(review.agent.win ~= nil and vim.api.nvim_win_is_valid(review.agent.win), "toggle re-shows window")
     assert(review.agent.buf == agent_buffer and review.agent.job == agent_job, "reuses existing buffer and job")
     assert(#vim.fn.readfile(context.metadata_log) == 1, "does not spawn a second job")
-end
 
-local function test_send_and_prepass(context)
-    local review = context.review
+    -- Second :Jpr agent hides again.
     session.agent_current()
-    assert(review.agent.win == nil, "agent window starts hidden before :Jpr send")
+    assert(review.agent.win == nil, "toggle hides window")
 
-    session.send_current()
-    assert(vim.wait(3000, function()
-        local requests = helpers.read_requests(context.engine_log, "confirmSend")
-        return #requests == 1
-    end), ":Jpr send confirms delivery")
-    assert(review.agent.win ~= nil and vim.api.nvim_win_is_valid(review.agent.win), ":Jpr send auto-opens agent panel")
-
-    local expected_send = "\27[200~Review local thread loc-1\27[201~\r"
-    assert(vim.wait(3000, function()
-        return read_bytes(context.capture_file):find(expected_send, 1, true) ~= nil
-    end), "send prompt pasted with bracketed paste and submit CR")
-
-    local first_confirm = helpers.read_requests(context.engine_log, "confirmSend")[1]
-    assert(first_confirm.params.kind == "send", "confirmSend kind is send")
-    assert(vim.deep_equal(first_confirm.params.threadIds, { "loc-1" }), "confirmSend includes loc-1")
-
+    -- Warm single-thread send confirms, reveals split without stealing focus, and delivers via PTY bracketed paste + CR.
+    local origin_win = review.panel.win
+    vim.api.nvim_set_current_win(origin_win)
     agent.send(review, "loc-1")
     assert(vim.wait(3000, function()
+        return helpers.find_floating_win("Send to Coding Agent") ~= nil
+    end), "single-thread send opens confirmation modal")
+    helpers.press_key("<CR>")
+    assert(vim.wait(3000, function()
         return #helpers.read_requests(context.engine_log, "confirmSend") == 2
-    end), "single-thread agent.send confirms")
+    end), "warm single-thread agent.send confirms")
+    assert(review.agent.win ~= nil and vim.api.nvim_win_is_valid(review.agent.win), "warm send auto-reveals agent panel")
+    assert(vim.api.nvim_get_current_win() == origin_win, "warm send preserves focus in review buffer")
     local prepare_requests = helpers.read_requests(context.engine_log, "prepareSend")
-    assert(prepare_requests[2].params.threadId == "loc-1", "single-thread prepareSend passes threadId")
+    assert(prepare_requests[3].params.threadId == "loc-1", "single-thread prepareSend passes threadId")
+    assert(vim.wait(3000, function()
+        return read_bytes(context.capture_file):find("\27[200~Review local thread loc-1\27[201~\r", 1, true) ~= nil
+    end), "warm send prompt pasted with bracketed paste and submit CR")
 
+    -- Prepass delivers via PTY on warm agent without confirmation dialog.
     session.prepass_current()
     assert(vim.wait(3000, function()
         return #helpers.read_requests(context.engine_log, "confirmSend") == 3
     end), ":Jpr prepass confirms")
-    local expected_prepass = "\27[200~Run pre-pass review\27[201~\r"
     assert(vim.wait(3000, function()
-        return read_bytes(context.capture_file):find(expected_prepass, 1, true) ~= nil
+        return read_bytes(context.capture_file):find("\27[200~Run pre-pass review\27[201~\r", 1, true) ~= nil
     end), "prepass prompt pasted with CR")
     local prepass_confirm = helpers.read_requests(context.engine_log, "confirmSend")[3]
     assert(prepass_confirm.params.kind == "prepass", "confirmSend kind is prepass")
@@ -217,9 +253,12 @@ local function test_codex_tab_and_exit_guards(context)
     assert(vim.wait(3000, function()
         return #helpers.read_requests(context.engine_log, "confirmSend") == confirm_before + 1
     end), "tab dispatch confirms")
-    assert(read_bytes(context.capture_file):find("\27[200~Tab dispatch\27[201~\t", 1, true) ~= nil, "tab submit byte captured")
+    assert(vim.wait(3000, function()
+        return read_bytes(context.capture_file):find("\27[200~Tab dispatch\27[201~\t", 1, true) ~= nil
+    end), "tab submit byte captured")
 
     confirm_before = #helpers.read_requests(context.engine_log, "confirmSend")
+    jpr.config.agent_submit_delay_ms = 150
     agent.deliver_dispatch(review, {
         round = 5,
         kind = "send",
@@ -235,16 +274,18 @@ local function test_codex_tab_and_exit_guards(context)
         return false
     end)
     assert(#helpers.read_requests(context.engine_log, "confirmSend") == confirm_before, "exited job skips confirmSend")
+    jpr.config.agent_submit_delay_ms = 20
 
     local dead_buffer = review.agent.buf
     agent.ensure_open(review)
     assert(vim.wait(3000, function()
         return review.agent ~= nil and not review.agent.exited and review.agent.buf ~= dead_buffer
     end), "ensure_open replaces exited agent with fresh terminal")
+    vim.cmd("stopinsert")
     assert(not vim.api.nvim_buf_is_valid(dead_buffer), "stale exited buffer is deleted")
 end
 
-local function test_window_recovery_and_coalescing(context)
+local function test_window_recovery_coalescing_and_close(context)
     local review = context.review
     local scratch_buffer = vim.api.nvim_create_buf(false, true)
     vim.api.nvim_win_set_buf(review.agent.win, scratch_buffer)
@@ -253,10 +294,26 @@ local function test_window_recovery_and_coalescing(context)
     agent.ensure_open(review, function()
         restored = true
     end)
+    vim.cmd("stopinsert")
     assert(restored and vim.api.nvim_win_get_buf(review.agent.win) == review.agent.buf, "ensure_open restores agent buffer")
     vim.api.nvim_buf_delete(scratch_buffer, { force = true })
 
+    -- Open a send confirmation modal and verify agent.close closes it cleanly.
+    session.send_current()
+    assert(vim.wait(3000, function()
+        return helpers.find_floating_win("Send to Coding Agent") ~= nil
+    end), "confirmation modal opened before agent.close")
+
+    local agent_window = review.agent.win
+    local agent_buffer = review.agent.buf
+    local agent_job = review.agent.job
     agent.close(review)
+    assert(helpers.find_floating_win("Send to Coding Agent") == nil, "agent.close closes open confirmation modal")
+    assert(review.agent == nil, "agent.close clears session.agent")
+    assert(not vim.api.nvim_win_is_valid(agent_window), "agent.close closes window")
+    assert(not vim.api.nvim_buf_is_valid(agent_buffer), "agent.close deletes buffer")
+    assert(vim.fn.jobwait({ agent_job }, 3000)[1] ~= -1, "agent.close stops job")
+
     local launch_before = #helpers.read_requests(context.engine_log, "prepareAgentLaunch")
     local ready_states = {}
     agent.ensure_open(review, function(agent_state)
@@ -268,27 +325,17 @@ local function test_window_recovery_and_coalescing(context)
     assert(vim.wait(3000, function()
         return #ready_states == 2
     end), "coalesced ensure_open fires both callbacks")
+    vim.cmd("stopinsert")
     assert(ready_states[1] == ready_states[2] and ready_states[1] == review.agent, "both callbacks receive the single agent")
     assert(#helpers.read_requests(context.engine_log, "prepareAgentLaunch") == launch_before + 1, "only one prepareAgentLaunch sent")
-end
 
-local function test_guard_and_close(context)
-    local review = context.review
     local confirm_before = #helpers.read_requests(context.engine_log, "confirmSend")
     local errors_before = #context.errors
     agent.deliver_dispatch(review, { round = 4, kind = "send", threadIds = { "loc-1" }, prompt = "" })
     assert(#context.errors == errors_before + 1, "empty prompt notifies error")
     assert(#helpers.read_requests(context.engine_log, "confirmSend") == confirm_before, "empty prompt never calls confirmSend")
 
-    local agent_window = review.agent.win
-    local agent_buffer = review.agent.buf
-    local agent_job = review.agent.job
     agent.close(review)
-    assert(review.agent == nil, "agent.close clears session.agent")
-    assert(not vim.api.nvim_win_is_valid(agent_window), "agent.close closes window")
-    assert(not vim.api.nvim_buf_is_valid(agent_buffer), "agent.close deletes buffer")
-    assert(vim.fn.jobwait({ agent_job }, 3000)[1] ~= -1, "agent.close stops job")
-
     local original_command = jpr.config.claude_cmd
     jpr.config.claude_cmd = context.worktree .. "/missing-agent"
     errors_before = #context.errors
@@ -307,6 +354,7 @@ local function test_last_window_toggle_and_session_close(context)
     assert(vim.wait(3000, function()
         return review.agent ~= nil and review.agent.win ~= nil
     end), "reopens agent before last-window toggle and close_current")
+    vim.cmd("stopinsert")
 
     vim.api.nvim_set_current_win(review.agent.win)
     vim.cmd("only")
@@ -327,11 +375,10 @@ end
 test_pure_helpers()
 test_launch_argv_missing_session_id()
 local context = setup_session_environment()
-test_agent_toggle_and_environment(context)
-test_send_and_prepass(context)
+test_cold_start_confirm_cancel_and_cli_prompt(context)
+test_agent_toggle_winclose_and_warm_send_prepass(context)
 test_codex_tab_and_exit_guards(context)
-test_window_recovery_and_coalescing(context)
-test_guard_and_close(context)
+test_window_recovery_coalescing_and_close(context)
 test_last_window_toggle_and_session_close(context)
 
 print("agent_spec: ok")
