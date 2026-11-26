@@ -20,6 +20,7 @@ use serde_json::{Value, json};
 
 use crate::params::{
     get_bool_from_params, get_mode_from_params, get_renames_from_params, get_string_from_params,
+    get_viewed_paths_from_params,
 };
 use crate::protocol::{
     PROTOCOL_VERSION, Request, RpcError, failure, notification, parse_request, success,
@@ -72,12 +73,10 @@ pub fn handle(
             to_value(&engine_result_to_rpc(lock(session)?.stream(mode))?)
         }
         "setViewed" => {
-            let (path, viewed) = (
-                get_string_from_params(params, "path")?,
-                get_bool_from_params(params, "viewed")?,
-            );
+            let paths = get_viewed_paths_from_params(params)?;
+            let viewed = get_bool_from_params(params, "viewed")?;
             to_value(&engine_result_to_rpc(
-                lock(session)?.set_viewed(path, viewed),
+                lock(session)?.set_viewed_paths(&paths, viewed),
             )?)
         }
         "refreshWorktree" => {

@@ -58,7 +58,7 @@ while IFS= read -r line; do
   if [ -n "$FAKE_ENGINE_LOG" ]; then printf '%s\n' "$line" >> "$FAKE_ENGINE_LOG"; fi
   id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
   case "$line" in
-    *'"method":"initialize"'*) reply '{"protocolVersion":'"${FAKE_ENGINE_PROTOCOL:-9}"',"version":"'"${FAKE_ENGINE_VERSION-test}"'"}' ;;
+    *'"method":"initialize"'*) reply '{"protocolVersion":'"${FAKE_ENGINE_PROTOCOL:-10}"',"version":"'"${FAKE_ENGINE_VERSION-test}"'"}' ;;
     *'"method":"snapshot"'*) reply "$view_empty" ;;
     *'"method":"sync"'*) announce synced "$view_synced"; reply "$view_synced" ;;
     *'"method":"push"'*)
@@ -85,7 +85,18 @@ while IFS= read -r line; do
       fi ;;
     *'"method":"setViewed"'*'"BROKEN.md"'*|*'"BROKEN.md"'*'"method":"setViewed"'*)
       printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32000,"message":"GitHub refused BROKEN.md"}}\n' "$id" ;;
-    *'"method":"setViewed"'*) announce viewedChanged "$view_viewed"; reply "$view_viewed" ;;
+    *'"method":"setViewed"'*)
+      if [ -n "$FAKE_ENGINE_SET_VIEWED_FILE" ] && [ -f "$FAKE_ENGINE_SET_VIEWED_FILE" ]; then
+        viewed_payload=$(cat "$FAKE_ENGINE_SET_VIEWED_FILE")
+        announce viewedChanged "$viewed_payload"
+        reply "$viewed_payload"
+      elif printf '%s' "$line" | grep -q '"viewed":false'; then
+        announce viewedChanged "$view_synced"
+        reply "$view_synced"
+      else
+        announce viewedChanged "$view_viewed"
+        reply "$view_viewed"
+      fi ;;
     *'"method":"threads"'*) reply '{"threads":['"$thread_code"','"$thread_pr"']}' ;;
     *'"method":"mentions"'*) reply '{"candidates":[{"login":"alice","isParticipant":true},{"login":"bob","isParticipant":false}]}' ;;
     *'"method":"comment"'*'"origin":"local"'*|*'"origin":"local"'*'"method":"comment"'*)

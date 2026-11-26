@@ -145,6 +145,31 @@ pub fn get_string_vec_from_params(params: &Value, key: &str) -> Result<Vec<Strin
     Ok(values)
 }
 
+/// Extracts either a single string `"path"` or a non-empty string array
+/// `"paths"` for `setViewed`, rejecting missing, ambiguous, or empty values.
+pub fn get_viewed_paths_from_params(params: &Value) -> Result<Vec<String>, RpcError> {
+    let has_path = params.get("path").is_some();
+    let has_paths = params.get("paths").is_some();
+    match (has_path, has_paths) {
+        (true, false) => Ok(vec![get_string_from_params(params, "path")?.to_owned()]),
+        (false, true) => {
+            let paths = get_string_vec_from_params(params, "paths")?;
+            if paths.is_empty() {
+                return Err(create_invalid_params_error(
+                    "expected a non-empty string array \"paths\"",
+                ));
+            }
+            Ok(paths)
+        }
+        (true, true) => Err(create_invalid_params_error(
+            "expected only one of \"path\" or \"paths\"",
+        )),
+        (false, false) => Err(create_invalid_params_error(
+            "expected a string \"path\" or non-empty string array \"paths\"",
+        )),
+    }
+}
+
 /// Extracts and deserializes the `findings` array for `prepassWrite`.
 pub fn get_prepass_findings_from_params(params: &Value) -> Result<Vec<PrepassFinding>, RpcError> {
     let raw = params
