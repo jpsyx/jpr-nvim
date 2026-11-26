@@ -22,3 +22,4 @@ pub use auth::{AUTH_EXIT_CODE, ForgeAuthError, is_auth_error, is_gh_auth_failure
 pub use guide::build_agent_guide;
 pub use presenter::session_view;
 pub use session::{PathRename, ReviewSession};
+pub use viewed::{collect_directory_toggle_paths, is_path_in_directory};
