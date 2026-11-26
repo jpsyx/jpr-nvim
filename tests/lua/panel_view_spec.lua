@@ -12,8 +12,10 @@ local view_mode = require("jpr.view_mode")
 view_mode.path = vim.fn.tempname()
 local log = vim.fn.tempname()
 local set_viewed_payload = vim.fn.tempname()
+local stream_payload = vim.fn.tempname()
 vim.env.FAKE_ENGINE_LOG = log
 vim.env.FAKE_ENGINE_SET_VIEWED_FILE = set_viewed_payload
+vim.env.FAKE_ENGINE_STREAM_FILE = stream_payload
 jpr.setup({ binary = root .. "/tests/lua/fixtures/fake_engine.sh" })
 local worktree = vim.fn.tempname()
 vim.fn.mkdir(worktree, "p")
@@ -315,7 +317,7 @@ assert(review.panel.collapsed_dirs["src"] == true, "collapsed src/")
 vim.fn.writefile({ vim.json.encode(tree_view) }, set_viewed_payload)
 press("v", 7)
 assert(vim.wait(3000, function()
-    return #find_sent_requests('"paths":') == before_dir_requests + 2
+    return #find_sent_requests('"paths":') == before_dir_requests + 2 and review.view.viewedCount == 0
 end), "v on collapsed src/ dir sends batched unmark request")
 local unmark_req = find_sent_requests('"paths":')[before_dir_requests + 2]
 assert(
@@ -324,7 +326,46 @@ assert(
         and unmark_req:find('"viewed":false', 1, true) ~= nil,
     "collapsed dir unmark includes all descendants with viewed=false: " .. tostring(unmark_req)
 )
+-- Live full-diff repaint: with the full diff stream visible beside the panel,
+-- marking a directory viewed collapses its files and unmarking expands them.
+session.toggle_view()
+session.stream_current()
+assert(vim.wait(3000, function()
+    return stream_view.is_visible(review)
+end), "full diff stream is visible beside the panel")
+local live_stream_win = vim.fn.win_findbuf(review.stream.buffers.main)[1]
+local folded_dir_stream = {
+    mode = "unified",
+    rows = {
+        { kind = "file", path = "src/a.rs", additions = 3, deletions = 0, viewed = "VIEWED", folded = true },
+        { kind = "hunk", path = "src/a.rs", header = "@@ -0,0 +1,1 @@", target = 1 },
+        { kind = "line", path = "src/a.rs", right = { line = 1, text = "fn a() {}", change = "added", words = {} }, target = 1 },
+    },
+}
+local expanded_dir_stream = {
+    mode = "unified",
+    rows = {
+        { kind = "file", path = "src/a.rs", additions = 3, deletions = 0, viewed = "UNVIEWED", folded = false },
+        { kind = "hunk", path = "src/a.rs", header = "@@ -0,0 +1,1 @@", target = 1 },
+        { kind = "line", path = "src/a.rs", right = { line = 1, text = "fn a() {}", change = "added", words = {} }, target = 1 },
+    },
+}
+vim.fn.writefile({ vim.json.encode(all_src_viewed) }, set_viewed_payload)
+vim.fn.writefile({ vim.json.encode(folded_dir_stream) }, stream_payload)
+press("v", 7)
+assert(vim.wait(3000, function()
+    return vim.api.nvim_win_call(live_stream_win, function() return vim.fn.foldclosed(1) == 1 end)
+end), "visible full diff view repaints to collapse newly viewed directory files")
+vim.fn.writefile({ vim.json.encode(tree_view) }, set_viewed_payload)
+vim.fn.writefile({ vim.json.encode(expanded_dir_stream) }, stream_payload)
+press("v", 7)
+assert(vim.wait(3000, function()
+    return vim.api.nvim_win_call(live_stream_win, function() return vim.fn.foldclosed(1) == -1 end)
+end), "visible full diff view repaints to expand newly unviewed directory files")
+
+os.remove(stream_payload)
 os.remove(set_viewed_payload)
+vim.env.FAKE_ENGINE_STREAM_FILE = nil
 vim.env.FAKE_ENGINE_SET_VIEWED_FILE = nil
 
 session.close_current()
