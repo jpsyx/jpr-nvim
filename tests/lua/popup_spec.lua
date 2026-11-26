@@ -53,6 +53,7 @@ local context = {
 
 dofile(root .. "/tests/lua/popup_spec/actions.lua")(context)
 dofile(root .. "/tests/lua/popup_spec/lifecycle.lua")(context)
+dofile(root .. "/tests/lua/popup_spec/scroll.lua")(context)
 
 local function build_local_preview(overrides)
     local base = {

@@ -9,9 +9,9 @@ local namespace = vim.api.nvim_create_namespace("jpr-reply-history")
 
 --- Computes centered stacked geometry for a docked two-pane reply modal
 --- (read-only thread history pane above the editable reply pane).
-function M.compute_stacked_geometry(total_lines, total_cols, history_line_count)
-    local width = math.min(86, math.max(54, total_cols - 12))
-    local col = math.max(2, math.floor((total_cols - width) / 2))
+function M.compute_stacked_geometry(total_lines, total_columns, history_line_count)
+    local width = math.min(86, math.max(54, total_columns - 12))
+    local col = math.max(2, math.floor((total_columns - width) / 2))
     local usable_rows = math.max(8, total_lines - 6)
     local reply_height = math.min(10, math.max(4, math.floor(usable_rows * 0.4)))
     local max_history_height = math.max(4, usable_rows - reply_height)
@@ -55,9 +55,11 @@ local function bind_history_keys(buf, callbacks)
 end
 
 --- Opens the read-only thread history floating pane for `thread` at `geometry`,
---- pre-scrolled to the start of the last message.
-function M.open(thread, geometry, callbacks)
-    local layout = render.create_popup_layout_from_threads({ thread }, { include_footer = false })
+--- pre-scrolled to the start of the last message. Reuses `precomputed_layout`
+--- when provided to avoid rendering the thread layout twice.
+function M.open(thread, geometry, callbacks, precomputed_layout)
+    local layout = precomputed_layout
+        or render.create_popup_layout_from_threads({ thread }, { include_footer = false })
     local buf = vim.api.nvim_create_buf(false, true)
     vim.bo[buf].buftype = "nofile"
     vim.bo[buf].bufhidden = "wipe"

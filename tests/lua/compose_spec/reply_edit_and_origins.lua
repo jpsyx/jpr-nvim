@@ -216,11 +216,15 @@ return function(ctx)
 
     -- 6f. Docked two-pane reply modal: read-only thread history above reply box, pane switching, shared cancel/submit/wipeout, and small-terminal geometry.
     local reply_history = require("jpr.comments.reply_history")
-    local small_geom = reply_history.compute_stacked_geometry(20, 80, 30)
-    assert(small_geom.history_height >= 4 and small_geom.reply_height >= 4, vim.inspect(small_geom))
-    assert(small_geom.history_row >= 1, vim.inspect(small_geom))
-    assert(small_geom.reply_row == small_geom.history_row + small_geom.history_height + 2, vim.inspect(small_geom))
-    assert(small_geom.reply_row + small_geom.reply_height + 2 <= 20, vim.inspect(small_geom))
+    local small_geometry = reply_history.compute_stacked_geometry(20, 80, 30)
+    assert(small_geometry.history_height >= 4 and small_geometry.reply_height >= 4, vim.inspect(small_geometry))
+    assert(small_geometry.history_row >= 1, vim.inspect(small_geometry))
+    assert(small_geometry.reply_row == small_geometry.history_row + small_geometry.history_height + 2, vim.inspect(small_geometry))
+    assert(small_geometry.reply_row + small_geometry.reply_height + 2 <= 20, vim.inspect(small_geometry))
+
+    compose.open_reply(review, { threadId = "T_NIL_MSGS", anchor = line_anchor, messages = vim.NIL })
+    assert(review.compose.history_win == nil and review.compose.history_buf == nil, "vim.NIL messages falls back to single reply float")
+    compose.close(review)
 
     local long_tail_lines = {}
     for idx = 1, 24 do
@@ -271,10 +275,10 @@ return function(ctx)
     assert(history_text:find("tail detail 1", 1, true) ~= nil, history_text)
     assert(history_text:find("[r]eply", 1, true) == nil, "history pane omits popup action footer")
 
-    local history_cfg = vim.api.nvim_win_get_config(history_win)
-    local reply_cfg = vim.api.nvim_win_get_config(docked_reply_win)
-    assert(history_cfg.width == reply_cfg.width and history_cfg.col == reply_cfg.col, "panes share width and column")
-    assert(history_cfg.row + history_cfg.height + 2 == reply_cfg.row, "reply pane docks directly below history pane")
+    local history_config = vim.api.nvim_win_get_config(history_win)
+    local reply_config = vim.api.nvim_win_get_config(docked_reply_win)
+    assert(history_config.width == reply_config.width and history_config.col == reply_config.col, "panes share width and column")
+    assert(history_config.row + history_config.height + 2 == reply_config.row, "reply pane docks directly below history pane")
 
     local bob_header_line = helpers.find_line_number(history_lines, "@bob")
     local history_topline = vim.api.nvim_win_call(history_win, function()
@@ -316,15 +320,17 @@ return function(ctx)
     assert(confirm_calls == 2, "<Esc> in history pane prompts to discard")
     assert(not vim.api.nvim_win_is_valid(docked_reply_win) and not vim.api.nvim_win_is_valid(history_win), "Discard closes both panes")
 
-    -- Submitting sends only reply buffer text and closes both panes.
+    -- Submitting from either pane sends only reply buffer text and closes both panes.
     compose.open_reply(review, thread_with_history)
     local submit_reply_win = review.compose.win
     local submit_reply_buf = review.compose.buf
     local submit_history_win = review.compose.history_win
     local replies_before_docked = #helpers.read_requests(log, "reply")
     vim.api.nvim_buf_set_lines(submit_reply_buf, 0, -1, false, { "My reply" })
+    helpers.press_key("<Tab>")
+    assert(vim.api.nvim_get_current_win() == submit_history_win, "switched to history pane before <C-s>")
     helpers.press_key("<C-s>")
-    assert(not vim.api.nvim_win_is_valid(submit_reply_win) and not vim.api.nvim_win_is_valid(submit_history_win), "<C-s> closes both panes")
+    assert(not vim.api.nvim_win_is_valid(submit_reply_win) and not vim.api.nvim_win_is_valid(submit_history_win), "<C-s> from history pane closes both panes")
     assert(vim.wait(3000, function()
         return #helpers.read_requests(log, "reply") == replies_before_docked + 1
     end), "docked reply RPC sent")

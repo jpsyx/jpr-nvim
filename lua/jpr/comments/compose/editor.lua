@@ -1,13 +1,13 @@
--- Floating markdown compose buffer for new comments, replies, edits, and
--- suggestion blocks. `<C-s>` submits; `q` / `<Esc>` cancels; `<C-g>s` inserts
--- a suggestion fence pre-filled with the anchored lines.
+-- Floating markdown compose editor window, keybindings, wipeout guards,
+-- suggestion fence insertion, and docked reply-history lifecycle.
 local mentions = require("jpr.comments.mentions")
 local render_threads = require("jpr.render.threads")
 local reply_history = require("jpr.comments.reply_history")
 
 local M = {}
 
-local function next_request_id(session)
+--- Advances and returns `session`'s compose request token to cancel stale async prefills.
+function M.next_request_id(session)
     if not session then
         return 0
     end
@@ -29,7 +29,7 @@ function M.close(session)
     if not session then
         return
     end
-    next_request_id(session)
+    M.next_request_id(session)
     local compose = session.compose
     if not compose then
         return
@@ -70,7 +70,8 @@ local function alternate_origin(origin)
     return origin == "local" and "github" or "local"
 end
 
-local function build_location_from_anchor(anchor)
+--- Formats an anchor into a short location label for compose window titles.
+function M.build_location_from_anchor(anchor)
     if not anchor or anchor.kind == "pr" then
         return "PR Conversation"
     end
@@ -86,30 +87,14 @@ local function build_location_from_anchor(anchor)
     return ("%s:%d"):format(file, end_line or start_line or 1)
 end
 
-local function build_title_from_anchor(anchor, origin)
-    local location = build_location_from_anchor(anchor)
+--- Builds the compose float title for `anchor` and destination `origin`.
+function M.build_title_from_anchor(anchor, origin)
+    local location = M.build_location_from_anchor(anchor)
     if origin == "local" then
         return "[Local → agent] " .. location
     end
     local badge = (anchor and anchor.kind == "pr") and "[GitHub comment]" or "[GitHub draft]"
     return badge .. " " .. location
-end
-
-local function is_unlinked_local_session(session)
-    return type(session) == "table" and session.mode == "local" and not (session.view and session.view.pr)
-end
-
-local function is_local_only_anchor(session, anchor)
-    if type(anchor) ~= "table" or type(anchor.file) ~= "string" or anchor.file == "" then
-        return false
-    end
-    local files = session and session.view and session.view.files or {}
-    for _, file in ipairs(files) do
-        if file.path == anchor.file then
-            return file.isLocalOnly == true
-        end
-    end
-    return false
 end
 
 local function build_footer(allow_destination_toggle, is_local_only, is_unlinked_local, has_history)
@@ -151,7 +136,7 @@ local function flip_destination(session, compose)
     compose.origin = alternate_origin(compose.origin)
     session.compose_destination = compose.origin
     vim.api.nvim_win_set_config(compose.win, {
-        title = " " .. build_title_from_anchor(compose.anchor, compose.origin) .. " ",
+        title = " " .. M.build_title_from_anchor(compose.anchor, compose.origin) .. " ",
         title_pos = "center",
     })
 end
@@ -207,11 +192,17 @@ local function register_wipeout_guard(session, compose, wiped_buf)
     })
 end
 
-local function resolve_editor_geometry(history_thread)
-    local has_history = type(history_thread) == "table" and #(history_thread.messages or {}) > 0
-    if has_history then
-        local layout = render_threads.create_popup_layout_from_threads({ history_thread }, { include_footer = false })
-        return reply_history.compute_stacked_geometry(vim.o.lines, vim.o.columns, #layout.lines), true
+local function create_editor_geometry_from_thread(history_thread)
+    local has_messages = type(history_thread) == "table"
+        and type(history_thread.messages) == "table"
+        and #history_thread.messages > 0
+    if has_messages then
+        local history_layout = render_threads.create_popup_layout_from_threads(
+            { history_thread },
+            { include_footer = false }
+        )
+        local geometry = reply_history.compute_stacked_geometry(vim.o.lines, vim.o.columns, #history_layout.lines)
+        return geometry, history_layout
     end
     local width = math.min(86, math.max(54, vim.o.columns - 12))
     local height = 12
@@ -220,10 +211,10 @@ local function resolve_editor_geometry(history_thread)
         col = math.max(2, math.floor((vim.o.columns - width) / 2)),
         reply_row = math.max(1, math.floor((vim.o.lines - height) / 2) - 1),
         reply_height = height,
-    }, false
+    }, nil
 end
 
-local function attach_docked_history(session, compose, thread, geometry, on_cancel, on_submit)
+local function attach_docked_history(session, compose, thread, history_layout, geometry, on_cancel, on_submit)
     local history = reply_history.open(thread, geometry, {
         on_focus_reply = function()
             if vim.api.nvim_win_is_valid(compose.win) then
@@ -232,7 +223,7 @@ local function attach_docked_history(session, compose, thread, geometry, on_canc
         end,
         on_cancel = on_cancel,
         on_submit = on_submit,
-    })
+    }, history_layout)
     compose.history_buf = history.buf
     compose.history_win = history.win
     local focus_history = function()
@@ -245,7 +236,9 @@ local function attach_docked_history(session, compose, thread, geometry, on_canc
     register_wipeout_guard(session, compose, history.buf)
 end
 
-local function open_editor(session, opts)
+--- Opens the floating compose editor for `session`, optionally docking a
+--- read-only thread history pane above it when `opts.history_thread` has messages.
+function M.open(session, opts)
     if session and session.is_read_only then
         return require("jpr.session").report_read_only(session)
     end
@@ -256,7 +249,8 @@ local function open_editor(session, opts)
     vim.bo[buf].filetype = "markdown"
     local initial_text = opts.initial_text or ""
     vim.api.nvim_buf_set_lines(buf, 0, -1, false, vim.split(initial_text, "\n", { plain = true }))
-    local geometry, has_history = resolve_editor_geometry(opts.history_thread)
+    local geometry, history_layout = create_editor_geometry_from_thread(opts.history_thread)
+    local has_history = history_layout ~= nil
     local win = vim.api.nvim_open_win(buf, true, {
         relative = "editor",
         row = geometry.reply_row,
@@ -281,175 +275,9 @@ local function open_editor(session, opts)
     mentions.attach(session, buf)
     bind_compose_keys(session, compose, opts, on_cancel, on_submit)
     if has_history then
-        attach_docked_history(session, compose, opts.history_thread, geometry, on_cancel, on_submit)
+        attach_docked_history(session, compose, opts.history_thread, history_layout, geometry, on_cancel, on_submit)
     end
     return buf
-end
-
-local function submit_with_draft_recovery(session, method, params, reopen_fn)
-    require("jpr.session").request(session, method, params, function() end, function(request_error)
-        if not session.closing and require("jpr.auth").is_rpc_auth_error(request_error) then
-            reopen_fn()
-        end
-    end)
-end
-
-local function prefill_suggested_comment(session, anchor, open_with_body)
-    local request_id = next_request_id(session)
-    return require("jpr.session").request(session, "anchoredLines", { anchor = anchor }, function(result)
-        if session.closing or session.compose_request_id ~= request_id then
-            return
-        end
-        if session.tab ~= nil and not vim.api.nvim_tabpage_is_valid(session.tab) then
-            return
-        end
-        open_with_body(("```suggestion\n%s\n```"):format((result and result.text) or ""))
-    end)
-end
-
---- Opens the floating compose buffer for a new comment at `anchor`, optionally
---- pre-filling a GitHub suggestion block on line or range anchors (`opts.suggest`).
-function M.open_new(session, anchor, opts)
-    if not session or session.closing then
-        return
-    end
-    if session.is_read_only then
-        return require("jpr.session").report_read_only(session)
-    end
-    local open_opts = opts or {}
-    local is_unlinked_local = is_unlinked_local_session(session)
-    local is_local_only = is_local_only_anchor(session, anchor)
-    local is_locked_local = is_unlinked_local or is_local_only
-    local open_with_body
-    open_with_body = function(initial_text, origin_override)
-        local origin = is_locked_local and "local"
-            or (origin_override or open_opts.initial_origin or session.compose_destination or "github")
-        open_editor(session, {
-            title = build_title_from_anchor(anchor, origin),
-            initial_text = initial_text,
-            anchor = anchor,
-            origin = origin,
-            allow_destination_toggle = not is_locked_local,
-            is_local_only = is_local_only,
-            is_unlinked_local = is_unlinked_local,
-            on_submit = function(body, submit_origin)
-                submit_with_draft_recovery(session, "comment", {
-                    anchor = anchor,
-                    body = body,
-                    origin = submit_origin,
-                }, function()
-                    open_with_body(body, submit_origin)
-                end)
-            end,
-        })
-    end
-    if open_opts.suggest and (anchor.kind == "line" or anchor.kind == "range") then
-        return prefill_suggested_comment(session, anchor, open_with_body)
-    end
-    open_with_body("")
-end
-
---- Opens the floating compose buffer to reply to `thread`.
-function M.open_reply(session, thread)
-    if not session or session.closing then
-        return
-    end
-    if session.is_read_only then
-        return require("jpr.session").report_read_only(session)
-    end
-    local is_local = thread.origin == "local" or thread.kind == "local"
-    local badge = is_local and "[Local reply]" or "[GitHub reply]"
-    if not is_local and session.view and (session.view.draftCount or 0) > 0 then
-        badge = "[GitHub draft]"
-    end
-    local thread_id = thread.threadId or thread.id
-    local open_reply_editor
-    open_reply_editor = function(initial_text)
-        open_editor(session, {
-            title = badge .. " Reply",
-            initial_text = initial_text,
-            anchor = thread.anchor,
-            history_thread = thread,
-            allow_destination_toggle = false,
-            on_submit = function(body)
-                submit_with_draft_recovery(session, "reply", { threadId = thread_id, body = body }, function()
-                    open_reply_editor(body)
-                end)
-            end,
-        })
-    end
-    open_reply_editor("")
-end
-
---- Opens the floating compose buffer to edit `message` (pre-populating
---- `recoverableBody` when present).
-function M.open_edit(session, message, thread)
-    if not session or session.closing then
-        return
-    end
-    if session.is_read_only then
-        return require("jpr.session").report_read_only(session)
-    end
-    local is_local = (thread ~= nil and (thread.origin == "local" or thread.kind == "local"))
-        or message.sync == nil
-        or message.sync == vim.NIL
-    local title = is_local and "[Edit local comment]" or "[Edit GitHub comment]"
-    local initial_text = (type(message.recoverableBody) == "string" and message.recoverableBody)
-        or (type(message.body) == "string" and message.body)
-        or ""
-    local anchor = type(thread) == "table" and type(thread.anchor) == "table" and thread.anchor or nil
-    local open_edit_editor
-    open_edit_editor = function(body_text)
-        open_editor(session, {
-            title = title,
-            initial_text = body_text,
-            anchor = anchor,
-            allow_destination_toggle = false,
-            on_submit = function(body)
-                submit_with_draft_recovery(session, "editMessage", { messageId = message.id, body = body }, function()
-                    open_edit_editor(body)
-                end)
-            end,
-        })
-    end
-    open_edit_editor(initial_text)
-end
-
---- Opens the floating compose buffer to promote a local `thread`'s root
---- comment into a GitHub draft or PR comment.
-function M.open_promote(session, thread)
-    if not session or session.closing or not thread then
-        return
-    end
-    if session.is_read_only then
-        return require("jpr.session").report_read_only(session)
-    end
-    if type(thread.promotedTo) == "string" and thread.promotedTo ~= "" then
-        return require("jpr").info("local thread was already promoted to " .. thread.promotedTo)
-    end
-    local thread_id = thread.threadId or thread.id
-    local messages = type(thread.messages) == "table" and thread.messages or {}
-    local first_message = messages[1]
-    local raw_body = type(first_message) == "table" and first_message.body or ""
-    local initial_text = type(raw_body) == "string" and raw_body or ""
-    local open_promote_editor
-    open_promote_editor = function(body_text)
-        open_editor(session, {
-            title = "[Promote → GitHub] " .. build_location_from_anchor(thread.anchor),
-            initial_text = body_text,
-            anchor = thread.anchor,
-            allow_destination_toggle = false,
-            on_submit = function(body)
-                submit_with_draft_recovery(session, "promoteThread", {
-                    threadId = thread_id,
-                    body = body,
-                }, function()
-                    open_promote_editor(body)
-                end)
-            end,
-        })
-    end
-    open_promote_editor(initial_text)
 end
 
 return M
