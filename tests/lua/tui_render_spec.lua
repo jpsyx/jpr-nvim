@@ -109,8 +109,18 @@ assert(vim.tbl_contains(muted_no_session, "[open]"), "[open] muted")
 assert(vim.tbl_contains(muted_no_session, "[local]"), "[local] muted")
 assert(not vim.tbl_contains(muted_no_session, "Review Current Worktree"), "visible unselected command label is never muted")
 assert(
-    palette_no_session.lines[#palette_no_session.lines] == "[j/k] move  [Enter/l] select  [q/Esc] close",
-    "palette footer rendered"
+    palette_no_session.lines[#palette_no_session.lines] == "[type] filter  [C-j/k] move  [C-u] clear  [Enter] select  [Esc] normal/close",
+    "palette footer rendered: " .. tostring(palette_no_session.lines[#palette_no_session.lines])
+)
+local palette_with_back = render.create_palette_layout_from_commands(
+    commands,
+    1,
+    80,
+    { has_session = false, is_git_repo = true, on_back = function() end }
+)
+assert(
+    palette_with_back.lines[#palette_with_back.lines] == "[type] filter  [C-j/k] move  [S-Tab] repos  [C-u] clear  [Enter] select  [Esc] normal/close",
+    "palette with back footer rendered: " .. tostring(palette_with_back.lines[#palette_with_back.lines])
 )
 
 -- Outside a git repo, requires_git_repo commands are omitted too.
@@ -143,6 +153,15 @@ local palette_all_filtered = render.create_palette_layout_from_commands({ comman
 assert(
     table.concat(palette_all_filtered.lines, "\n"):find("(no commands available)", 1, true) ~= nil,
     "all-filtered-out palette renders fallback message"
+)
+local palette_no_matches = render.create_palette_layout_from_commands({}, 1, 60, { has_session = false }, { is_filtered = true })
+assert(
+    table.concat(palette_no_matches.lines, "\n"):find("(no matching commands)", 1, true) ~= nil,
+    "filtered empty palette renders no matching commands message"
+)
+assert(
+    vim.tbl_contains(collect_highlighted_texts(palette_no_matches, "JprMuted"), "  (no matching commands)"),
+    "no matching commands message highlighted in JprMuted"
 )
 
 -- 3. create_step_layout_from_state renders header with dots, 1-sentence help, hover-only option help, and footers.
