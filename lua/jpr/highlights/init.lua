@@ -45,18 +45,34 @@ local LIGHT_TINTS = {
 }
 
 local DARK_FALLBACK_DIFF_HIGHLIGHTS = {
-    JprDiffAdd = { bg = 0x274932 },
-    JprDiffAddText = { bg = 0x2c5d37 },
-    JprDiffDelete = { bg = 0x542b2d },
-    JprDiffDeleteText = { bg = 0x723232 },
+    JprDiffAdd = { bg = 0x274932, ctermbg = 22 },
+    JprDiffAddText = { bg = 0x2c5d37, ctermbg = 28 },
+    JprDiffDelete = { bg = 0x542b2d, ctermbg = 52 },
+    JprDiffDeleteText = { bg = 0x723232, ctermbg = 88 },
 }
 
 local LIGHT_FALLBACK_DIFF_HIGHLIGHTS = {
-    JprDiffAdd = { bg = 0xcde8d2 },
-    JprDiffAddText = { bg = 0xb0dbb8 },
-    JprDiffDelete = { bg = 0xf4ced1 },
-    JprDiffDeleteText = { bg = 0xefb4b8 },
+    JprDiffAdd = { bg = 0xcde8d2, ctermbg = 194 },
+    JprDiffAddText = { bg = 0xb0dbb8, ctermbg = 157 },
+    JprDiffDelete = { bg = 0xf4ced1, ctermbg = 224 },
+    JprDiffDeleteText = { bg = 0xefb4b8, ctermbg = 217 },
 }
+
+local DARK_CTERM_BG = {
+    JprDiffAdd = 22,
+    JprDiffAddText = 28,
+    JprDiffDelete = 52,
+    JprDiffDeleteText = 88,
+}
+
+local LIGHT_CTERM_BG = {
+    JprDiffAdd = 194,
+    JprDiffAddText = 157,
+    JprDiffDelete = 224,
+    JprDiffDeleteText = 217,
+}
+
+local XTERM_CUBE_LEVELS = { 0, 95, 135, 175, 215, 255 }
 
 local CONTRAST_PREFIX = {
     add = "JprDiffAddFg_",
@@ -98,6 +114,34 @@ local function clamp_channel(channel_value)
     return math.max(0, math.min(255, channel_value))
 end
 
+local function nearest_cube_index(channel)
+    local best_index, best_distance = 0, math.huge
+    for index = 1, 6 do
+        local distance = math.abs(channel - XTERM_CUBE_LEVELS[index])
+        if distance < best_distance then
+            best_index, best_distance = index - 1, distance
+        end
+    end
+    return best_index
+end
+
+--- Maps a 24-bit sRGB integer to the nearest xterm-256 palette index (16..255)
+--- across the 6x6x6 color cube and 24-step greyscale ramp for 256-color
+--- terminals running without `termguicolors`.
+function M.rgb_to_cterm256(rgb)
+    local red, green, blue = rgb_to_channels(rgb)
+    local cube_r, cube_g, cube_b = nearest_cube_index(red), nearest_cube_index(green), nearest_cube_index(blue)
+    local cr, cg, cb = XTERM_CUBE_LEVELS[cube_r + 1], XTERM_CUBE_LEVELS[cube_g + 1], XTERM_CUBE_LEVELS[cube_b + 1]
+    local cube_dist = (red - cr) ^ 2 + (green - cg) ^ 2 + (blue - cb) ^ 2
+    local cube_code = 16 + 36 * cube_r + 6 * cube_g + cube_b
+
+    local average = (red + green + blue) / 3
+    local grey_step = math.max(0, math.min(23, math.floor((average - 8) / 10 + 0.5)))
+    local grey_level = 8 + 10 * grey_step
+    local grey_dist = (red - grey_level) ^ 2 + (green - grey_level) ^ 2 + (blue - grey_level) ^ 2
+    return grey_dist < cube_dist and (232 + grey_step) or cube_code
+end
+
 --- Blends 24-bit `base_rgb` toward `tint_rgb` by `alpha`, returning a 24-bit RGB
 --- integer with each channel rounded and clamped to `[0, 255]`. Used to compute
 --- subtle diff background tints against the active colorscheme.
@@ -131,11 +175,12 @@ function M.create_diff_highlights(normal_bg, background_option)
         return vim.deepcopy(is_dark and DARK_FALLBACK_DIFF_HIGHLIGHTS or LIGHT_FALLBACK_DIFF_HIGHLIGHTS)
     end
     local tints = is_dark and DARK_TINTS or LIGHT_TINTS
+    local cterm_bg = is_dark and DARK_CTERM_BG or LIGHT_CTERM_BG
     return {
-        JprDiffAdd = { bg = M.blend_rgb(normal_bg, tints.add, tints.add_alpha) },
-        JprDiffAddText = { bg = M.blend_rgb(normal_bg, tints.add, tints.add_text_alpha) },
-        JprDiffDelete = { bg = M.blend_rgb(normal_bg, tints.delete, tints.delete_alpha) },
-        JprDiffDeleteText = { bg = M.blend_rgb(normal_bg, tints.delete, tints.delete_text_alpha) },
+        JprDiffAdd = { bg = M.blend_rgb(normal_bg, tints.add, tints.add_alpha), ctermbg = cterm_bg.JprDiffAdd },
+        JprDiffAddText = { bg = M.blend_rgb(normal_bg, tints.add, tints.add_text_alpha), ctermbg = cterm_bg.JprDiffAddText },
+        JprDiffDelete = { bg = M.blend_rgb(normal_bg, tints.delete, tints.delete_alpha), ctermbg = cterm_bg.JprDiffDelete },
+        JprDiffDeleteText = { bg = M.blend_rgb(normal_bg, tints.delete, tints.delete_text_alpha), ctermbg = cterm_bg.JprDiffDeleteText },
     }
 end
 
@@ -182,13 +227,15 @@ local function apply_contrast_highlight(source_group, kind, derived_name, theme_
         return false
     end
     local context = theme_context or create_theme_context()
+    local adjusted_fg = contrast.adjust_fg_for_diff_bg(
+        source_highlight.fg,
+        context.normal_bg,
+        context.diff_bg[kind],
+        context.is_dark[kind]
+    )
     local spec = {
-        fg = contrast.adjust_fg_for_diff_bg(
-            source_highlight.fg,
-            context.normal_bg,
-            context.diff_bg[kind],
-            context.is_dark[kind]
-        ),
+        fg = adjusted_fg,
+        ctermfg = M.rgb_to_cterm256(adjusted_fg),
     }
     for _, attr in ipairs(PRESERVED_STYLE_ATTRS) do
         if source_highlight[attr] ~= nil then
@@ -243,12 +290,16 @@ local function refresh_contrast_highlights()
 end
 
 local function should_update_diff_highlight(group_name)
-    local previous_bg = last_applied_diff_bg[group_name]
-    if previous_bg == nil then
+    local previous = last_applied_diff_bg[group_name]
+    if previous == nil then
         return false
     end
     local existing_highlight = vim.api.nvim_get_hl(0, { name = group_name, link = true })
-    return existing_highlight.link == nil and existing_highlight.fg == nil and existing_highlight.bg == previous_bg
+    return existing_highlight.link == nil
+        and existing_highlight.fg == nil
+        and existing_highlight.ctermfg == nil
+        and existing_highlight.bg == previous.bg
+        and existing_highlight.ctermbg == previous.ctermbg
 end
 
 local function apply_diff_highlights()
@@ -256,10 +307,16 @@ local function apply_diff_highlights()
     local diff_highlights = M.create_diff_highlights(normal_highlight.bg, vim.o.background)
     for group_name, spec in pairs(diff_highlights) do
         local is_managed = should_update_diff_highlight(group_name)
-        vim.api.nvim_set_hl(0, group_name, { bg = spec.bg, default = not is_managed })
+        vim.api.nvim_set_hl(0, group_name, { bg = spec.bg, ctermbg = spec.ctermbg, default = not is_managed })
         local applied_highlight = vim.api.nvim_get_hl(0, { name = group_name, link = true })
-        if applied_highlight.link == nil and applied_highlight.fg == nil and applied_highlight.bg == spec.bg then
-            last_applied_diff_bg[group_name] = spec.bg
+        if
+            applied_highlight.link == nil
+            and applied_highlight.fg == nil
+            and applied_highlight.ctermfg == nil
+            and applied_highlight.bg == spec.bg
+            and applied_highlight.ctermbg == spec.ctermbg
+        then
+            last_applied_diff_bg[group_name] = { bg = spec.bg, ctermbg = spec.ctermbg }
         else
             last_applied_diff_bg[group_name] = nil
         end
