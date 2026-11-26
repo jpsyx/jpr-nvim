@@ -96,13 +96,29 @@ local function redraw_all_session_views(session_mod, mode)
     jpr().info(("%s view"):format(mode))
 end
 
+local function find_agent_session(session_mod)
+    local current_session = session_mod.current()
+    if current_session then
+        return current_session
+    end
+    local current_buf = vim.api.nvim_get_current_buf()
+    for _, candidate in pairs(session_mod.by_tab or {}) do
+        if candidate.agent and candidate.agent.buf == current_buf then
+            return candidate
+        end
+    end
+    return nil
+end
+
 local function attach_agent_commands(session_mod)
     --- `:Jpr agent [claude|codex]`: toggles the interactive agent terminal panel
     --- for the current review, optionally selecting the provider when opening.
     function session_mod.agent_current(agent_kind)
-        return run_with_current(session_mod, function(session)
-            require("jpr.agent").toggle(session, agent_kind)
-        end)
+        local session = find_agent_session(session_mod)
+        if not session then
+            return jpr().error("no pull request is open in this tab")
+        end
+        return require("jpr.agent").toggle(session, agent_kind)
     end
 
     --- `:Jpr send`: sends unsent local review threads to the interactive agent panel.

@@ -251,6 +251,7 @@ local function bind_keys(session, buf)
     map("X", function() retry_comment(session) end, "Retry failed PR comment")
     map("q", function() M.close(session) end, "Close PR conversation")
     map("?", function() require("jpr.views.cheatsheet").open() end, "Show Jpr keyboard shortcuts")
+    require("jpr").bind_session_keys(buf)
 end
 
 local function get_or_create_state(session)

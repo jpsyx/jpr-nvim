@@ -72,6 +72,19 @@ local function create_comments_section()
     }
 end
 
+local function create_session_and_agent_section_from_keys(keys)
+    local configured = type(keys) == "table" and keys or {}
+    return {
+        title = "Review Session & Agent",
+        entries = {
+            create_key_entry_from_binding(configured.send_agent, "Send local threads to agent (confirms)"),
+            create_key_entry_from_binding(configured.submit_review, "Submit GitHub review (confirms)"),
+            create_key_entry_from_binding(configured.toggle_agent, "Toggle coding agent panel (hides without quitting)"),
+            { key = ":q / <C-q> / <M-q>", desc = "Hide agent terminal window without quitting" },
+        },
+    }
+end
+
 local function create_sections_from_config(config)
     local current_config = type(config) == "table" and config or {}
     return {
@@ -90,6 +103,7 @@ local function create_sections_from_config(config)
         },
         create_diff_section_from_keys(current_config.keys),
         create_comments_section(),
+        create_session_and_agent_section_from_keys(current_config.keys),
         {
             title = "Command Palette & Steppers",
             entries = {

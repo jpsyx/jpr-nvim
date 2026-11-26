@@ -40,10 +40,12 @@ With [lazy.nvim](https://github.com/folke/lazy.nvim):
     -- Optional: coding agent for :Jpr agent, :Jpr send, and :Jpr prepass:
     -- "claude" (the default) or "codex".
     -- agent = "claude",
-    -- claude_cmd = "claude",
+    -- claude_cmd = "claude", -- executable, command string with flags, or argv list
     -- codex_cmd = "codex",
-    -- agent_width = 56,
-    -- Optional: override or disable (false) global (`palette`) and diff/stream comment & thread keys.
+    -- agent_direction = "vertical", -- "vertical" | "horizontal" | "float" | "tab"
+    -- agent_width = nil, -- nil computes ~40% of columns; set a number to pin width
+    -- agent_load_toggleterm = true, -- lazy-load toggleterm.nvim for TermOpen maps & shading
+    -- Optional: override or disable (false) global (`palette`) and review-buffer keys.
     -- keys = {
     --   palette = "<leader>J",
     --   comment = "gc",
@@ -52,6 +54,9 @@ With [lazy.nvim](https://github.com/folke/lazy.nvim):
     --   thread_popup = "gt",
     --   next_thread = "]t",
     --   prev_thread = "[t",
+    --   send_agent = "gS",
+    --   submit_review = "gs",
+    --   toggle_agent = "ga",
     -- },
   },
 }
@@ -86,9 +91,9 @@ binary manually.
 | `:Jpr suggest` | Turn an uncommitted edit around the cursor into a GitHub draft suggestion and revert just that hunk |
 | `:Jpr expand` | Toggle inline expansion of review thread messages across diff and stream buffers |
 | `:Jpr conversation` | Open the top-level PR conversation view beside the panel |
-| `:Jpr submit` | Open the review submission modal (`COMMENT`, `APPROVE`, or `REQUEST_CHANGES`) |
-| `:Jpr agent [claude \| codex]` | Toggle the coding-agent terminal split on the right (keeps the session running when hidden), optionally selecting `claude` or `codex` directly |
-| `:Jpr send` | Dispatch all unsent local threads to the coding agent in a numbered round |
+| `:Jpr submit` (default key: `gs`) | Open the review submission preview modal (`COMMENT`, `APPROVE`, or `REQUEST_CHANGES`) with a confirmation prompt showing the action and draft count before publishing to GitHub |
+| `:Jpr agent [claude \| codex]` (default key: `ga`) | Toggle the coding-agent terminal without quitting it (`bufhidden = "hide"`, so `:q`, `<C-q>`, `<M-q>`, and `ga` hide only the window while Claude keeps running; lazy-loads `toggleterm.nvim` when installed for `TermOpen` maps and shading), optionally selecting `claude` or `codex` directly |
+| `:Jpr send` (default key: `gS`) | Preview the exact count of unsent local threads in a confirmation dialog, then auto-submit them to the coding agent (preserving focus in your review buffer) |
 | `:Jpr prepass` | Dispatch a pre-pass review prompt asking the agent to write local findings via `jpr-review prepass-write` |
 | `:Jpr close` | Stop the engine and close the tab |
 
@@ -151,6 +156,14 @@ In both changed diff buffers (and their base split buffers) and the stream:
 | `gf` | `<Plug>(jpr-file-comment)` | New file-level draft or local comment |
 | `gt` | `<Plug>(jpr-thread-popup)` | Open the floating thread popup at the cursor |
 | `]t` / `[t` | `<Plug>(jpr-next-thread)` / `<Plug>(jpr-prev-thread)` | Jump to the next / previous review thread |
+
+Across all review buffers (diffs, base splits, stream, PR sidebar panel, and PR conversation):
+
+| Key | `<Plug>` mapping | What it does |
+| --- | --- | --- |
+| `gS` | `<Plug>(jpr-send-agent)` | Confirm count and auto-submit unsent local threads to the coding agent (keeps focus in review buffer) |
+| `gs` | `<Plug>(jpr-submit-review)` | Open the GitHub review submission modal (confirms action and draft count before publishing) |
+| `ga` | `<Plug>(jpr-toggle-agent)` | Toggle the coding-agent terminal window without stopping the running agent |
 
 Set any entry in `setup({ keys = { ... } })` to `false` (or another key) to
 disable or remap the default buffer-local binding while keeping the
