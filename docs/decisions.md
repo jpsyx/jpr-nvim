@@ -1043,3 +1043,20 @@ column, while uncaptured `Normal` text still lifts at priority 45. Diagnostics
 
 **Revisit when.** Neovim exposes a native highlight contrast/blend modifier or
 reviewers ask for configurable contrast strength in `setup()`.
+
+## Built-in `:terminal` with on-demand `toggleterm.nvim` hooks, hybrid cold/warm auto-submit, and confirmed review shortcuts
+
+**Decision.** Interactive coding-agent orchestration (`lua/jpr/agent/{init,command,terminal,delivery}.lua`) and review shortcuts (`gS`, `gs`, `ga`) follow three coordinated rules:
+
+1. **Built-in `:terminal` enhanced by on-demand `toggleterm.nvim` hooks (without `Terminal:new`).**
+   `jpr.agent.terminal` spawns the agent through `vim.fn.jobstart(argv, { term = true })` with `bufhidden = "hide"`, defaults to a ~40% right vertical split (`agent_direction = "vertical"`, `agent_width = nil`, with `"horizontal"`, `"float"`, and `"tab"` also supported), and lazily loads `toggleterm.nvim` on demand (`agent_load_toggleterm = true`) before spawning so user `TermOpen` (`pattern = "*"`) mappings, `toggleterm.ui.hl_term()` shading, and a buffer-local hide override for `toggleterm`'s `open_mapping` attach automatically. `WinClosed` clears `agent_state.win` without stopping the job, and `ga` / `:Jpr agent` handles both in-tab splits and dedicated breakout tabs cleanly.
+2. **Hybrid cold-start CLI `-- <prompt>` plus readiness-gated Vim-mode-safe warm PTY delivery.**
+   `jpr.agent.command` parses string/flag or argv-list `claude_cmd` / `codex_cmd` values and passes `-- <prompt>` directly in argv on cold Claude launches (`<= 32768` bytes), eliminating startup PTY boot races. For warm terminals, Codex, or oversized prompts, `jpr.agent.delivery` gates writes on `\x1b[?2004h` observed in `on_stdout` (with a bounded fallback timer), detects `"editorMode": "vim"` from `$CLAUDE_CONFIG_DIR/settings.json` or `~/.claude/settings.json`, emits `<Esc>` only when the terminal's bottom status lines show `-- VISUAL` (never in `NORMAL` mode where Claude treats `<Esc>` as clear/cancel), waits for paste settlement (`>= 350 ms` for Claude), and writes the submit key (`\r` / `\t`) as a separate `chansend`.
+3. **Review-wide `gS`, `gs`, and `ga` shortcuts with mandatory confirmation dialogs.**
+   `jpr.bind_session_keys` binds `gS` (`<Plug>(jpr-send-agent)`), `gs` (`<Plug>(jpr-submit-review)`), and `ga` (`<Plug>(jpr-toggle-agent)`) across diff, split base, stream, panel, and conversation buffers. Both `gS` / `:Jpr send` and final submission inside `:Jpr submit` route through `jpr.views.confirm` displaying the exact item count (and action/summary for GitHub reviews) before executing; `gS` preserves cursor focus in the active review buffer while scrolling the agent terminal to the bottom.
+
+**Why.** Upstream `toggleterm.nvim`'s `ui.find_open_windows()` scans all tabs for `filetype == "toggleterm"` or `toggle_number` without excluding `hidden = true`, which causes `:ToggleTerm` (`<leader>t`) to become a silent no-op whenever a hidden `Terminal:new` split is visible, while `termopen` truncates command buffer names at 4095 bytes (stripping `;#toggleterm#<id>` on large prompts). Using Neovim's built-in `:terminal` plus on-demand `toggleterm.nvim` loading delivers all user terminal bindings and shading with zero monkey-patching and complete `<leader>t` isolation. Passing cold-start prompts via `-- <prompt>` avoids Claude Code's 1-2 s startup paste-ingestion race where early `\r` bytes arrive in the same read chunk as bracketed paste.
+
+**Consequences.** Zero Rust or protocol changes are needed (`PROTOCOL_VERSION` stays `9`). Closing the agent split via `:q`, `<C-q>`, `<M-q>`, `<C-w>c`, `<C-\>`, or `ga` hides only the window while Claude keeps running; only `:Jpr close` or exiting the CLI stops the process. Neither `gS` nor `gs` can send anything without explicit confirmation stating how many threads or draft comments will be sent.
+
+**Revisit when.** Upstream `toggleterm.nvim` filters `hidden = true` terminals in `ui.find_open_windows()`, or coding agent CLIs expose a structured non-PTY prompt submission channel for live interactive sessions.
