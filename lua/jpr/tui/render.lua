@@ -7,8 +7,8 @@ local M = {}
 local SELECTED_PREFIX = "▸ "
 local UNSELECTED_PREFIX = "  "
 local HELP_INDENT = "    "
-local PALETTE_FOOTER = "[j/k] move  [Enter/l] select  [q/Esc] close"
-local PALETTE_FOOTER_WITH_BACK = "[j/k] move  [h] repos  [Enter/l] select  [q/Esc] close"
+local PALETTE_FOOTER = "[type] filter  [C-j/k] move  [C-u] clear  [Enter] select  [Esc] normal/close"
+local PALETTE_FOOTER_WITH_BACK = "[type] filter  [C-j/k] move  [S-Tab] repos  [C-u] clear  [Enter] select  [Esc] normal/close"
 
 --- Folds line breaks in `text` into single spaces for safe single-line display.
 --- @param text any
@@ -148,15 +148,18 @@ end
 --- @param selected_index integer
 --- @param max_width integer
 --- @param context table|nil
+--- @param opts table|nil { is_filtered?: boolean }
 --- @return table { lines: string[], highlights: table[], cursor_line: integer, item_for_line: table<integer, integer> }
-function M.create_palette_layout_from_commands(commands, selected_index, max_width, context)
+function M.create_palette_layout_from_commands(commands, selected_index, max_width, context, opts)
     local layout = { lines = {}, highlights = {}, cursor_line = 1, item_for_line = {} }
     local command_list = schema.get_active_commands(commands, context)
     local width = math.max(1, tonumber(max_width) or 80)
     local has_back = type(context and context.on_back) == "function"
+    local is_filtered = type(opts) == "table" and opts.is_filtered == true
 
     if #command_list == 0 then
-        layout.cursor_line = append_line(layout, "  (no commands available)", "JprMuted")
+        local empty_label = is_filtered and "  (no matching commands)" or "  (no commands available)"
+        layout.cursor_line = append_line(layout, empty_label, "JprMuted")
     else
         local clamped_selected = clamp_index(selected_index, #command_list)
         for command_index, command in ipairs(command_list) do

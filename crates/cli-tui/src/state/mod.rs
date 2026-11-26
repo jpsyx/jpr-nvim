@@ -1,8 +1,10 @@
 //! Pure state machines for the command palette and step-by-step wizard.
 
+pub mod fuzzy;
 mod palette;
 mod wizard;
 
+pub use fuzzy::{filter_command_indices, score_match};
 pub use palette::{PaletteAction, PaletteState};
 pub use wizard::{WizardOutcome, WizardState, has_unanswered_active_step};
 
@@ -35,6 +37,8 @@ pub enum KeyAction {
     Backspace,
     /// Delete the character at the text cursor.
     Delete,
+    /// Clear the entire text input line.
+    ClearLine,
     /// Insert one Unicode scalar value at the text cursor.
     Char(char),
 }

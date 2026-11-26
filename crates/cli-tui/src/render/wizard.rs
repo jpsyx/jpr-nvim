@@ -122,7 +122,7 @@ fn format_option_row(option: &SelectOption, is_selected: bool, is_color_enabled:
     }
 }
 
-fn format_text_input(
+pub(super) fn format_text_input(
     input_text: &str,
     cursor_char_index: usize,
     placeholder: Option<&str>,

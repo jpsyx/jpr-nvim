@@ -46,7 +46,7 @@ return function(context)
         assert(helpers.current_text():find("▸ Automatic", 1, true) ~= nil, "default option preselected")
 
         helpers.press_key("h")
-        assert(wizard.is_open() and helpers.current_text():find("▸ Configure Target", 1, true) ~= nil, "h returns to palette on originating command")
+        assert(wizard.is_open() and helpers.palette_results_text():find("▸ Configure Target", 1, true) ~= nil, "h returns to palette on originating command")
 
         helpers.press_key("<CR>")
         helpers.press_key("j")

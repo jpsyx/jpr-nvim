@@ -108,20 +108,31 @@ local function get_preferred_step_value(step, answers, context)
     return schema.get_default_value_from_step(step, answers, context)
 end
 
+local function state_owns_handle(state, buf, win)
+    return state.buf == buf
+        or state.win == win
+        or (state.prompt_buf ~= nil and state.prompt_buf == buf)
+        or (state.prompt_win ~= nil and state.prompt_win == win)
+end
+
 local function handle_external_close(state, buf, win, should_close_win)
-    if active_state ~= state or (state.buf ~= buf and state.win ~= win) then
+    if active_state ~= state or not state_owns_handle(state, buf, win) then
         return
     end
     active_state = nil
     increment_request_id()
-    state.buf = nil
-    state.win = nil
+    local tracked_win, tracked_buf = state.win, state.buf
+    local tracked_prompt_win, tracked_prompt_buf = state.prompt_win, state.prompt_buf
+    state.buf, state.win, state.prompt_buf, state.prompt_win = nil, nil, nil, nil
     if vim.fn.mode(1):sub(1, 1) == "i" then
         pcall(vim.cmd, "stopinsert")
     end
     local origin_win = state.origin_win
     vim.schedule(function()
-        window.close_handle(should_close_win and win or nil, buf)
+        local close_tracked_win = (tracked_win == win and not should_close_win) and nil or tracked_win
+        local close_prompt_win = (tracked_prompt_win == win and not should_close_win) and nil or tracked_prompt_win
+        window.close_handle(close_prompt_win, tracked_prompt_buf)
+        window.close_handle(close_tracked_win, tracked_buf)
         if active_state == nil then
             restore_origin_window(origin_win)
         end
@@ -166,15 +177,15 @@ local function register_cursor_hover_sync(state, get_index, set_index, repaint)
 end
 
 local function detach_current_window(state, should_stop_insert)
-    local previous_win = state.win
-    local previous_buf = state.buf
-    state.win = nil
-    state.buf = nil
-    if should_stop_insert and previous_buf and vim.api.nvim_get_current_buf() == previous_buf then
-        if vim.fn.mode(1):sub(1, 1) == "i" then
-            pcall(vim.cmd, "stopinsert")
-        end
+    local previous_win, previous_buf = state.win, state.buf
+    local previous_prompt_win, previous_prompt_buf = state.prompt_win, state.prompt_buf
+    state.win, state.buf, state.prompt_win, state.prompt_buf = nil, nil, nil, nil
+    local current_buf = vim.api.nvim_get_current_buf()
+    local is_wizard_buf = current_buf == previous_buf or current_buf == previous_prompt_buf
+    if should_stop_insert and is_wizard_buf and vim.fn.mode(1):sub(1, 1) == "i" then
+        pcall(vim.cmd, "stopinsert")
     end
+    window.close_handle(previous_prompt_win, previous_prompt_buf)
     window.close_handle(previous_win, previous_buf)
 end
 
@@ -192,9 +203,15 @@ end
 --- Returns `true` when an active wizard floating window is open and valid.
 --- @return boolean
 function M.is_open()
-    return active_state ~= nil
-        and active_state.win ~= nil
-        and vim.api.nvim_win_is_valid(active_state.win)
+    if active_state == nil then
+        return false
+    end
+    if active_state.prompt_win ~= nil then
+        return vim.api.nvim_win_is_valid(active_state.prompt_win)
+            and active_state.win ~= nil
+            and vim.api.nvim_win_is_valid(active_state.win)
+    end
+    return active_state.win ~= nil and vim.api.nvim_win_is_valid(active_state.win)
 end
 
 local controller

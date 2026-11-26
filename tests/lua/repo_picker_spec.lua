@@ -109,8 +109,8 @@ end, function()
     assert(wizard.is_open(), "picking repo opens global command palette")
     local title = helpers.win_title(helpers.current_float_win())
     assert(title:find("pablo/notes", 1, true) ~= nil, "palette title includes chosen repo: " .. title)
-    local palette_text = helpers.current_text()
-    assert(palette_text:find("[h] repos", 1, true) ~= nil, "palette footer hints [h] repos: " .. palette_text)
+    local palette_text = helpers.palette_results_text()
+    assert(palette_text:find("[S-Tab] repos", 1, true) ~= nil, "palette footer hints [S-Tab] repos: " .. palette_text)
 
     -- Selecting Open Pull Request -> Pick from Open PRs opens PR #12 with repo = "pablo/notes".
     helpers.press_key("<CR>")
@@ -199,7 +199,7 @@ end, function()
     assert(helpers.win_title(helpers.current_float_win()):find("acme/widgets", 1, true) ~= nil, "palette scoped to acme/widgets")
 
     -- Outside git repo without a session, repo-scoped palette hides [local] and session commands (only open + keys appear).
-    local scoped_palette_text = helpers.current_text()
+    local scoped_palette_text = helpers.palette_results_text()
     assert(scoped_palette_text:find("Open Pull Request  [open]", 1, true) ~= nil, "repo-scoped palette includes open")
     assert(scoped_palette_text:find("Keyboard Shortcuts  [keys]", 1, true) ~= nil, "repo-scoped palette includes keys")
     assert(scoped_palette_text:find("Review Current Worktree", 1, true) == nil, "repo-scoped palette hides local outside git repo")

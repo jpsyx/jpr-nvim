@@ -16,14 +16,14 @@ return function(context)
 
         local function select_agent_from_palette()
             for _ = 1, 20 do
-                local selected_line = helpers.current_text():match("▸[^\n]+") or ""
+                local selected_line = helpers.palette_results_text():match("▸[^\n]+") or ""
                 if selected_line:find("[agent]", 1, true) ~= nil then
                     helpers.press_key("<CR>")
                     return
                 end
                 helpers.press_key("j")
             end
-            error("agent command not found in palette:\n" .. helpers.current_text())
+            error("agent command not found in palette:\n" .. helpers.palette_results_text())
         end
 
         session.by_tab[tab] = {

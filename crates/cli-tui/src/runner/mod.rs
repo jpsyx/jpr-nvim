@@ -17,7 +17,7 @@ use crate::state::{
     PaletteAction, PaletteState, WizardOutcome, WizardState, has_unanswered_active_step,
 };
 
-use self::keys::key_event_to_action;
+use self::keys::{KeyMode, key_event_to_action};
 use self::terminal::{RawModeGuard, should_use_color, terminal_width};
 
 /// Outcome of running the interactive top-level command palette.
@@ -85,6 +85,7 @@ pub fn run_palette(title: &str, commands: &[CommandSpec]) -> Result<PaletteOutco
         )? {
             return Ok(outcome);
         }
+        palette_state.clear_query();
     }
 }
 
@@ -159,10 +160,10 @@ fn run_palette_loop(
         terminal_guard.render_frame(&frame, width)?;
 
         if let Event::Key(key_event) = event::read().context("reading terminal input event")? {
-            let Some(action) = key_event_to_action(key_event, false) else {
+            let Some(action) = key_event_to_action(key_event, KeyMode::Palette) else {
                 continue;
             };
-            match palette_state.handle_key(action, commands.len()) {
+            match palette_state.handle_key(action, commands) {
                 PaletteAction::Continue => {}
                 outcome @ (PaletteAction::Selected(_) | PaletteAction::Cancelled) => {
                     return Ok(outcome);
@@ -184,8 +185,12 @@ fn run_wizard_loop(
         terminal_guard.render_frame(&frame, width)?;
 
         if let Event::Key(key_event) = event::read().context("reading terminal input event")? {
-            let is_text_input = wizard_state.is_text_step(command);
-            let Some(action) = key_event_to_action(key_event, is_text_input) else {
+            let mode = if wizard_state.is_text_step(command) {
+                KeyMode::Text
+            } else {
+                KeyMode::Menu
+            };
+            let Some(action) = key_event_to_action(key_event, mode) else {
                 continue;
             };
             match wizard_state.handle_key(command, action) {

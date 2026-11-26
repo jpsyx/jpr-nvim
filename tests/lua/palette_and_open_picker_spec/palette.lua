@@ -49,14 +49,14 @@ return function(context)
     local function select_palette_command(command_id)
         local needle = "[" .. command_id .. "]"
         for _ = 1, 20 do
-            local selected_line = helpers.current_text():match("▸[^\n]+") or ""
+            local selected_line = helpers.palette_results_text():match("▸[^\n]+") or ""
             if selected_line:find(needle, 1, true) ~= nil then
                 helpers.press_key("<CR>")
                 return
             end
             helpers.press_key("j")
         end
-        error("command " .. command_id .. " not found in palette:\n" .. helpers.current_text())
+        error("command " .. command_id .. " not found in palette:\n" .. helpers.palette_results_text())
     end
 
     local function with_tab_session(stub_session, callback)
@@ -75,7 +75,7 @@ return function(context)
         jpr.command({})
         assert(wizard.is_open() == true, "bare :Jpr opens floating Command Palette")
 
-        local first_text = helpers.current_text()
+        local first_text = helpers.palette_results_text()
         assert(
             vim.deep_equal(extract_visible_command_ids(first_text), { "open", "local", "keys" }),
             "outside session in git repo shows only open, local, keys: " .. vim.inspect(extract_visible_command_ids(first_text))
@@ -85,7 +85,7 @@ return function(context)
         assert(first_text:find("Review the current worktree", 1, true) == nil, "local helper text hidden initially")
 
         helpers.press_key("j")
-        local second_text = helpers.current_text()
+        local second_text = helpers.palette_results_text()
         assert(second_text:find("▸ Review Current Worktree  [local]", 1, true) ~= nil, "j moves selection to local: " .. second_text)
         assert(second_text:find("Review the current worktree", 1, true) ~= nil, "local hover helper text visible")
         assert(second_text:find("Pick an open pull request", 1, true) == nil, "open helper text hidden after move")
