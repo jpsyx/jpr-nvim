@@ -76,6 +76,9 @@ local function spawn_agent_terminal(session, launch_plan, opts)
         end,
     })
     if agent_state then
+        if command.can_use_cli_initial_prompt(kind, opts.initial_prompt) then
+            agent_state.cli_initial_prompt = opts.initial_prompt
+        end
         delivery.start_ready_fallback_timer(session, agent_state, config.agent_ready_timeout_ms)
     end
     return agent_state
@@ -212,22 +215,28 @@ function M.deliver_dispatch(session, dispatch)
         or jpr().config.agent
         or "claude"
     local use_cli_cold_start = not terminal.has_live_agent(session)
+        and session.agent_pending_callbacks == nil
         and command.can_use_cli_initial_prompt(target_kind, dispatch.prompt)
+    local enqueue_warm = function(agent_state)
+        delivery.enqueue_pty_dispatch(session, agent_state, dispatch, function(done_dispatch)
+            confirm_dispatch_round(session, done_dispatch)
+            maybe_notify_background_float(done_dispatch)
+        end)
+    end
     if use_cli_cold_start then
         return M.ensure_open(session, function(agent_state)
             if session.closing or session.agent ~= agent_state or not terminal.has_live_agent(session) then
                 return
             end
+            if agent_state.cli_initial_prompt ~= dispatch.prompt then
+                return enqueue_warm(agent_state)
+            end
+            agent_state.cli_initial_prompt = nil
             confirm_dispatch_round(session, dispatch)
             maybe_notify_background_float(dispatch)
         end, { agent_kind = target_kind, focus = false, initial_prompt = dispatch.prompt })
     end
-    M.ensure_open(session, function(agent_state)
-        delivery.enqueue_pty_dispatch(session, agent_state, dispatch, function(done_dispatch)
-            confirm_dispatch_round(session, done_dispatch)
-            maybe_notify_background_float(done_dispatch)
-        end)
-    end, { agent_kind = target_kind, focus = false })
+    M.ensure_open(session, enqueue_warm, { agent_kind = target_kind, focus = false })
 end
 
 local function open_send_confirmation(session, dispatch)
@@ -274,6 +283,9 @@ function M.send(session, only_thread_id, opts)
     }, function(dispatch)
         if session.closing then
             return
+        end
+        if type(dispatch) ~= "table" or type(dispatch.prompt) ~= "string" or dispatch.prompt == "" then
+            return jpr().error("nothing to send to the agent")
         end
         if type(opts) == "table" and opts.skip_confirm == true then
             return M.deliver_dispatch(session, dispatch)

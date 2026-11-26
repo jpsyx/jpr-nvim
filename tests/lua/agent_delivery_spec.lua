@@ -47,6 +47,28 @@ local function test_pure_paste_submit_and_visual_detection()
         "-- NORMAL --",
     })
     assert(delivery.is_buffer_in_visual_mode(buf) == false, "ignores old -- VISUAL -- far above bottom")
+
+    -- Tall terminal with > 30 trailing blank lines below -- VISUAL -- still detects Visual mode.
+    local tall_lines = { "prompt>", "-- VISUAL --" }
+    for _ = 1, 50 do
+        tall_lines[#tall_lines + 1] = ""
+    end
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, tall_lines)
+    assert(delivery.is_buffer_in_visual_mode(buf) == true, "detects -- VISUAL -- above >30 trailing blank lines")
+
+    -- Output mentioning -- VISUAL -- within 6 lines above -- NORMAL -- must NOT trigger Visual mode.
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, {
+        "Diff mentions -- VISUAL -- in a comment",
+        "prompt>",
+        "-- NORMAL --",
+    })
+    assert(delivery.is_buffer_in_visual_mode(buf) == false, "-- NORMAL -- below -- VISUAL -- short-circuits to false")
+
+    vim.api.nvim_buf_set_lines(buf, 0, -1, false, {
+        "Diff mentions -- VISUAL -- in a comment",
+        "-- INSERT --",
+    })
+    assert(delivery.is_buffer_in_visual_mode(buf) == false, "-- INSERT -- below -- VISUAL -- short-circuits to false")
     vim.api.nvim_buf_delete(buf, { force = true })
 end
 
@@ -103,7 +125,45 @@ local function test_readiness_gating_and_fallback_timer()
     assert(writes[2].bytes == "\r", "second write is CR")
     vim.api.nvim_buf_delete(agent_state.buf, { force = true })
 
-    -- 2. Fallback readiness timer flushes even when \27[?2004h never arrives.
+    -- 2. Split-chunk \27[?2004h across two on_stdout callbacks still triggers readiness.
+    writes, submitted = {}, {}
+    local split_session, split_state = create_fake_agent_state({ "> " }, false)
+    delivery.enqueue_pty_dispatch(split_session, split_state, dispatch, function(done_dispatch)
+        submitted[#submitted + 1] = done_dispatch
+    end)
+    delivery.on_stdout(split_state, { "booting \27[?20" })
+    assert(#writes == 0 and split_state.is_ready == false, "partial escape sequence does not trigger ready")
+    delivery.on_stdout(split_state, { "04h> " })
+    assert(vim.wait(1000, function() return #submitted == 1 end), "completed split-chunk sequence triggers ready")
+    assert(#writes == 2 and writes[2].bytes == "\r", "split-chunk ready flushed paste and CR")
+    vim.api.nvim_buf_delete(split_state.buf, { force = true })
+
+    -- 3. Back-to-back warm dispatches and arrivals during settle window serialize strictly (no byte interleaving).
+    writes, submitted = {}, {}
+    jpr.setup({ agent_submit_delay_ms = 35, agent_ready_settle_ms = 40 })
+    local serial_session, serial_state = create_fake_agent_state({ "> " }, false)
+    local first_dispatch = { round = 1, kind = "send", threadIds = { "loc-1" }, prompt = "First", profile = { submitKey = "enter", submitDelayMs = 35 } }
+    local second_dispatch = { round = 2, kind = "send", threadIds = { "loc-2" }, prompt = "Second", profile = { submitKey = "enter", submitDelayMs = 35 } }
+    delivery.enqueue_pty_dispatch(serial_session, serial_state, first_dispatch, function(done_dispatch)
+        submitted[#submitted + 1] = done_dispatch.prompt
+    end)
+    delivery.on_stdout(serial_state, { "\27[?2004h" })
+    -- Second dispatch arrives during the 40ms settle window before first starts: must queue in order behind first.
+    assert(serial_state.is_ready == false, "is_ready remains false until mount-settle finishes")
+    delivery.enqueue_pty_dispatch(serial_session, serial_state, second_dispatch, function(done_dispatch)
+        submitted[#submitted + 1] = done_dispatch.prompt
+    end)
+    assert(vim.wait(1500, function() return #submitted == 2 end), "both serialized dispatches complete")
+    assert(vim.deep_equal(submitted, { "First", "Second" }), "dispatches submitted in FIFO order: " .. vim.inspect(submitted))
+    assert(#writes == 4, "four writes total (paste1, CR1, paste2, CR2): " .. vim.inspect(writes))
+    assert(writes[1].bytes == "\27[200~First\27[201~", "write 1 is first paste")
+    assert(writes[2].bytes == "\r", "write 2 is first CR (before second paste)")
+    assert(writes[3].bytes == "\27[200~Second\27[201~", "write 3 is second paste")
+    assert(writes[4].bytes == "\r", "write 4 is second CR")
+    vim.api.nvim_buf_delete(serial_state.buf, { force = true })
+    jpr.setup({ agent_submit_delay_ms = 20, agent_ready_settle_ms = 10 })
+
+    -- 4. Fallback readiness timer flushes even when \27[?2004h never arrives.
     writes, submitted = {}, {}
     local fallback_session, fallback_state = create_fake_agent_state({ "" }, false)
     delivery.start_ready_fallback_timer(fallback_session, fallback_state, 40)

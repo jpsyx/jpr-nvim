@@ -97,6 +97,9 @@ local function paint_modal(state)
 end
 
 local function select_event(state, event)
+    if state.in_flight or confirm.is_open(state.confirm) then
+        return
+    end
     if event ~= "COMMENT" and not state.preview.canApproveOrRequestChanges then
         return require("jpr").info("cannot approve or request changes on your own PR")
     end
@@ -118,13 +121,13 @@ local function build_submit_confirm_headline(event, draft_count, body)
     return ("Submit %s review with %d %s to GitHub?"):format(action_label, count, draft_noun)
 end
 
-local function execute_submit_review(session, state, body)
+local function execute_submit_review(session, state, event, body)
     if state.in_flight or session.closing or session.submit ~= state then
         return
     end
     state.in_flight = true
     require("jpr.session").request(session, "submitReview", {
-        event = state.event,
+        event = event,
         body = body,
     }, function()
         state.in_flight = false
@@ -149,18 +152,19 @@ local function submit_review(session, state)
     if blocked_reason and blocked_reason ~= "" then
         return require("jpr").error(blocked_reason)
     end
-    if state.event ~= "COMMENT" and not state.preview.canApproveOrRequestChanges then
+    local confirmed_event = state.event
+    if confirmed_event ~= "COMMENT" and not state.preview.canApproveOrRequestChanges then
         return require("jpr").info("cannot approve or request changes on your own PR")
     end
     local body = table.concat(state.body_lines or {}, "\n")
     local draft_count = state.preview.draftCount or 0
-    if state.event == "COMMENT" and draft_count == 0 and vim.trim(body) == "" then
+    if confirmed_event == "COMMENT" and draft_count == 0 and vim.trim(body) == "" then
         return require("jpr").error("a comment review with zero drafts needs a summary body")
     end
     local dialog
     dialog = confirm.open({
         title = " Confirm GitHub Review Submission ",
-        headline = build_submit_confirm_headline(state.event, draft_count, body),
+        headline = build_submit_confirm_headline(confirmed_event, draft_count, body),
         confirm_label = "Submit to GitHub",
         confirm_badge = "[submit]",
         confirm_help = "Publish this review and its pending draft comments on GitHub.",
@@ -170,7 +174,7 @@ local function submit_review(session, state)
             if state.confirm == dialog then
                 state.confirm = nil
             end
-            execute_submit_review(session, state, body)
+            execute_submit_review(session, state, confirmed_event, body)
         end,
         on_cancel = function()
             if state.confirm == dialog then
@@ -230,7 +234,7 @@ local function bind_editor_keys(session, state, editor)
 end
 
 local function open_summary_editor(session, state)
-    if state.in_flight then
+    if state.in_flight or confirm.is_open(state.confirm) then
         return
     end
     close_editor(state)

@@ -85,12 +85,39 @@ local function test_on_demand_toggleterm_hooks_shading_and_open_mapping()
     assert(vim.b[state.buf].toggle_number == nil, "does not set toggle_number")
     assert(helpers.has_buf_map(state.buf, "t", "<C-Bslash>"), "maps open_mapping in terminal mode")
     assert(helpers.has_buf_map(state.buf, "n", "<C-Bslash>"), "maps open_mapping in normal mode")
+    assert(helpers.has_buf_map(state.buf, "n", "ga"), "maps toggle_agent key in normal mode on agent buffer")
     vim.cmd("stopinsert")
     helpers.press_key("<C-\\>")
     assert(toggled == 1, "buffer-local open_mapping calls on_toggle_hide")
+    helpers.press_key("ga")
+    assert(toggled == 2, "buffer-local toggle_agent calls on_toggle_hide")
 
     terminal.close(session, state)
     pcall(vim.cmd, "tabclose!")
+
+    -- When agent_load_toggleterm = false, toggleterm.config/ui are never loaded or invoked.
+    package.loaded["toggleterm"] = nil
+    package.loaded["toggleterm.config"] = nil
+    package.loaded["toggleterm.ui"] = nil
+    local preloaded_config_hit = 0
+    package.preload["toggleterm.config"] = function()
+        preloaded_config_hit = preloaded_config_hit + 1
+        return { get = function() return true end }
+    end
+    jpr.setup({ agent_load_toggleterm = false, agent_direction = "vertical", keys = { toggle_agent = "gA" } })
+    local disabled_session = create_mock_session()
+    local disabled_state = terminal.spawn(disabled_session, { "/bin/sh", "-c", "sleep 30" }, {}, {
+        kind = "claude",
+        focus = false,
+        on_toggle_hide = function() end,
+    })
+    assert(preloaded_config_hit == 0, "agent_load_toggleterm = false must not load toggleterm.config")
+    assert(helpers.has_buf_map(disabled_state.buf, "n", "gA"), "uses custom toggle_agent key on agent buffer")
+    terminal.close(disabled_session, disabled_state)
+    pcall(vim.cmd, "tabclose!")
+    package.preload["toggleterm.config"] = nil
+    jpr.setup({})
+
     for name, value in pairs(saved) do
         package.loaded[name] = value
     end
@@ -177,6 +204,45 @@ local function test_float_background_launch_and_tab_breakout_toggling()
 
     terminal.close(tab_session, tab_state)
     pcall(vim.cmd, "tabclose!")
+
+    -- 3. `:tab split` (<leader>o) breakout while original split remains open in session.tab:
+    -- hiding from the breakout tab closes the breakout tab (not the original split) and returns to session.tab.
+    jpr.setup({ agent_load_toggleterm = false, agent_direction = "vertical", keys = { toggle_agent = "gA" } })
+    local split_session = create_mock_session()
+    local split_state = terminal.spawn(split_session, { "/bin/sh", "-c", "sleep 30" }, {}, {
+        kind = "claude",
+        focus = true,
+    })
+    assert(split_state ~= nil and split_state.win ~= nil, "vertical split agent opened")
+    vim.cmd("stopinsert")
+    local original_split_win = split_state.win
+    vim.cmd("tab split")
+    local breakout_tab = vim.api.nvim_get_current_tabpage()
+    local breakout_win = vim.api.nvim_get_current_win()
+    assert(breakout_tab ~= split_session.tab, "tab split created breakout tab")
+    assert(terminal.find_agent_window(split_state) == breakout_win, "find_agent_window prefers current breakout window")
+    assert(terminal.hide(split_session, split_state) == true, "hide closes breakout tab window")
+    assert(not vim.api.nvim_win_is_valid(breakout_win), "breakout window closed")
+    assert(vim.api.nvim_win_is_valid(original_split_win), "original split in session.tab preserved")
+    assert(vim.api.nvim_get_current_tabpage() == split_session.tab, "returned focus to session.tab")
+    assert(terminal.has_live_agent(split_session) == true, "agent job stays alive")
+    terminal.close(split_session, split_state)
+    pcall(vim.cmd, "tabclose!")
+
+    -- 4. Float footer reflects dynamic config.keys.toggle_agent.
+    jpr.setup({ agent_load_toggleterm = false, agent_direction = "float", keys = { toggle_agent = "gA" } })
+    local custom_float_session = create_mock_session()
+    local custom_float_state = terminal.spawn(custom_float_session, { "/bin/sh", "-c", "sleep 30" }, {}, {
+        kind = "claude",
+        focus = true,
+    })
+    vim.cmd("stopinsert")
+    local custom_footer = vim.api.nvim_win_get_config(custom_float_state.win).footer
+    local footer_text = type(custom_footer) == "table" and custom_footer[1][1] or tostring(custom_footer or "")
+    assert(footer_text:find("gA", 1, true) ~= nil, "float footer reflects custom toggle_agent key: " .. footer_text)
+    terminal.close(custom_float_session, custom_float_state)
+    pcall(vim.cmd, "tabclose!")
+    jpr.setup({})
 end
 
 test_resolve_vertical_width()

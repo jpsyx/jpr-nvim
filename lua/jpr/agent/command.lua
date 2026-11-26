@@ -11,22 +11,22 @@ local function split_shell_tokens(input)
     local active_quote = nil
     local index = 1
     while index <= #input do
-        local ch = input:sub(index, index)
+        local character = input:sub(index, index)
         if active_quote then
-            if ch == active_quote then
+            if character == active_quote then
                 active_quote = nil
             else
-                current[#current + 1] = ch
+                current[#current + 1] = character
             end
-        elseif ch == "'" or ch == '"' then
-            active_quote = ch
-        elseif ch:match("%s") then
+        elseif character == "'" or character == '"' then
+            active_quote = character
+        elseif character:match("%s") then
             if #current > 0 then
                 tokens[#tokens + 1] = table.concat(current)
                 current = {}
             end
         else
-            current[#current + 1] = ch
+            current[#current + 1] = character
         end
         index = index + 1
     end
@@ -133,13 +133,13 @@ function M.create_launch_argv_from_plan(config, worktree, launch_plan, home_dire
 end
 
 local function read_file_bytes(path)
-    local fd = vim.uv.fs_open(path, "r", 438)
-    if not fd then
+    local file_descriptor = vim.uv.fs_open(path, "r", 438)
+    if not file_descriptor then
         return nil
     end
-    local stat = vim.uv.fs_fstat(fd)
-    local data = stat and stat.size > 0 and vim.uv.fs_read(fd, stat.size, 0) or ""
-    vim.uv.fs_close(fd)
+    local stat = vim.uv.fs_fstat(file_descriptor)
+    local data = stat and stat.size > 0 and vim.uv.fs_read(file_descriptor, stat.size, 0) or ""
+    vim.uv.fs_close(file_descriptor)
     return data
 end
 

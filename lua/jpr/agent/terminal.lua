@@ -1,25 +1,14 @@
 -- Built-in Neovim `:terminal` lifecycle for the coding agent, enhanced with
 -- on-demand `toggleterm.nvim` loading (for `TermOpen` mappings and shading),
--- hide-without-quitting semantics, multi-layout geometry, and focus control.
-local window_util = require("jpr.tui.wizard.window")
+-- hide-without-quitting semantics, buffer-local toggle keys, and focus control.
+local agent_window = require("jpr.agent.window")
 
 local M = {}
 
+M.resolve_vertical_width = agent_window.resolve_vertical_width
+
 local function jpr()
     return require("jpr")
-end
-
---- Computes the vertical split width in columns from `config` and optional
---- `total_columns` (defaulting to `vim.o.columns`).
-function M.resolve_vertical_width(config, total_columns)
-    local columns = (type(total_columns) == "number" and total_columns > 0) and total_columns or vim.o.columns
-    local configured = type(config) == "table" and config.agent_width or nil
-    if type(configured) == "number" and configured > 0 then
-        return math.min(math.floor(configured), math.max(20, columns - 10))
-    end
-    local max_width = math.max(20, columns - 20)
-    local target = math.max(60, math.floor(columns * 0.4))
-    return math.min(target, max_width)
 end
 
 --- Lazily loads `toggleterm.nvim` when installed under `lazy.nvim` so user
@@ -32,8 +21,8 @@ function M.ensure_toggleterm_hooks(config)
     if package.loaded["toggleterm"] ~= nil then
         return true
     end
-    local has_lazy_cfg, lazy_cfg = pcall(require, "lazy.core.config")
-    if not has_lazy_cfg or type(lazy_cfg.plugins) ~= "table" or lazy_cfg.plugins["toggleterm.nvim"] == nil then
+    local has_lazy_config, lazy_config = pcall(require, "lazy.core.config")
+    if not has_lazy_config or type(lazy_config.plugins) ~= "table" or lazy_config.plugins["toggleterm.nvim"] == nil then
         return false
     end
     local has_lazy, lazy = pcall(require, "lazy")
@@ -44,18 +33,37 @@ function M.ensure_toggleterm_hooks(config)
     return package.loaded["toggleterm"] ~= nil
 end
 
-local function apply_toggleterm_window_hooks(buf, win, on_toggle_hide)
-    local ok_cfg, tt_cfg = pcall(require, "toggleterm.config")
-    if not ok_cfg or type(tt_cfg.get) ~= "function" then
+local function bind_agent_buffer_keys(config, buf, on_toggle_hide)
+    if type(on_toggle_hide) ~= "function" then
         return
     end
-    if tt_cfg.get("shade_terminals") then
-        local ok_ui, tt_ui = pcall(require, "toggleterm.ui")
-        if ok_ui and type(tt_ui.hl_term) == "function" then
-            pcall(tt_ui.hl_term, { window = win, id = "JprAgent" })
+    local keys = type(config) == "table" and type(config.keys) == "table" and config.keys or {}
+    local toggle_key = keys.toggle_agent
+    if type(toggle_key) == "string" and toggle_key ~= "" then
+        vim.keymap.set("n", toggle_key, on_toggle_hide, {
+            buffer = buf,
+            nowait = true,
+            silent = true,
+            desc = "Hide Jpr coding agent panel",
+        })
+    end
+end
+
+local function apply_toggleterm_window_hooks(config, buf, win, on_toggle_hide)
+    if (type(config) == "table" and config.agent_load_toggleterm == false) or package.loaded["toggleterm"] == nil then
+        return
+    end
+    local has_toggleterm_config, toggleterm_config = pcall(require, "toggleterm.config")
+    if not has_toggleterm_config or type(toggleterm_config.get) ~= "function" then
+        return
+    end
+    if toggleterm_config.get("shade_terminals") then
+        local has_toggleterm_ui, toggleterm_ui = pcall(require, "toggleterm.ui")
+        if has_toggleterm_ui and type(toggleterm_ui.hl_term) == "function" then
+            pcall(toggleterm_ui.hl_term, { window = win, id = "JprAgent" })
         end
     end
-    local open_mapping = tt_cfg.get("open_mapping")
+    local open_mapping = toggleterm_config.get("open_mapping")
     if type(open_mapping) == "string" and open_mapping ~= "" and type(on_toggle_hide) == "function" then
         vim.keymap.set({ "t", "n" }, open_mapping, function()
             if vim.fn.mode(1):sub(1, 1) == "t" then
@@ -66,108 +74,16 @@ local function apply_toggleterm_window_hooks(buf, win, on_toggle_hide)
     end
 end
 
-local function find_rightmost_window(session)
-    local main_window = require("jpr.views.main_window")
-    local best_normal, best_normal_column = nil, -1
-    local best_any, best_any_column = nil, -1
-    for _, win in ipairs(vim.api.nvim_tabpage_list_wins(session.tab)) do
-        local win_cfg = vim.api.nvim_win_get_config(win)
-        if not win_cfg.relative or win_cfg.relative == "" then
-            local column = vim.api.nvim_win_get_position(win)[2]
-            if column > best_any_column then
-                best_any, best_any_column = win, column
-            end
-            if not main_window.is_side(session, win) and column > best_normal_column then
-                best_normal, best_normal_column = win, column
-            end
-        end
-    end
-    return best_normal or best_any
-end
-
-local function style_agent_window(win, direction)
-    local function set_local(name, value)
-        vim.api.nvim_set_option_value(name, value, { win = win, scope = "local" })
-    end
-    set_local("number", false)
-    set_local("relativenumber", false)
-    set_local("signcolumn", "no")
-    if direction == "vertical" then
-        vim.w[win].jpr_side = true
-        set_local("winfixwidth", true)
-    elseif direction == "horizontal" then
-        vim.w[win].jpr_side = true
-        set_local("winfixheight", true)
-    end
-end
-
-local function open_float_window(buf, kind)
-    local max_w = math.max(24, vim.o.columns - 4)
-    local max_h = math.max(10, vim.o.lines - 4)
-    local width = math.min(max_w, math.max(math.min(72, max_w), math.floor(vim.o.columns * 0.8)))
-    local height = math.min(max_h, math.max(math.min(18, max_h), math.floor(vim.o.lines * 0.75)))
-    local label = kind == "codex" and "Codex" or "Claude"
-    local title = (" Jpr · %s "):format(label)
-    local footer = " :q / ga hide without quitting "
-    local cfg = window_util.create_window_config(width, height, title, footer)
-    local ok, win = pcall(vim.api.nvim_open_win, buf, true, cfg)
-    return (ok and win and vim.api.nvim_win_is_valid(win)) and win or nil
-end
-
-local function open_tab_window(buf)
-    local ok = pcall(vim.cmd, "tabnew")
-    if not ok then
+local function find_remaining_window_for_buf(buf, excluding_win)
+    if not buf or not vim.api.nvim_buf_is_valid(buf) then
         return nil
     end
-    local win = vim.api.nvim_get_current_win()
-    local placeholder = vim.api.nvim_win_get_buf(win)
-    vim.api.nvim_win_set_buf(win, buf)
-    if placeholder ~= buf and vim.api.nvim_buf_is_valid(placeholder) then
-        pcall(vim.api.nvim_buf_delete, placeholder, { force = true })
-    end
-    return win
-end
-
-local function open_split_window(session, buf, direction, config)
-    if not session.tab or not vim.api.nvim_tabpage_is_valid(session.tab) then
-        return nil
-    end
-    if direction == "horizontal" then
-        local current_tab = vim.api.nvim_get_current_tabpage()
-        if current_tab ~= session.tab then
-            pcall(vim.api.nvim_set_current_tabpage, session.tab)
+    for _, candidate in ipairs(vim.fn.win_findbuf(buf)) do
+        if candidate ~= excluding_win and vim.api.nvim_win_is_valid(candidate) then
+            return candidate
         end
-        local height = math.max(15, math.floor(vim.o.lines * 0.3))
-        local ok = pcall(vim.cmd, ("botright %dsplit"):format(height))
-        if not ok then
-            return nil
-        end
-        local win = vim.api.nvim_get_current_win()
-        vim.api.nvim_win_set_buf(win, buf)
-        return win
     end
-    local target_win = find_rightmost_window(session) or vim.api.nvim_tabpage_list_wins(session.tab)[1]
-    if not target_win or not vim.api.nvim_win_is_valid(target_win) then
-        return nil
-    end
-    local width = M.resolve_vertical_width(config)
-    local ok, win = pcall(vim.api.nvim_open_win, buf, true, { split = "right", win = target_win, width = width })
-    return (ok and win and vim.api.nvim_win_is_valid(win)) and win or nil
-end
-
-local function open_window_for_direction(session, buf, direction, kind, config)
-    local win
-    if direction == "float" then
-        win = open_float_window(buf, kind)
-    elseif direction == "tab" then
-        win = open_tab_window(buf)
-    else
-        win = open_split_window(session, buf, direction, config)
-    end
-    if win then
-        style_agent_window(win, direction)
-    end
-    return win
+    return nil
 end
 
 local function attach_win_closed_guard(agent_state, win)
@@ -178,39 +94,45 @@ local function attach_win_closed_guard(agent_state, win)
             if agent_state.win ~= win then
                 return
             end
-            local remaining = (agent_state.buf and vim.api.nvim_buf_is_valid(agent_state.buf))
-                and vim.fn.win_findbuf(agent_state.buf)
-                or {}
-            local next_win = nil
-            for _, candidate in ipairs(remaining) do
-                if candidate ~= win and vim.api.nvim_win_is_valid(candidate) then
-                    next_win = candidate
-                    break
-                end
+            local remaining_win = find_remaining_window_for_buf(agent_state.buf, win)
+            agent_state.win = remaining_win
+            if remaining_win then
+                attach_win_closed_guard(agent_state, remaining_win)
             end
-            agent_state.win = next_win
         end,
     })
 end
 
---- Finds any valid window currently displaying `agent_state.buf`, preferring
---- `agent_state.win` when valid.
+--- Finds the most relevant visible window for `agent_state`: current window if
+--- it shows `agent_state.buf`, then another window in the current tab, then
+--- `agent_state.win` showing the buffer, then any other window showing it,
+--- falling back to a still-valid `agent_state.win` handle.
 function M.find_agent_window(agent_state)
     if not agent_state then
         return nil
     end
+    local buf = agent_state.buf
+    if buf and vim.api.nvim_buf_is_valid(buf) then
+        local current_win = vim.api.nvim_get_current_win()
+        if vim.api.nvim_win_is_valid(current_win) and vim.api.nvim_win_get_buf(current_win) == buf then
+            return current_win
+        end
+        for _, candidate in ipairs(vim.api.nvim_tabpage_list_wins(vim.api.nvim_get_current_tabpage())) do
+            if vim.api.nvim_win_is_valid(candidate) and vim.api.nvim_win_get_buf(candidate) == buf then
+                return candidate
+            end
+        end
+        if agent_state.win and vim.api.nvim_win_is_valid(agent_state.win) and vim.api.nvim_win_get_buf(agent_state.win) == buf then
+            return agent_state.win
+        end
+        local remaining_win = find_remaining_window_for_buf(buf, nil)
+        if remaining_win then
+            agent_state.win = remaining_win
+            return remaining_win
+        end
+    end
     if agent_state.win and vim.api.nvim_win_is_valid(agent_state.win) then
         return agent_state.win
-    end
-    if not agent_state.buf or not vim.api.nvim_buf_is_valid(agent_state.buf) then
-        return nil
-    end
-    local windows = vim.fn.win_findbuf(agent_state.buf)
-    for _, candidate in ipairs(windows) do
-        if vim.api.nvim_win_is_valid(candidate) then
-            agent_state.win = candidate
-            return candidate
-        end
     end
     return nil
 end
@@ -270,7 +192,7 @@ local function cleanup_failed_spawn(win, buf)
     end
 end
 
-local function start_terminal_job(buf, argv, cwd, env, is_background_float, options, agent_state)
+local function start_terminal_job(win, buf, argv, cwd, env, is_background_float, options, agent_state)
     local job_opts = {
         term = true,
         cwd = cwd,
@@ -287,12 +209,37 @@ local function start_terminal_job(buf, argv, cwd, env, is_background_float, opti
             end
         end,
     }
-    if is_background_float then
+    if is_background_float or not win or not vim.api.nvim_win_is_valid(win) then
         return pcall(vim.api.nvim_buf_call, buf, function()
             return vim.fn.jobstart(argv, job_opts)
         end)
     end
-    return pcall(vim.fn.jobstart, argv, job_opts)
+    return pcall(vim.api.nvim_win_call, win, function()
+        return vim.fn.jobstart(argv, job_opts)
+    end)
+end
+
+local function create_agent_state(buf, win, kind)
+    return {
+        buf = buf,
+        win = win,
+        job = 0,
+        exited = false,
+        kind = kind,
+        is_ready = false,
+        ready_scheduled = false,
+        is_delivering = false,
+        stdout_tail = "",
+        pending_dispatches = {},
+    }
+end
+
+local function attach_window_integrations(config, agent_state, win, on_toggle_hide)
+    bind_agent_buffer_keys(config, agent_state.buf, on_toggle_hide)
+    if win and vim.api.nvim_win_is_valid(win) then
+        apply_toggleterm_window_hooks(config, agent_state.buf, win, on_toggle_hide)
+        attach_win_closed_guard(agent_state, win)
+    end
 end
 
 --- Spawns a new built-in `:terminal` running `argv` in `session.worktree`.
@@ -310,7 +257,7 @@ function M.spawn(session, argv, env, opts)
     local is_background_float = direction == "float" and not should_focus
     local win = nil
     if not is_background_float then
-        win = open_window_for_direction(session, buf, direction, options.kind, config)
+        win = agent_window.open_for_direction(session, buf, direction, options.kind, config)
         if not win then
             cleanup_failed_spawn(nil, buf)
             jpr().error("could not open agent terminal window")
@@ -318,16 +265,8 @@ function M.spawn(session, argv, env, opts)
         end
     end
 
-    local agent_state = {
-        buf = buf,
-        win = win,
-        job = 0,
-        exited = false,
-        kind = options.kind or config.agent or "claude",
-        is_ready = false,
-        pending_dispatches = {},
-    }
-    local ok, job = start_terminal_job(buf, argv, session.worktree, env, is_background_float, options, agent_state)
+    local agent_state = create_agent_state(buf, win, options.kind or config.agent or "claude")
+    local ok, job = start_terminal_job(win, buf, argv, session.worktree, env, is_background_float, options, agent_state)
     if not ok or type(job) ~= "number" or job <= 0 then
         cleanup_failed_spawn(win, buf)
         jpr().error("could not start agent terminal: " .. tostring(argv[1]))
@@ -336,10 +275,7 @@ function M.spawn(session, argv, env, opts)
 
     agent_state.job = job
     vim.bo[buf].bufhidden = "hide"
-    if win and vim.api.nvim_win_is_valid(win) then
-        apply_toggleterm_window_hooks(buf, win, options.on_toggle_hide)
-        attach_win_closed_guard(agent_state, win)
-    end
+    attach_window_integrations(config, agent_state, win, options.on_toggle_hide)
     session.agent = agent_state
     apply_focus_policy(agent_state, origin_win, should_focus)
     return agent_state
@@ -355,9 +291,6 @@ function M.show(session, agent_state, opts)
     local origin_win = vim.api.nvim_get_current_win()
 
     local existing_win = M.find_agent_window(agent_state)
-    if not existing_win and agent_state.win and vim.api.nvim_win_is_valid(agent_state.win) then
-        existing_win = agent_state.win
-    end
     if existing_win then
         if vim.api.nvim_win_get_buf(existing_win) ~= agent_state.buf then
             pcall(vim.api.nvim_win_set_buf, existing_win, agent_state.buf)
@@ -371,13 +304,12 @@ function M.show(session, agent_state, opts)
     end
 
     vim.bo[agent_state.buf].bufhidden = "hide"
-    local win = open_window_for_direction(session, agent_state.buf, direction, agent_state.kind, config)
+    local win = agent_window.open_for_direction(session, agent_state.buf, direction, agent_state.kind, config)
     if not win then
         return nil
     end
     agent_state.win = win
-    apply_toggleterm_window_hooks(agent_state.buf, win, options.on_toggle_hide)
-    attach_win_closed_guard(agent_state, win)
+    attach_window_integrations(config, agent_state, win, options.on_toggle_hide)
     apply_focus_policy(agent_state, origin_win, should_focus)
     return win
 end
@@ -405,7 +337,10 @@ function M.hide(session, agent_state)
         jpr().error("cannot close the agent window")
         return false
     end
-    agent_state.win = nil
+    agent_state.win = find_remaining_window_for_buf(agent_state.buf, win)
+    if agent_state.win then
+        attach_win_closed_guard(agent_state, agent_state.win)
+    end
     if win_tab ~= session.tab and session.tab and vim.api.nvim_tabpage_is_valid(session.tab) then
         pcall(vim.api.nvim_set_current_tabpage, session.tab)
     end

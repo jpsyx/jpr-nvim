@@ -1,11 +1,12 @@
--- Readiness-gated warm PTY delivery, bracketed paste sanitization, and
--- Claude Vim-mode VISUAL-only ESC guard before submitting prompts.
+-- Readiness-gated warm PTY delivery, bracketed paste sanitization, serialized
+-- dispatch draining, and Claude Vim-mode VISUAL-only ESC guard before submit.
 local command = require("jpr.agent.command")
 local terminal = require("jpr.agent.terminal")
 
 local M = {}
 
 local BRACKETED_PASTE_ENABLE_SEQ = "\27[?2004h"
+local STDOUT_TAIL_MAX_BYTES = #BRACKETED_PASTE_ENABLE_SEQ - 1
 local VISUAL_EXIT_DELAY_MS = 50
 local DEFAULT_READY_SETTLE_MS = 150
 local DEFAULT_CLAUDE_SUBMIT_DELAY_MS = 350
@@ -47,7 +48,8 @@ function M.resolve_submit_delay_ms(config, profile, kind)
 end
 
 --- Whether the bottom status lines of terminal buffer `buf` currently display
---- Claude Code's Vim `-- VISUAL` indicator (`-- VISUAL --` / `-- VISUAL LINE --`).
+--- Claude Code's Vim `-- VISUAL` indicator (`-- VISUAL --` / `-- VISUAL LINE --`)
+--- below any `-- NORMAL --` or `-- INSERT --` indicator.
 function M.is_buffer_in_visual_mode(buf)
     if not buf or not vim.api.nvim_buf_is_valid(buf) then
         return false
@@ -56,13 +58,17 @@ function M.is_buffer_in_visual_mode(buf)
     if total_lines == 0 then
         return false
     end
-    local start_row = math.max(0, total_lines - 30)
+    local lookback_rows = math.max((vim.o.lines or 40) + 30, 120)
+    local start_row = math.max(0, total_lines - lookback_rows)
     local lines = vim.api.nvim_buf_get_lines(buf, start_row, total_lines, false)
     local seen_non_empty = 0
     for index = #lines, 1, -1 do
         local trimmed = vim.trim(lines[index] or "")
         if trimmed ~= "" then
             seen_non_empty = seen_non_empty + 1
+            if trimmed:find("-- NORMAL --", 1, true) ~= nil or trimmed:find("-- INSERT --", 1, true) ~= nil then
+                return false
+            end
             if trimmed:find("-- VISUAL", 1, true) ~= nil then
                 return true
             end
@@ -90,91 +96,112 @@ local function send_terminal_bytes(agent_state, bytes, error_message)
     return true
 end
 
+local drain_next_dispatch
+
+local function finish_dispatch(agent_state)
+    agent_state.is_delivering = false
+    drain_next_dispatch(agent_state)
+end
+
 local function paste_and_submit(session, agent_state, dispatch, on_submitted)
     if not is_active_target(session, agent_state) then
-        return
+        return finish_dispatch(agent_state)
     end
     local paste_bytes = M.build_bracketed_paste_from_prompt(dispatch.prompt)
     if not send_terminal_bytes(agent_state, paste_bytes, "could not write prompt to the agent terminal") then
-        return
+        return finish_dispatch(agent_state)
     end
     local delay_ms = M.resolve_submit_delay_ms(jpr().config, dispatch.profile, agent_state.kind)
     vim.defer_fn(function()
         if not is_active_target(session, agent_state) then
-            return
+            return finish_dispatch(agent_state)
         end
         local submit_bytes = M.profile_to_submit_bytes(dispatch.profile)
         if not send_terminal_bytes(agent_state, submit_bytes, "could not submit prompt in the agent terminal") then
-            return
+            return finish_dispatch(agent_state)
         end
         terminal.scroll_to_bottom(agent_state)
         if type(on_submitted) == "function" then
             on_submitted(dispatch)
         end
+        finish_dispatch(agent_state)
     end, delay_ms)
 end
 
-local function deliver_now(session, agent_state, dispatch, on_submitted)
-    if not is_active_target(session, agent_state) then
-        return
+local function deliver_entry(agent_state, entry)
+    if not is_active_target(entry.session, agent_state) then
+        return finish_dispatch(agent_state)
     end
     local needs_visual_exit = agent_state.kind == "claude"
         and command.is_claude_vim_mode_enabled()
         and M.is_buffer_in_visual_mode(agent_state.buf)
     if not needs_visual_exit then
-        return paste_and_submit(session, agent_state, dispatch, on_submitted)
+        return paste_and_submit(entry.session, agent_state, entry.dispatch, entry.on_submitted)
     end
     if not send_terminal_bytes(agent_state, "\27", "could not exit visual mode in the agent terminal") then
-        return
+        return finish_dispatch(agent_state)
     end
     vim.defer_fn(function()
-        paste_and_submit(session, agent_state, dispatch, on_submitted)
+        paste_and_submit(entry.session, agent_state, entry.dispatch, entry.on_submitted)
     end, VISUAL_EXIT_DELAY_MS)
 end
 
-local function flush_pending_dispatches(agent_state)
+drain_next_dispatch = function(agent_state)
+    if not agent_state or agent_state.exited or not agent_state.is_ready or agent_state.is_delivering then
+        return
+    end
     local queued = agent_state.pending_dispatches
     if type(queued) ~= "table" or #queued == 0 then
         return
     end
-    agent_state.pending_dispatches = {}
-    for _, entry in ipairs(queued) do
-        deliver_now(entry.session, agent_state, entry.dispatch, entry.on_submitted)
-    end
+    local next_entry = table.remove(queued, 1)
+    agent_state.is_delivering = true
+    deliver_entry(agent_state, next_entry)
 end
 
 local function mark_ready_and_flush(agent_state, settle_ms)
-    if agent_state.is_ready or agent_state.exited then
+    if agent_state.is_ready or agent_state.ready_scheduled or agent_state.exited then
         return
     end
-    agent_state.is_ready = true
     if settle_ms and settle_ms > 0 then
+        agent_state.ready_scheduled = true
         vim.defer_fn(function()
-            if not agent_state.exited then
-                flush_pending_dispatches(agent_state)
+            agent_state.ready_scheduled = false
+            if not agent_state.exited and not agent_state.is_ready then
+                agent_state.is_ready = true
+                drain_next_dispatch(agent_state)
             end
         end, settle_ms)
     else
-        flush_pending_dispatches(agent_state)
+        agent_state.is_ready = true
+        drain_next_dispatch(agent_state)
     end
 end
 
 --- Observes PTY `on_stdout` chunks for DECSET bracketed-paste enablement
---- (`\27[?2004h`) and flushes queued warm dispatches once ready.
+--- (`\27[?2004h`), including sequences split across chunk boundaries, and flushes
+--- queued warm dispatches once ready.
 function M.on_stdout(agent_state, data)
-    if not agent_state or agent_state.is_ready or agent_state.exited or type(data) ~= "table" then
+    if not agent_state or agent_state.is_ready or agent_state.ready_scheduled or agent_state.exited or type(data) ~= "table" then
         return
     end
+    local tail = type(agent_state.stdout_tail) == "string" and agent_state.stdout_tail or ""
     for _, chunk in ipairs(data) do
-        if type(chunk) == "string" and chunk:find(BRACKETED_PASTE_ENABLE_SEQ, 1, true) ~= nil then
-            local config = jpr().config
-            local settle_ms = (type(config.agent_ready_settle_ms) == "number" and config.agent_ready_settle_ms >= 0)
-                and config.agent_ready_settle_ms
-                or DEFAULT_READY_SETTLE_MS
-            mark_ready_and_flush(agent_state, settle_ms)
-            return
+        if type(chunk) == "string" and chunk ~= "" then
+            local combined = tail .. chunk
+            if combined:find(BRACKETED_PASTE_ENABLE_SEQ, 1, true) ~= nil then
+                agent_state.stdout_tail = ""
+                local config = jpr().config
+                local settle_ms = (type(config.agent_ready_settle_ms) == "number" and config.agent_ready_settle_ms >= 0)
+                    and config.agent_ready_settle_ms
+                    or DEFAULT_READY_SETTLE_MS
+                mark_ready_and_flush(agent_state, settle_ms)
+                return
+            end
+            tail = combined:sub(-STDOUT_TAIL_MAX_BYTES)
         end
     end
+    agent_state.stdout_tail = tail
 end
 
 --- Starts a bounded fallback readiness timer so CLIs or test fixtures that never
@@ -182,21 +209,17 @@ end
 function M.start_ready_fallback_timer(session, agent_state, timeout_ms)
     local delay_ms = (type(timeout_ms) == "number" and timeout_ms >= 0) and timeout_ms or 2500
     vim.defer_fn(function()
-        if not is_active_target(session, agent_state) or agent_state.is_ready then
+        if not is_active_target(session, agent_state) or agent_state.is_ready or agent_state.ready_scheduled then
             return
         end
         mark_ready_and_flush(agent_state, 0)
     end, delay_ms)
 end
 
---- Delivers `dispatch` to `agent_state` over PTY immediately when ready, or
---- queues it until PTY readiness is reached.
+--- Enqueues `dispatch` for serialized PTY delivery to `agent_state` once ready.
 function M.enqueue_pty_dispatch(session, agent_state, dispatch, on_submitted)
     if not is_active_target(session, agent_state) then
         return
-    end
-    if agent_state.is_ready then
-        return deliver_now(session, agent_state, dispatch, on_submitted)
     end
     agent_state.pending_dispatches = agent_state.pending_dispatches or {}
     agent_state.pending_dispatches[#agent_state.pending_dispatches + 1] = {
@@ -204,6 +227,7 @@ function M.enqueue_pty_dispatch(session, agent_state, dispatch, on_submitted)
         dispatch = dispatch,
         on_submitted = on_submitted,
     }
+    drain_next_dispatch(agent_state)
 end
 
 return M

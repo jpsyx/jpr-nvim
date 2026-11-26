@@ -67,8 +67,8 @@ local function test_pure_helpers()
     assert(agent.profile_to_submit_bytes({ submitKey = "tab" }) == "\t", "tab submit byte")
     assert(agent.profile_to_submit_bytes({ submitKey = "enter" }) == "\r", "enter submit byte")
     assert(agent.profile_to_submit_bytes(nil) == "\r", "default submit byte")
-    assert(type(agent.parse_command_argv) == "function", "exports parse_command_argv")
-    assert(type(agent.is_claude_vim_mode_enabled) == "function", "exports is_claude_vim_mode_enabled")
+    assert(vim.deep_equal(agent.parse_command_argv("cl --model opus", "claude"), { "cl", "--model", "opus" }), "re-exports parse_command_argv")
+    assert(agent.is_claude_vim_mode_enabled(home_directory, "") == false, "re-exports is_claude_vim_mode_enabled")
 end
 
 local function test_launch_argv_missing_session_id()
@@ -336,6 +336,67 @@ local function test_window_recovery_coalescing_and_close(context)
     assert(#helpers.read_requests(context.engine_log, "confirmSend") == confirm_before, "empty prompt never calls confirmSend")
 
     agent.close(review)
+    -- Overlapping deliver_dispatch during an in-flight prepareAgentLaunch must NOT drop the prompt.
+    local confirm_before_overlap = #helpers.read_requests(context.engine_log, "confirmSend")
+    agent.ensure_open(review)
+    agent.deliver_dispatch(review, {
+        round = 6,
+        kind = "send",
+        threadIds = { "loc-1" },
+        prompt = "Overlapped dispatch prompt",
+        profile = { kind = "claude", submitKey = "enter", submitDelayMs = 20 },
+    })
+    assert(vim.wait(3000, function()
+        return #helpers.read_requests(context.engine_log, "confirmSend") == confirm_before_overlap + 1
+    end), "overlapped deliver_dispatch confirms after PTY delivery")
+    assert(vim.wait(3000, function()
+        return read_bytes(context.capture_file):find("\27[200~Overlapped dispatch prompt\27[201~\r", 1, true) ~= nil
+    end), "overlapped deliver_dispatch wrote prompt over PTY instead of dropping it")
+    vim.cmd("stopinsert")
+    agent.close(review)
+
+    -- End-to-end cold-start with leading '-', newline, $HOME, and quotes delivers verbatim via CLI argv.
+    local tricky_prompt = "- fix item\nCheck $HOME and 'single' \"double\""
+    local metadata_count_before = #vim.fn.readfile(context.metadata_log)
+    local confirm_before_tricky = #helpers.read_requests(context.engine_log, "confirmSend")
+    agent.deliver_dispatch(review, {
+        round = 7,
+        kind = "send",
+        threadIds = { "loc-1" },
+        prompt = tricky_prompt,
+        profile = { kind = "claude", submitKey = "enter", submitDelayMs = 20 },
+    })
+    assert(vim.wait(3000, function()
+        return #helpers.read_requests(context.engine_log, "confirmSend") == confirm_before_tricky + 1
+    end), "tricky cold-start confirms")
+    assert(vim.wait(3000, function()
+        return #vim.fn.readfile(context.metadata_log) > metadata_count_before
+    end), "tricky cold-start logged argv")
+    local tricky_log = table.concat(vim.fn.readfile(context.metadata_log), "\n")
+    assert(tricky_log:find("-- - fix item\nCheck $HOME and 'single' \"double\"", 1, true) ~= nil, "literal tricky prompt delivered without shell expansion: " .. tricky_log)
+    agent.close(review)
+
+    -- Dedicated agent tab: :Jpr agent and ga inside the agent tab close the tab and return to review.tab.
+    local saved_direction = jpr.config.agent_direction
+    jpr.config.agent_direction = "tab"
+    session.agent_current()
+    assert(vim.wait(3000, function()
+        return review.agent ~= nil and review.agent.win ~= nil and vim.api.nvim_win_get_tabpage(review.agent.win) ~= review.tab
+    end), "dedicated agent tab opened")
+    vim.cmd("stopinsert")
+    assert(vim.api.nvim_get_current_tabpage() ~= review.tab, "cursor is in dedicated agent tab")
+    session.agent_current()
+    assert(vim.api.nvim_get_current_tabpage() == review.tab, ":Jpr agent from dedicated tab returns to review.tab")
+    assert(agent.has_live_agent(review), "agent stays alive after :Jpr agent hides dedicated tab")
+    session.agent_current()
+    vim.cmd("stopinsert")
+    assert(vim.api.nvim_get_current_tabpage() ~= review.tab, ":Jpr agent re-enters dedicated tab")
+    helpers.press_key("ga")
+    assert(vim.api.nvim_get_current_tabpage() == review.tab, "ga inside dedicated agent tab hides and returns to review.tab")
+    assert(agent.has_live_agent(review), "agent stays alive after ga hides dedicated tab")
+    agent.close(review)
+    jpr.config.agent_direction = saved_direction
+
     local original_command = jpr.config.claude_cmd
     jpr.config.claude_cmd = context.worktree .. "/missing-agent"
     errors_before = #context.errors
