@@ -34,7 +34,11 @@ local function jump(session, kind, step)
         lines = layout.thread_lines or {}
     end
     lines = vim.tbl_filter(function(line)
-        return vim.fn.foldclosed(line) == -1
+        local closed_start = vim.fn.foldclosed(line)
+        if kind == "files" then
+            return closed_start == -1 or closed_start == line
+        end
+        return closed_start == -1
     end, lines)
     local target = render.find_adjacent_line(lines, vim.api.nvim_win_get_cursor(0)[1], step)
     if target then
@@ -74,18 +78,19 @@ local function toggle_viewed(session)
             pcall(vim.api.nvim_win_set_cursor, win, { next_file.line, 0 })
         end
     end
+    local target_viewed = file.viewed ~= "VIEWED"
     local request_id_when_sent = session.stream.request_id
     session.stream.after_draw = nil
     require("jpr.session").request(
         session,
         "setViewed",
-        { path = file.path, viewed = file.viewed ~= "VIEWED" },
+        { path = file.path, viewed = target_viewed },
         function()
             -- The engine's viewedChanged event comes before this answer, and asks
-            -- for the redraw if the stream changed; when none was asked for,
-            -- nothing follows and the cursor stays.
+            -- for the redraw if the stream changed; when none was asked for, or
+            -- when unmarking a file, the cursor stays in place.
             local state = session.stream
-            if state and state.request_id ~= request_id_when_sent then
+            if target_viewed and state and state.request_id ~= request_id_when_sent then
                 state.after_draw = { request_id = state.request_id, run = move_to_next_unviewed }
             end
         end,
@@ -110,6 +115,9 @@ local function map_keys(stream_mod, session, buf)
     map("[f", function(current_session) stream_mod.jump(current_session, "files", -1) end, "Previous file")
     map("]h", function(current_session) stream_mod.jump(current_session, "hunks", 1) end, "Next hunk")
     map("[h", function(current_session) stream_mod.jump(current_session, "hunks", -1) end, "Previous hunk")
+    map("zo", function(current_session) stream_mod.toggle_fold(current_session, "zo") end, "Open folded file diff")
+    map("zc", function(current_session) stream_mod.toggle_fold(current_session, "zc") end, "Close file diff fold")
+    map("za", function(current_session) stream_mod.toggle_fold(current_session, "za") end, "Toggle file diff fold")
     vim.keymap.set("n", "?", function()
         require("jpr.views.cheatsheet").open()
     end, { buffer = buf, nowait = true, silent = true, desc = "Show Jpr keyboard shortcuts" })

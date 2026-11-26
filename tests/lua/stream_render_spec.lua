@@ -47,8 +47,21 @@ assert(vim.deep_equal(unified.targets[4], { path = "a.rs", line = 2 }), "a remov
 assert(vim.deep_equal(unified.targets[6], { path = "b.rs", line = 1 }), "a header leads to the top")
 assert(unified.targets[10] == nil, "a note leads nowhere")
 assert(vim.deep_equal(unified.hunks, { 2, 7 }), vim.inspect(unified.hunks))
-assert(vim.deep_equal(unified.folds, { { first = 7, last = 8 } }), "a viewed file's body is folded")
+assert(vim.deep_equal(unified.folds, { { first = 6, last = 8 } }), "a viewed file folds starting at its header line")
 assert(#unified.files == 3 and unified.files[2].line == 6 and unified.files[2].viewed == "VIEWED", vim.inspect(unified.files))
+
+local note_only_folded = stream.create_layout_from_stream({
+    mode = "unified",
+    rows = {
+        { kind = "file", path = "logo.png", additions = 0, deletions = 0, viewed = "VIEWED", folded = true },
+        { kind = "note", path = "logo.png", text = "binary file" },
+        { kind = "file", path = "empty.rs", additions = 0, deletions = 0, viewed = "VIEWED", folded = true },
+    },
+})
+assert(
+    vim.deep_equal(note_only_folded.folds, { { first = 1, last = 2 } }),
+    "a 1-line note folds with its header, while a header-only file needs no fold: " .. vim.inspect(note_only_folded.folds)
+)
 
 local split = stream.create_layout_from_stream({
     mode = "split",
@@ -83,7 +96,8 @@ assert(vim.deep_equal(split.columns[2].code_rows, {
 
 assert(stream.find_file_at_line(unified, 5).path == "a.rs" and stream.find_file_at_line(unified, 6).path == "b.rs", "find_file_at_line")
 assert(stream.find_next_unviewed_file(unified, 1).path == "c.png", "a viewed file is skipped and a dismissed one is not")
-assert(stream.find_next_unviewed_file(unified, 9) == nil, "nothing after the last file")
+assert(stream.find_next_unviewed_file(unified, 9).path == "a.rs", "wraps around to earlier unviewed file when none remain after")
+assert(stream.find_next_unviewed_file(note_only_folded, 1) == nil, "nil when every file is viewed")
 assert(stream.find_adjacent_line({ 2, 7 }, 2, 1) == 7 and stream.find_adjacent_line({ 2, 7 }, 7, 1) == nil, "next")
 assert(stream.find_adjacent_line({ 2, 7 }, 7, -1) == 2 and stream.find_adjacent_line({ 2, 7 }, 2, -1) == nil, "previous")
 
