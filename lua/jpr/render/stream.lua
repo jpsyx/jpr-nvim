@@ -48,34 +48,41 @@ local function add_words(column, cell, gutter)
     end
 end
 
-local function record_code_row(column, path, gutter_length, text, change)
+local function record_code_row(column, path, gutter_length, text, change, left_line, right_line, hunk_index)
     column.code_rows[#column.code_rows + 1] = {
         line = #column.lines - 1,
         path = path,
         gutter_length = gutter_length,
         text = text,
         change = change,
+        left_line = left_line,
+        right_line = right_line,
+        hunk_index = hunk_index,
     }
 end
 
 --- A unified row: both line numbers, the sign, and the text.
-local function add_unified_row(column, row)
+local function add_unified_row(column, row, hunk_index)
     local cell = row.right or row.left
-    local gutter = ("%5s %5s %s "):format(row.left and row.left.line or "", row.right and row.right.line or "", SIGN[cell.change])
+    local left_line = row.left and row.left.line or nil
+    local right_line = row.right and row.right.line or nil
+    local gutter = ("%5s %5s %s "):format(left_line or "", right_line or "", SIGN[cell.change])
     add_line(column, gutter .. cell.text, LINE_GROUP[cell.change])
     add_words(column, cell, #gutter)
-    record_code_row(column, row.path, #gutter, cell.text, cell.change)
+    record_code_row(column, row.path, #gutter, cell.text, cell.change, left_line, right_line, hunk_index)
 end
 
 --- One side of a split row, or a filler line when that side has none.
-local function add_split_cell(column, cell, path)
+local function add_split_cell(column, cell, path, is_right, hunk_index)
     if not cell then
         return add_line(column, "", "JprDiffFiller")
     end
     local gutter = ("%5d %s "):format(cell.line, SIGN[cell.change])
     add_line(column, gutter .. cell.text, LINE_GROUP[cell.change])
     add_words(column, cell, #gutter)
-    record_code_row(column, path, #gutter, cell.text, cell.change)
+    local left_line = not is_right and cell.line or nil
+    local right_line = is_right and cell.line or nil
+    record_code_row(column, path, #gutter, cell.text, cell.change, left_line, right_line, hunk_index)
 end
 
 local function add_line_to_all_columns(columns, text, group)
@@ -167,7 +174,7 @@ local function close_fold(layout, first_line, last_line)
 end
 
 --- Adds a hunk, note, thread or line row as line `line`.
-local function add_body_row(layout, row, line, is_expanded)
+local function add_body_row(layout, row, line, is_expanded, hunk_index)
     if row.kind == "hunk" then
         add_line_to_all_columns(layout.columns, row.header, "JprHunk")
         layout.hunks[#layout.hunks + 1] = line
@@ -177,10 +184,10 @@ local function add_body_row(layout, row, line, is_expanded)
         add_thread_row(layout, row, line, is_expanded)
     else
         if #layout.columns == 2 then
-            add_split_cell(layout.columns[1], row.left, row.path)
-            add_split_cell(layout.columns[2], row.right, row.path)
+            add_split_cell(layout.columns[1], row.left, row.path, false, hunk_index)
+            add_split_cell(layout.columns[2], row.right, row.path, true, hunk_index)
         else
-            add_unified_row(layout.columns[1], row)
+            add_unified_row(layout.columns[1], row, hunk_index)
         end
         add_line_threads(layout, row, line, is_expanded)
     end
@@ -210,16 +217,21 @@ function M.create_layout_from_stream(stream, opts)
         anchors = {},
     }
     local fold_start
+    local hunk_index = 0
     for _, row in ipairs(stream.rows or {}) do
         local line = #layout.columns[1].lines + 1
         if row.kind == "file" then
             close_fold(layout, fold_start, line - 1)
             fold_start = row.folded and line or nil
+            hunk_index = 0
             add_line_to_all_columns(layout.columns, M.build_file_header(row), "JprFileHeader")
             layout.files[#layout.files + 1] = { line = line, path = row.path, viewed = row.viewed }
             layout.targets[line] = { path = row.path, line = 1 }
         else
-            add_body_row(layout, row, line, is_expanded)
+            if row.kind == "hunk" then
+                hunk_index = hunk_index + 1
+            end
+            add_body_row(layout, row, line, is_expanded, hunk_index)
         end
     end
     close_fold(layout, fold_start, #layout.columns[1].lines)
