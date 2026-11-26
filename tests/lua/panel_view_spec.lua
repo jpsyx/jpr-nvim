@@ -11,7 +11,9 @@ local view_mode = require("jpr.view_mode")
 
 view_mode.path = vim.fn.tempname()
 local log = vim.fn.tempname()
+local set_viewed_payload = vim.fn.tempname()
 vim.env.FAKE_ENGINE_LOG = log
+vim.env.FAKE_ENGINE_SET_VIEWED_FILE = set_viewed_payload
 jpr.setup({ binary = root .. "/tests/lua/fixtures/fake_engine.sh" })
 local worktree = vim.fn.tempname()
 vim.fn.mkdir(worktree, "p")
@@ -275,6 +277,55 @@ vim.api.nvim_win_set_cursor(panel_win, { 9, 0 })
 panel_view.render(review, tree_view)
 local preserved = vim.api.nvim_win_get_cursor(panel_win)
 assert(preserved[1] == 9 and preserved[2] == 0, "cursor stays on src/b.rs across redraw: " .. vim.inspect(preserved))
+
+-- Pressing `v` on an expanded or collapsed directory sends a single batched
+-- setViewed request with all descendant paths, and advances the main window
+-- when it was showing a file just marked viewed.
+local all_src_viewed = vim.deepcopy(tree_view)
+all_src_viewed.files[2].viewed = "VIEWED"
+all_src_viewed.files[3].viewed = "VIEWED"
+all_src_viewed.viewedCount = 2
+vim.fn.writefile({ vim.json.encode(all_src_viewed) }, set_viewed_payload)
+
+-- Open src/a.rs in main window (hiding stream), then press v on src/ dir in panel.
+press("<CR>", 8)
+assert(vim.fn.resolve(vim.api.nvim_buf_get_name(0)) == vim.fn.resolve(worktree .. "/src/a.rs"), "opened src/a.rs in main window")
+local main_win_for_dir = vim.api.nvim_get_current_win()
+local before_dir_requests = #find_sent_requests('"paths":')
+press("v", 7)
+assert(vim.wait(3000, function()
+    return #find_sent_requests('"paths":') == before_dir_requests + 1
+end), "v on expanded src/ dir sends batched setViewed paths")
+local dir_req = find_sent_requests('"paths":')[before_dir_requests + 1]
+assert(
+    dir_req:find('"src/a.rs"', 1, true) ~= nil
+        and dir_req:find('"src/b.rs"', 1, true) ~= nil
+        and dir_req:find('"viewed":true', 1, true) ~= nil,
+    "batched dir request includes all descendants with viewed=true: " .. tostring(dir_req)
+)
+assert(vim.wait(3000, function()
+    return vim.fn.resolve(vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(main_win_for_dir)))
+        == vim.fn.resolve(worktree .. "/README.md")
+end), "main window advances to next unviewed file README.md after src/ is marked viewed")
+assert(vim.api.nvim_get_current_win() == panel_win, "sidebar keeps cursor focus when advancing main window")
+
+-- Collapsing src/ and pressing v when all descendants are VIEWED unmarks all descendants.
+run_panel_key("h")
+assert(review.panel.collapsed_dirs["src"] == true, "collapsed src/")
+vim.fn.writefile({ vim.json.encode(tree_view) }, set_viewed_payload)
+press("v", 7)
+assert(vim.wait(3000, function()
+    return #find_sent_requests('"paths":') == before_dir_requests + 2
+end), "v on collapsed src/ dir sends batched unmark request")
+local unmark_req = find_sent_requests('"paths":')[before_dir_requests + 2]
+assert(
+    unmark_req:find('"src/a.rs"', 1, true) ~= nil
+        and unmark_req:find('"src/b.rs"', 1, true) ~= nil
+        and unmark_req:find('"viewed":false', 1, true) ~= nil,
+    "collapsed dir unmark includes all descendants with viewed=false: " .. tostring(unmark_req)
+)
+os.remove(set_viewed_payload)
+vim.env.FAKE_ENGINE_SET_VIEWED_FILE = nil
 
 session.close_current()
 print("panel_view_spec: ok")
