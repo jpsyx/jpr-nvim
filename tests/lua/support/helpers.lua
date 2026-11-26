@@ -99,6 +99,32 @@ function M.current_text()
     return table.concat(M.current_lines(), "\n")
 end
 
+--- Finds the open floating `jpr-tui` results window (falling back to the current float).
+function M.palette_results_win()
+    for _, win in ipairs(vim.api.nvim_list_wins()) do
+        if vim.api.nvim_win_is_valid(win) then
+            local config = vim.api.nvim_win_get_config(win)
+            if config.relative and config.relative ~= "" then
+                local buf = vim.api.nvim_win_get_buf(win)
+                if vim.bo[buf].filetype == "jpr-tui" then
+                    return win
+                end
+            end
+        end
+    end
+    return M.current_float_win()
+end
+
+--- Returns all buffer lines of the active palette results floating window.
+function M.palette_results_lines()
+    return vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(M.palette_results_win()), 0, -1, false)
+end
+
+--- Returns the newline-joined buffer text of the active palette results floating window.
+function M.palette_results_text()
+    return table.concat(M.palette_results_lines(), "\n")
+end
+
 --- Finds the 1-based line number of the first line containing `needle`.
 function M.find_line_number(lines, needle)
     for idx, line in ipairs(lines) do

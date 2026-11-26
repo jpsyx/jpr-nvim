@@ -20,14 +20,14 @@ return function(context)
     local function select_palette_command(command_id)
         local needle = "[" .. command_id .. "]"
         for _ = 1, 20 do
-            local selected_line = helpers.current_text():match("▸[^\n]+") or ""
+            local selected_line = helpers.palette_results_text():match("▸[^\n]+") or ""
             if selected_line:find(needle, 1, true) ~= nil then
                 helpers.press_key("<CR>")
                 return
             end
             helpers.press_key("j")
         end
-        error("command " .. command_id .. " not found in palette:\n" .. helpers.current_text())
+        error("command " .. command_id .. " not found in palette:\n" .. helpers.palette_results_text())
     end
 
     local function with_tab_session(stub_session, callback)
@@ -88,7 +88,7 @@ return function(context)
             has_pending_tab = function() return true end,
         }, function()
             jpr.command({})
-            local pending_ids = extract_visible_command_ids(helpers.current_text())
+            local pending_ids = extract_visible_command_ids(helpers.palette_results_text())
             assert(
                 vim.deep_equal(pending_ids, { "open", "local", "close", "keys" }),
                 "pending checkout tab shows open, local, close, keys: " .. vim.inspect(pending_ids)
@@ -101,7 +101,7 @@ return function(context)
         local tab = vim.api.nvim_get_current_tabpage()
         with_tab_session({ number = 7, repo = "octo/widgets", tab = tab, mode = "pr", view = { localUnsentCount = 0 } }, function()
             jpr.command({})
-            local pr_panel_ids = extract_visible_command_ids(helpers.current_text())
+            local pr_panel_ids = extract_visible_command_ids(helpers.palette_results_text())
             assert(
                 vim.deep_equal(pr_panel_ids, {
                     "open", "local", "sync", "toggle", "stream", "expand",
@@ -114,7 +114,7 @@ return function(context)
 
         with_tab_session({ number = 7, repo = "octo/widgets", tab = tab, mode = "pr", view = { localUnsentCount = 2 } }, function()
             jpr.command({})
-            local ids_with_unsent = extract_visible_command_ids(helpers.current_text())
+            local ids_with_unsent = extract_visible_command_ids(helpers.palette_results_text())
             assert(vim.tbl_contains(ids_with_unsent, "send"), "send appears when localUnsentCount > 0")
             wizard.close()
         end)
@@ -125,7 +125,7 @@ return function(context)
         with_changed_worktree_buffer(function()
             with_tab_session({ mode = "local", tab = tab, view = { localUnsentCount = 0 } }, function()
                 jpr.command({})
-                local local_ids = extract_visible_command_ids(helpers.current_text())
+                local local_ids = extract_visible_command_ids(helpers.palette_results_text())
                 assert(vim.tbl_contains(local_ids, "sync"), "local review keeps sync to link PR")
                 assert(vim.tbl_contains(local_ids, "conversation"), "local review keeps conversation for local notes")
                 assert(vim.tbl_contains(local_ids, "comment"), "local review in changed file shows comment")
@@ -137,7 +137,7 @@ return function(context)
 
             with_tab_session({ number = 7, repo = "octo/widgets", tab = tab, mode = "pr", view = { localUnsentCount = 0 } }, function()
                 jpr.command({})
-                local diff_ids = extract_visible_command_ids(helpers.current_text())
+                local diff_ids = extract_visible_command_ids(helpers.palette_results_text())
                 assert(vim.tbl_contains(diff_ids, "comment"), "linked PR in changed file shows comment")
                 assert(vim.tbl_contains(diff_ids, "suggest"), "linked PR in changed file shows suggest")
                 wizard.close()
@@ -152,7 +152,7 @@ return function(context)
         local is_read_only_ok, read_only_error = pcall(function()
             with_tab_session({ number = 7, repo = "octo/widgets", tab = tab, mode = "pr", is_read_only = true, view = { localUnsentCount = 3 } }, function()
                 jpr.command({})
-                local read_only_minimal_ids = extract_visible_command_ids(helpers.current_text())
+                local read_only_minimal_ids = extract_visible_command_ids(helpers.palette_results_text())
                 assert(
                     vim.deep_equal(read_only_minimal_ids, { "open", "local", "toggle", "expand", "close", "keys" }),
                     "read-only session hides RPC commands: " .. vim.inspect(read_only_minimal_ids)
@@ -170,7 +170,7 @@ return function(context)
                 agent = { buf = live_agent_buf, job = 55, exited = false },
             }, function()
                 jpr.command({})
-                local read_only_cached_ids = extract_visible_command_ids(helpers.current_text())
+                local read_only_cached_ids = extract_visible_command_ids(helpers.palette_results_text())
                 assert(
                     vim.deep_equal(read_only_cached_ids, { "open", "local", "toggle", "expand", "conversation", "agent", "close", "keys" }),
                     "read-only session retains cached conversation and live agent: " .. vim.inspect(read_only_cached_ids)
@@ -199,7 +199,7 @@ return function(context)
                     comment_current = function(opts) recorded_opts = opts end,
                 }, function()
                     jpr.command({})
-                    local header_ids = extract_visible_command_ids(helpers.current_text())
+                    local header_ids = extract_visible_command_ids(helpers.palette_results_text())
                     assert(vim.tbl_contains(header_ids, "comment"), "stream file header shows comment")
                     assert(not vim.tbl_contains(header_ids, "suggest"), "stream file header hides suggest")
 
@@ -212,7 +212,7 @@ return function(context)
 
                     vim.api.nvim_win_set_cursor(0, { 3, 0 })
                     jpr.command({})
-                    assert(not vim.tbl_contains(extract_visible_command_ids(helpers.current_text()), "suggest"), "stream diff line keeps suggest hidden")
+                    assert(not vim.tbl_contains(extract_visible_command_ids(helpers.palette_results_text()), "suggest"), "stream diff line keeps suggest hidden")
                     select_palette_command("comment")
                     local diff_step_text = helpers.current_text()
                     assert(diff_step_text:find("▸ Line / Selection Comment  [line]", 1, true) ~= nil, "stream diff line defaults to line")

@@ -199,11 +199,12 @@ local function test_open_idempotency_window_properties_and_close_keys()
 end
 
 local function test_palette_launches_keyboard_shortcuts_command()
+    local helpers = dofile(root .. "/tests/lua/support/helpers.lua")
     local wizard = require("jpr.tui.wizard")
     jpr.command({})
     assert(wizard.is_open() == true, "bare :Jpr opens palette")
     press_normal_key("G")
-    local palette_text = table.concat(vim.api.nvim_buf_get_lines(0, 0, -1, false), "\n")
+    local palette_text = helpers.palette_results_text()
     assert(palette_text:find("▸ Keyboard Shortcuts  [keys]", 1, true) ~= nil, "keys command highlighted in palette: " .. palette_text)
     assert(palette_text:find("Show all keyboard shortcuts", 1, true) ~= nil, "keys hover help visible")
     press_normal_key("<CR>")
