@@ -10,7 +10,9 @@ use crate::schema::{CommandSpec, get_active_steps_from_command};
 use crate::state::{PaletteState, WizardState};
 
 use self::text::{append_wrapped_help, paint};
-use self::wizard::{append_wizard_body, append_wizard_header, format_wizard_footer};
+use self::wizard::{
+    append_wizard_body, append_wizard_header, format_text_input, format_wizard_footer,
+};
 
 pub(super) const SGR_HEADING: &str = "1;95";
 pub(super) const SGR_ACCENT: &str = "1;96";
@@ -20,6 +22,9 @@ pub(super) const SGR_WARNING: &str = "93";
 pub(super) const SGR_ERROR: &str = "91";
 pub(super) const SGR_REVERSE: &str = "7";
 pub(super) const HELP_INDENT: &str = "    ";
+const PALETTE_PLACEHOLDER: &str = "Type to filter commands...";
+const PALETTE_FOOTER: &str =
+    "[type] filter  [Ctrl+j/k] move  [Ctrl+u] clear  [Enter] select  [Esc] close";
 
 /// Renders the command palette frame as a `\n`-delimited string.
 ///
@@ -32,18 +37,30 @@ pub fn render_palette(
     width: usize,
     is_color_enabled: bool,
 ) -> String {
-    let mut lines = vec![paint(title, SGR_HEADING, is_color_enabled), String::new()];
-
-    if commands.is_empty() {
-        lines.push(paint(
-            "  (no commands available)",
-            SGR_MUTED,
+    let mut lines = vec![
+        paint(title, SGR_HEADING, is_color_enabled),
+        format_text_input(
+            state.query(),
+            state.cursor_char_index(),
+            Some(PALETTE_PLACEHOLDER),
             is_color_enabled,
-        ));
+        ),
+        String::new(),
+    ];
+
+    let filtered_indices = state.filtered_command_indices(commands);
+    if filtered_indices.is_empty() {
+        let empty_label = if !commands.is_empty() && !state.query().trim().is_empty() {
+            "  (no matching commands)"
+        } else {
+            "  (no commands available)"
+        };
+        lines.push(paint(empty_label, SGR_MUTED, is_color_enabled));
     } else {
-        let clamped_selected = state.selected_index().min(commands.len() - 1);
-        for (index, command) in commands.iter().enumerate() {
-            let is_selected = index == clamped_selected;
+        let clamped_selected = state.selected_index().min(filtered_indices.len() - 1);
+        for (visible_index, command_index) in filtered_indices.into_iter().enumerate() {
+            let command = &commands[command_index];
+            let is_selected = visible_index == clamped_selected;
             lines.push(format_palette_row(command, is_selected, is_color_enabled));
             if is_selected {
                 append_wrapped_help(&mut lines, &command.help, width, is_color_enabled);
@@ -52,11 +69,7 @@ pub fn render_palette(
     }
 
     lines.push(String::new());
-    lines.push(paint(
-        "[j/k] move  [Enter/l] select  [q/Esc] close",
-        SGR_MUTED,
-        is_color_enabled,
-    ));
+    lines.push(paint(PALETTE_FOOTER, SGR_MUTED, is_color_enabled));
     lines.join("\n")
 }
 

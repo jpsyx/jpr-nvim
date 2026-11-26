@@ -68,24 +68,43 @@ fn sample_wizard_command() -> CommandSpec {
 }
 
 #[test]
-fn render_palette_shows_labels_ids_and_hover_only_help() {
+fn render_palette_shows_filter_prompt_labels_ids_and_hover_only_help() {
     let commands = sample_commands();
     let mut state = PaletteState::new();
 
     let first_frame = render_palette("jpr-review Commands", &commands, &state, 80, false);
+    assert!(first_frame.contains("> (Type to filter commands...)"));
     assert!(first_frame.contains("▸ List Open Pull Requests  [prs]"));
     assert!(first_frame.contains("  Check Out Pull Request  [checkout]"));
     assert!(first_frame.contains("Fetches open pull requests"));
     assert!(!first_frame.contains("Checks out a pull request branch"));
     assert!(!first_frame.contains("\x1b["));
 
-    let _ = state.handle_key(KeyAction::Down, commands.len());
+    let _ = state.handle_key(KeyAction::Down, &commands);
     let second_frame = render_palette("jpr-review Commands", &commands, &state, 80, false);
     assert!(second_frame.contains("  List Open Pull Requests  [prs]"));
     assert!(second_frame.contains("▸ Check Out Pull Request  [checkout]"));
     assert!(!second_frame.contains("Fetches open pull requests"));
     assert!(second_frame.contains("Checks out a pull request branch"));
-    assert!(second_frame.contains("[j/k] move  [Enter/l] select  [q/Esc] close"));
+    assert!(
+        second_frame.contains(
+            "[type] filter  [Ctrl+j/k] move  [Ctrl+u] clear  [Enter] select  [Esc] close"
+        )
+    );
+
+    for ch in "chk".chars() {
+        let _ = state.handle_key(KeyAction::Char(ch), &commands);
+    }
+    let filtered_frame = render_palette("jpr-review Commands", &commands, &state, 80, false);
+    assert!(filtered_frame.contains("> chk"));
+    assert!(filtered_frame.contains("▸ Check Out Pull Request  [checkout]"));
+    assert!(!filtered_frame.contains("List Open Pull Requests"));
+
+    for ch in "zzz".chars() {
+        let _ = state.handle_key(KeyAction::Char(ch), &commands);
+    }
+    let no_match_frame = render_palette("jpr-review Commands", &commands, &state, 80, false);
+    assert!(no_match_frame.contains("(no matching commands)"));
 }
 
 #[test]
@@ -164,7 +183,7 @@ fn render_palette_wraps_help_strictly_within_narrow_widths() {
     for width in [36, 14, 10, 4] {
         let frame = render_palette("Commands", &commands, &state, width, false);
         let lines: Vec<&str> = frame.lines().collect();
-        let help_lines = &lines[3..lines.len() - 2];
+        let help_lines = &lines[4..lines.len() - 2];
         assert!(help_lines.len() >= 2);
         for line in help_lines {
             assert!(

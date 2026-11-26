@@ -4,7 +4,18 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 
 use crate::state::KeyAction;
 
-pub(super) const fn key_event_to_action(event: KeyEvent, is_text_input: bool) -> Option<KeyAction> {
+/// Input interpretation mode for [`key_event_to_action`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum KeyMode {
+    /// Normal-mode wizard menu or toggle step.
+    Menu,
+    /// Single-line wizard text-input step.
+    Text,
+    /// Type-to-filter top-level command palette.
+    Palette,
+}
+
+pub(super) const fn key_event_to_action(event: KeyEvent, mode: KeyMode) -> Option<KeyAction> {
     if !matches!(event.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
         return None;
     }
@@ -13,10 +24,10 @@ pub(super) const fn key_event_to_action(event: KeyEvent, is_text_input: bool) ->
     {
         return Some(KeyAction::Cancel);
     }
-    if is_text_input {
-        map_text_key(event)
-    } else {
-        map_menu_key(event)
+    match mode {
+        KeyMode::Menu => map_menu_key(event),
+        KeyMode::Text => map_text_key(event),
+        KeyMode::Palette => map_palette_key(event),
     }
 }
 
@@ -44,6 +55,39 @@ const fn map_menu_key(event: KeyEvent) -> Option<KeyAction> {
 const fn map_text_key(event: KeyEvent) -> Option<KeyAction> {
     match event.code {
         KeyCode::BackTab => Some(KeyAction::Back),
+        KeyCode::Tab | KeyCode::Enter => Some(KeyAction::Confirm),
+        KeyCode::Esc => Some(KeyAction::Cancel),
+        KeyCode::Left => Some(KeyAction::Left),
+        KeyCode::Right => Some(KeyAction::Right),
+        KeyCode::Home => Some(KeyAction::Home),
+        KeyCode::End => Some(KeyAction::End),
+        KeyCode::Backspace => Some(KeyAction::Backspace),
+        KeyCode::Delete => Some(KeyAction::Delete),
+        KeyCode::Char(character)
+            if !event
+                .modifiers
+                .intersects(KeyModifiers::CONTROL.union(KeyModifiers::ALT)) =>
+        {
+            Some(KeyAction::Char(character))
+        }
+        _ => None,
+    }
+}
+
+const fn map_palette_key(event: KeyEvent) -> Option<KeyAction> {
+    if event.modifiers.contains(KeyModifiers::CONTROL)
+        && !event.modifiers.contains(KeyModifiers::ALT)
+    {
+        return match event.code {
+            KeyCode::Char('j' | 'J') => Some(KeyAction::Down),
+            KeyCode::Char('k' | 'K') => Some(KeyAction::Up),
+            KeyCode::Char('u' | 'U') => Some(KeyAction::ClearLine),
+            _ => None,
+        };
+    }
+    match event.code {
+        KeyCode::Up => Some(KeyAction::Up),
+        KeyCode::Down => Some(KeyAction::Down),
         KeyCode::Tab | KeyCode::Enter => Some(KeyAction::Confirm),
         KeyCode::Esc => Some(KeyAction::Cancel),
         KeyCode::Left => Some(KeyAction::Left),

@@ -5,7 +5,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use crate::schema::{Answers, CommandSpec};
 use crate::state::KeyAction;
 
-use super::keys::key_event_to_action;
+use super::keys::{KeyMode, key_event_to_action};
 use super::terminal::count_visual_rows;
 use super::{CommandOutcome, run_command, run_palette};
 
@@ -29,7 +29,7 @@ fn menu_key_mapping_maps_vim_and_arrow_keys_to_navigation_actions() {
     ];
     for (code, modifiers, expected) in cases {
         assert_eq!(
-            key_event_to_action(press(code, modifiers), false),
+            key_event_to_action(press(code, modifiers), KeyMode::Menu),
             Some(expected),
             "unexpected mapping for {code:?} with {modifiers:?}"
         );
@@ -39,23 +39,35 @@ fn menu_key_mapping_maps_vim_and_arrow_keys_to_navigation_actions() {
 #[test]
 fn menu_key_mapping_ignores_ctrl_and_alt_except_ctrl_c() {
     assert_eq!(
-        key_event_to_action(press(KeyCode::Char('l'), KeyModifiers::CONTROL), false),
+        key_event_to_action(
+            press(KeyCode::Char('l'), KeyModifiers::CONTROL),
+            KeyMode::Menu
+        ),
         None
     );
     assert_eq!(
-        key_event_to_action(press(KeyCode::Char('j'), KeyModifiers::CONTROL), false),
+        key_event_to_action(
+            press(KeyCode::Char('j'), KeyModifiers::CONTROL),
+            KeyMode::Menu
+        ),
         None
     );
     assert_eq!(
-        key_event_to_action(press(KeyCode::Char('k'), KeyModifiers::ALT), false),
+        key_event_to_action(press(KeyCode::Char('k'), KeyModifiers::ALT), KeyMode::Menu),
         None
     );
     assert_eq!(
-        key_event_to_action(press(KeyCode::Char('q'), KeyModifiers::CONTROL), false),
+        key_event_to_action(
+            press(KeyCode::Char('q'), KeyModifiers::CONTROL),
+            KeyMode::Menu
+        ),
         None
     );
     assert_eq!(
-        key_event_to_action(press(KeyCode::Char('c'), KeyModifiers::CONTROL), false),
+        key_event_to_action(
+            press(KeyCode::Char('c'), KeyModifiers::CONTROL),
+            KeyMode::Menu
+        ),
         Some(KeyAction::Cancel)
     );
 }
@@ -63,24 +75,62 @@ fn menu_key_mapping_ignores_ctrl_and_alt_except_ctrl_c() {
 #[test]
 fn text_key_mapping_treats_letters_as_input_and_ctrl_c_as_cancel() {
     assert_eq!(
-        key_event_to_action(press(KeyCode::Char('j'), KeyModifiers::NONE), true),
+        key_event_to_action(press(KeyCode::Char('j'), KeyModifiers::NONE), KeyMode::Text),
         Some(KeyAction::Char('j'))
     );
     assert_eq!(
-        key_event_to_action(press(KeyCode::BackTab, KeyModifiers::SHIFT), true),
+        key_event_to_action(press(KeyCode::BackTab, KeyModifiers::SHIFT), KeyMode::Text),
         Some(KeyAction::Back)
     );
     assert_eq!(
-        key_event_to_action(press(KeyCode::Char('c'), KeyModifiers::CONTROL), true),
+        key_event_to_action(
+            press(KeyCode::Char('c'), KeyModifiers::CONTROL),
+            KeyMode::Text
+        ),
         Some(KeyAction::Cancel)
     );
+}
+
+#[test]
+fn palette_key_mapping_routes_typing_to_filter_and_ctrl_jku_to_navigation_and_clear() {
+    let cases = [
+        (KeyCode::Char('j'), KeyModifiers::CONTROL, KeyAction::Down),
+        (KeyCode::Char('k'), KeyModifiers::CONTROL, KeyAction::Up),
+        (
+            KeyCode::Char('u'),
+            KeyModifiers::CONTROL,
+            KeyAction::ClearLine,
+        ),
+        (KeyCode::Down, KeyModifiers::NONE, KeyAction::Down),
+        (KeyCode::Up, KeyModifiers::NONE, KeyAction::Up),
+        (KeyCode::Enter, KeyModifiers::NONE, KeyAction::Confirm),
+        (KeyCode::Tab, KeyModifiers::NONE, KeyAction::Confirm),
+        (KeyCode::Esc, KeyModifiers::NONE, KeyAction::Cancel),
+        (KeyCode::Char('c'), KeyModifiers::CONTROL, KeyAction::Cancel),
+        (KeyCode::Char('j'), KeyModifiers::NONE, KeyAction::Char('j')),
+        (KeyCode::Char('k'), KeyModifiers::NONE, KeyAction::Char('k')),
+        (KeyCode::Char('q'), KeyModifiers::NONE, KeyAction::Char('q')),
+        (KeyCode::Backspace, KeyModifiers::NONE, KeyAction::Backspace),
+        (KeyCode::Delete, KeyModifiers::NONE, KeyAction::Delete),
+        (KeyCode::Left, KeyModifiers::NONE, KeyAction::Left),
+        (KeyCode::Right, KeyModifiers::NONE, KeyAction::Right),
+        (KeyCode::Home, KeyModifiers::NONE, KeyAction::Home),
+        (KeyCode::End, KeyModifiers::NONE, KeyAction::End),
+    ];
+    for (code, modifiers, expected) in cases {
+        assert_eq!(
+            key_event_to_action(press(code, modifiers), KeyMode::Palette),
+            Some(expected),
+            "unexpected palette mapping for {code:?} with {modifiers:?}"
+        );
+    }
 }
 
 #[test]
 fn key_release_events_are_ignored() {
     let release =
         KeyEvent::new_with_kind(KeyCode::Enter, KeyModifiers::NONE, KeyEventKind::Release);
-    assert_eq!(key_event_to_action(release, false), None);
+    assert_eq!(key_event_to_action(release, KeyMode::Menu), None);
 }
 
 #[test]
