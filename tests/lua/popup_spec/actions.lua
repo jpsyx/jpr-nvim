@@ -47,19 +47,48 @@ return function(context)
     assert(initial_text:find("nit: rename this", 1, true) ~= nil, initial_text)
     assert(initial_text:find("[r]eply  [e]dit  [d]elete  [R]esolve  [+]react  [X]retry  [q]uit", 1, true) ~= nil, initial_text)
 
-    -- 3. Pressing R resolves then unresolves via fake_engine.sh and refreshes popup.
+    -- 3. Pressing R resolves and auto-closes popup; pressing R on a resolved thread unresolves and keeps popup open.
     local resolve_before = helpers.count_requests(log, '"method":"setResolved"')
     helpers.press_key("R")
     assert(vim.wait(3000, function()
         return helpers.count_requests(log, '"method":"setResolved"', '"resolved":true') == resolve_before + 1
-            and table.concat(win_lines(popup_win), "\n"):find("Thread (Resolved)", 1, true) ~= nil
-    end), "R sends setResolved(true) and refreshes popup: " .. table.concat(win_lines(popup_win), "\n"))
+            and not vim.api.nvim_win_is_valid(popup_win)
+    end), "R sends setResolved(true) and auto-closes popup")
+
+    popup_module.open(review, {
+        {
+            threadId = "T1",
+            displayLine = 2,
+            kind = "published",
+            state = "resolved",
+            outdated = false,
+            messageCount = 1,
+            firstAuthor = "alice",
+            snippet = "nit: rename this",
+            messages = {
+                {
+                    id = "M1",
+                    author = "alice",
+                    body = "nit: rename this",
+                    created = "2026-11-20T00:00:00Z",
+                    updated = "2026-11-20T00:00:00Z",
+                    sync = "published",
+                    viewerDidAuthor = false,
+                    reactions = {},
+                },
+            },
+        },
+    })
+    popup_win = helpers.find_floating_win()
+    popup_buf = vim.api.nvim_win_get_buf(popup_win)
+    assert(table.concat(win_lines(popup_win), "\n"):find("Thread (Resolved)", 1, true) ~= nil, "resolved popup opens")
 
     helpers.press_key("R")
     assert(vim.wait(3000, function()
         return helpers.count_requests(log, '"method":"setResolved"', '"resolved":false') >= 1
+            and vim.api.nvim_win_is_valid(popup_win)
             and table.concat(win_lines(popup_win), "\n"):find("Thread (Open)", 1, true) ~= nil
-    end), "second R sends setResolved(false) and refreshes popup")
+    end), "R on resolved thread sends setResolved(false), keeps popup open, and refreshes")
 
     -- 4. Pressing + opens vim.ui.select with REACTION_ORDER and sends toggleReaction, refreshing reaction pill.
     local original_select = vim.ui.select
@@ -212,14 +241,6 @@ return function(context)
         return helpers.count_requests(log, '"method":"toggleReaction"', '"messageId":"M_1B"', '"content":"HEART"') == react_1b_before + 1
     end), "+ targets M_1B under popup cursor")
 
-    local line_2a = helpers.find_line_number(win_lines(multi_win), "line 1")
-    vim.api.nvim_win_set_cursor(multi_win, { line_2a, 0 })
-    local resolve_t2_before = helpers.count_requests(log, '"method":"setResolved"', '"threadId":"T_TWO"')
-    helpers.press_key("R")
-    assert(vim.wait(3000, function()
-        return helpers.count_requests(log, '"method":"setResolved"', '"threadId":"T_TWO"', '"resolved":true') == resolve_t2_before + 1
-    end), "R targets T_TWO under popup cursor")
-
     local lines_before_shrink = #win_lines(multi_win)
     vim.api.nvim_win_set_cursor(multi_win, { lines_before_shrink, 0 })
     popup_module.refresh_from_thread(review, {
@@ -244,8 +265,21 @@ return function(context)
     assert(vim.api.nvim_win_get_height(multi_win) == math.min(22, math.max(6, lines_after_shrink)), "popup height clamped on shrink")
     assert(vim.api.nvim_win_get_cursor(multi_win)[1] <= lines_after_shrink, "popup cursor clamped on shrink")
 
+    local line_2a = helpers.find_line_number(win_lines(multi_win), "short failed body")
+    vim.api.nvim_win_set_cursor(multi_win, { line_2a, 0 })
+    local resolve_t2_before = helpers.count_requests(log, '"method":"setResolved"', '"threadId":"T_TWO"')
+    helpers.press_key("R")
+    assert(vim.wait(3000, function()
+        return helpers.count_requests(log, '"method":"setResolved"', '"threadId":"T_TWO"', '"resolved":true') == resolve_t2_before + 1
+            and not vim.api.nvim_win_is_valid(multi_win)
+    end), "R targets T_TWO under popup cursor and closes popup")
+
     -- 9. Pressing X on a sync == "failed" message sends retryMessage and closes popup.
-    local failed_line = helpers.find_line_number(win_lines(multi_win), "short failed body")
+    vim.api.nvim_set_current_win(win)
+    vim.api.nvim_win_set_cursor(win, { 3, 0 })
+    session.popup_current()
+    multi_win = helpers.find_floating_win()
+    local failed_line = helpers.find_line_number(win_lines(multi_win), "line 1")
     vim.api.nvim_win_set_cursor(multi_win, { failed_line, 0 })
     local retry_m2a_before = helpers.count_requests(log, '"method":"retryMessage"', '"messageId":"M_2A"')
     helpers.press_key("X")
@@ -317,6 +351,78 @@ return function(context)
         return #helpers.read_requests(log, "editMessage") == edits_before + 1
     end), "editMessage submitted from popup compose")
     assert(helpers.read_requests(log, "editMessage")[edits_before + 1].params.messageId == "M_1B")
+
+    -- 12. Initial scroll positions cursor at the start of the last comment without scrolling past it.
+    local function build_numbered_body(prefix, count)
+        local body_lines = {}
+        for idx = 1, count do
+            body_lines[idx] = ("%s %d"):format(prefix, idx)
+        end
+        return table.concat(body_lines, "\n")
+    end
+
+    local function win_topline(target_win)
+        return vim.api.nvim_win_call(target_win, function()
+            return vim.fn.winsaveview().topline
+        end)
+    end
+
+    local function build_two_message_thread(first_body, second_body)
+        return {
+            threadId = "T_SCROLL",
+            displayLine = 2,
+            kind = "published",
+            state = "open",
+            outdated = false,
+            messageCount = 2,
+            firstAuthor = "alice",
+            snippet = "first",
+            messages = {
+                {
+                    id = "M_S1",
+                    author = "alice",
+                    body = first_body,
+                    created = "2026-11-20T00:00:00Z",
+                    updated = "2026-11-20T00:00:00Z",
+                    sync = "published",
+                    viewerDidAuthor = false,
+                    reactions = {},
+                },
+                {
+                    id = "M_S2",
+                    author = "bob",
+                    body = second_body,
+                    created = "2026-11-20T00:01:00Z",
+                    updated = "2026-11-20T00:01:00Z",
+                    sync = "published",
+                    viewerDidAuthor = false,
+                    reactions = {},
+                },
+            },
+        }
+    end
+
+    popup_module.open(review, { build_two_message_thread("short one", "short two") })
+    local short_win = review.popup.win
+    local short_last_first = review.popup.layout.message_ranges[2].first
+    assert(vim.api.nvim_win_get_cursor(short_win)[1] == short_last_first, "short thread cursor starts on last comment")
+    assert(win_topline(short_win) == 1, "short thread keeps topline at 1")
+    popup_module.close(review)
+
+    popup_module.open(review, { build_two_message_thread(build_numbered_body("old", 25), "latest line 1\nlatest line 2") })
+    local tall_short_last_win = review.popup.win
+    local tall_short_last_first = review.popup.layout.message_ranges[2].first
+    local tall_short_topline = win_topline(tall_short_last_win)
+    assert(vim.api.nvim_win_get_cursor(tall_short_last_win)[1] == tall_short_last_first, "tall thread cursor starts on last comment")
+    assert(tall_short_topline > 1 and tall_short_topline <= tall_short_last_first, "tall thread scrolls to bottom while keeping last comment start visible")
+    popup_module.close(review)
+
+    popup_module.open(review, { build_two_message_thread("intro 1\nintro 2\nintro 3", build_numbered_body("long reply", 30)) })
+    local tall_long_last_win = review.popup.win
+    local tall_long_last_first = review.popup.layout.message_ranges[2].first
+    assert(vim.api.nvim_win_get_cursor(tall_long_last_win)[1] == tall_long_last_first, "long last comment cursor starts on last comment")
+    assert(win_topline(tall_long_last_win) == tall_long_last_first, "long last comment snaps topline to start of last comment")
+    popup_module.close(review)
 
     review.client.request = original_request
 end
