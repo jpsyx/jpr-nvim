@@ -59,6 +59,7 @@ With [lazy.nvim](https://github.com/folke/lazy.nvim):
     --   send_agent = "gS",
     --   submit_review = "gs",
     --   toggle_agent = "ga",
+    --   toggle_panel = "gp",
     -- },
   },
 }
@@ -88,6 +89,7 @@ binary manually.
 | `:Jpr sync` | Sync with GitHub now (it also syncs every minute in PR mode; in an unlinked local session, probes GitHub for an open PR on the branch and upgrades the live session in-place, pushing locally viewed files to GitHub) |
 | `:Jpr push` | Push committed `HEAD` to the pull request's remote branch and resync (never auto-commits dirty files) |
 | `:Jpr toggle [unified \| split]` | Flip every diff between unified and split, or jump directly to `unified` or `split`; the choice is remembered |
+| `:Jpr panel` (default key: `gp`) | Toggle or reopen the left diff sidebar panel in the current review tab (preserving collapsed directories; sidebar, editor, and vertical AI panel widths automatically reconcile on window opens and closes) |
 | `:Jpr stream` (alias: `:Jpr full`, default key: `gF`) | Return to the full branch diff view showing all changed files in a continuous scroll (shown in the Command Palette as `"Full Branch Diff"` whenever not already visible) |
 | `:[range]Jpr comment [line \| file \| suggest]` | Open the compose float for a draft or local comment on the cursor line or visual range, or pass `line`, `file`, or `suggest` directly |
 | `:Jpr suggest` | Turn an uncommitted edit around the cursor into a GitHub draft suggestion and revert just that hunk |
@@ -199,9 +201,11 @@ so your colorscheme can override them (`JprThreadLocal` -> `DiagnosticHint`,
 `JprModified` -> `Special`). Diff highlight groups (`JprDiffAdd`,
 `JprDiffAddText`, `JprDiffDelete`, `JprDiffDeleteText`) compute soft
 background-only tints blended from your colorscheme's `Normal` background
-(refreshed automatically on `ColorScheme`, while preserving explicit user
-overrides) so native Treesitter syntax highlighting remains legible in both file
-diffs and the stream.
+alongside curated 256-color `ctermbg` fallbacks and contrast-adjusted
+`ctermfg` groups (refreshed automatically on `ColorScheme`, while preserving
+explicit user overrides) so native Treesitter syntax highlighting and green/red
+diff backgrounds remain legible in both truecolor and 256-color terminals (such
+as Termius on iPad).
 
 ## Statusline
 

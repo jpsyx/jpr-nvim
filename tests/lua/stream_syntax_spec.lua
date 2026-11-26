@@ -255,4 +255,110 @@ assert(#vim.api.nvim_buf_get_extmarks(huge_buf, syntax_namespace, 0, -1, {}) == 
 vim.api.nvim_buf_delete(buf, { force = true })
 vim.api.nvim_buf_delete(huge_buf, { force = true })
 
+-- code_rows carry left_line, right_line, and hunk_index.
+assert(column.code_rows[1].left_line == 1 and column.code_rows[1].right_line == 1, "context row records left_line and right_line")
+assert(column.code_rows[2].left_line == 2 and column.code_rows[2].right_line == nil, "removed row records left_line only")
+assert(column.code_rows[3].left_line == nil and column.code_rows[3].right_line == 2, "added row records right_line only")
+assert(column.code_rows[1].hunk_index == 1, "records 1-based hunk_index")
+
+-- dedent_lines strips common leading whitespace across non-blank lines.
+local dedented, stripped = syntax.dedent_lines({ "    key: value", "", "      nested: true" })
+assert(stripped == 4, "strips minimum 4 spaces across non-blank lines, got " .. tostring(stripped))
+assert(dedented[1] == "key: value" and dedented[2] == "" and dedented[3] == "  nested: true", "dedent preserves relative indent")
+
+-- Full-file worktree context highlights mid-file hunks accurately (Lua multiline string opened before hunk).
+local worktree = vim.fn.tempname()
+vim.fn.mkdir(worktree .. "/lua", "p")
+vim.fn.writefile({
+    "local header = [[",
+    "  line two",
+    "  local inside_string = 42",
+    "  still inside",
+    "]]",
+    "local after = 99",
+}, worktree .. "/lua/midfile.lua")
+
+local midfile_lua_stream = {
+    mode = "unified",
+    rows = {
+        { kind = "file", path = "lua/midfile.lua", additions = 1, deletions = 0, viewed = "UNVIEWED", folded = false },
+        { kind = "hunk", path = "lua/midfile.lua", header = "@@ -3,4 +3,4 @@", target = 3 },
+        { kind = "line", path = "lua/midfile.lua", left = { line = 3, text = "  local inside_string = 42", change = "context", words = {} }, right = { line = 3, text = "  local inside_string = 42", change = "context", words = {} }, target = 3 },
+        { kind = "line", path = "lua/midfile.lua", right = { line = 4, text = "  still inside", change = "added", words = {} }, target = 4 },
+        { kind = "line", path = "lua/midfile.lua", left = { line = 5, text = "]]", change = "context", words = {} }, right = { line = 5, text = "]]", change = "context", words = {} }, target = 5 },
+        { kind = "line", path = "lua/midfile.lua", left = { line = 6, text = "local after = 99", change = "context", words = {} }, right = { line = 6, text = "local after = 99", change = "context", words = {} }, target = 6 },
+    },
+}
+local midfile_col = render.create_layout_from_stream(midfile_lua_stream).columns[1]
+local midfile_buf = vim.api.nvim_create_buf(false, true)
+stream_view.fill(midfile_buf, midfile_col, { worktree = worktree })
+local midfile_marks = vim.api.nvim_buf_get_extmarks(midfile_buf, syntax_namespace, { 2, 0 }, { 2, -1 }, { details = true })
+local has_string_on_line3 = false
+local has_keyword_on_line3 = false
+for _, mark in ipairs(midfile_marks) do
+    local group = mark[4].hl_group
+    if type(group) == "string" and vim.startswith(group, "@string") then
+        has_string_on_line3 = true
+    end
+    if type(group) == "string" and vim.startswith(group, "@keyword") then
+        has_keyword_on_line3 = true
+    end
+end
+assert(has_string_on_line3 and not has_keyword_on_line3, "mid-file hunk uses full worktree file context so line inside [[...]] is @string, not @keyword")
+vim.api.nvim_buf_delete(midfile_buf, { force = true })
+
+-- Mid-file YAML hunk with dedent preserves highlighting both with worktree and on fallback (removed/deleted).
+local has_yaml_query, yaml_query = pcall(vim.treesitter.query.get, "yaml", "highlights")
+local has_yaml_parser = pcall(vim.treesitter.get_string_parser, "a: 1\n", "yaml")
+if has_yaml_query and yaml_query and has_yaml_parser then
+    vim.api.nvim_set_hl(0, "@property", { fg = 0xe06c75 })
+    vim.fn.writefile({
+        "root:",
+        "  section:",
+        "    items:",
+        "      - item1",
+        "      - item2",
+        "    next_key: value",
+        "    other_key: 42",
+    }, worktree .. "/config.yaml")
+
+    local yaml_stream = {
+        mode = "unified",
+        rows = {
+            { kind = "file", path = "config.yaml", additions = 2, deletions = 1, viewed = "UNVIEWED", folded = false },
+            { kind = "hunk", path = "config.yaml", header = "@@ -4,4 +4,4 @@", target = 4 },
+            { kind = "line", path = "config.yaml", left = { line = 4, text = "      - item1", change = "context", words = {} }, right = { line = 4, text = "      - item1", change = "context", words = {} }, target = 4 },
+            { kind = "line", path = "config.yaml", left = { line = 5, text = "      - old_item", change = "removed", words = {} }, target = 5 },
+            { kind = "line", path = "config.yaml", right = { line = 5, text = "      - item2", change = "added", words = {} }, target = 5 },
+            { kind = "line", path = "config.yaml", left = { line = 6, text = "    next_key: value", change = "context", words = {} }, right = { line = 6, text = "    next_key: value", change = "context", words = {} }, target = 6 },
+            { kind = "line", path = "config.yaml", right = { line = 7, text = "    other_key: 42", change = "added", words = {} }, target = 7 },
+        },
+    }
+    local yaml_col = render.create_layout_from_stream(yaml_stream).columns[1]
+
+    -- With worktree (full file context).
+    local yaml_buf = vim.api.nvim_create_buf(false, true)
+    stream_view.fill(yaml_buf, yaml_col, { worktree = worktree })
+    local dedented_key_marks = vim.api.nvim_buf_get_extmarks(yaml_buf, syntax_namespace, { 5, 0 }, { 5, -1 }, { details = true })
+    assert(#dedented_key_marks > 0, "mid-file YAML dedented key line receives syntax marks with worktree")
+    local dedented_added_marks = vim.api.nvim_buf_get_extmarks(yaml_buf, syntax_namespace, { 6, 0 }, { 6, -1 }, { details = true })
+    local has_added_syntax = false
+    for _, mark in ipairs(dedented_added_marks) do
+        if mark[4].priority == 90 then
+            has_added_syntax = true
+        end
+    end
+    assert(has_added_syntax, "mid-file YAML added line after dedent receives priority-90 syntax marks")
+    vim.api.nvim_buf_delete(yaml_buf, { force = true })
+
+    -- Without worktree (fallback dedent + per-line recovery).
+    local yaml_fallback_buf = vim.api.nvim_create_buf(false, true)
+    stream_view.fill(yaml_fallback_buf, yaml_col)
+    local fallback_marks = vim.api.nvim_buf_get_extmarks(yaml_fallback_buf, syntax_namespace, { 5, 0 }, { 5, -1 }, { details = true })
+    assert(#fallback_marks > 0, "mid-file YAML dedented line still receives syntax marks on fallback without worktree")
+    vim.api.nvim_buf_delete(yaml_fallback_buf, { force = true })
+end
+
+vim.fn.delete(worktree, "rf")
+
 print("stream_syntax_spec: ok")

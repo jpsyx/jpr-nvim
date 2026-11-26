@@ -11,6 +11,15 @@ local function rgb_to_luminance(rgb)
     return 0.2126 * red + 0.7152 * green + 0.0722 * blue
 end
 
+-- rgb_to_cterm256: xterm-256 cube and greyscale quantization endpoints.
+assert(highlights.rgb_to_cterm256(0x000000) == 16, "black maps to 16")
+assert(highlights.rgb_to_cterm256(0xffffff) == 231, "white maps to 231")
+assert(highlights.rgb_to_cterm256(0x00ff00) == 46, "pure green maps to 46")
+assert(highlights.rgb_to_cterm256(0xff0000) == 196, "pure red maps to 196")
+assert(highlights.rgb_to_cterm256(0x0000ff) == 21, "pure blue maps to 21")
+local grey_index = highlights.rgb_to_cterm256(0x808080)
+assert(grey_index == 244 or grey_index == 102, "mid-grey maps to neutral xterm-256 index")
+
 -- blend_rgb: endpoints, midpoint, and clamping.
 assert(highlights.blend_rgb(0x282c34, 0x3fb950, 0) == 0x282c34, "alpha 0 returns base")
 assert(highlights.blend_rgb(0x282c34, 0x3fb950, 1) == 0x3fb950, "alpha 1 returns tint")
@@ -36,9 +45,13 @@ for _, group_name in ipairs({ "JprDiffAdd", "JprDiffAddText", "JprDiffDelete", "
     assert(spec.fg == nil, group_name .. " must not set fg")
 end
 assert(dark_groups.JprDiffAdd.bg == highlights.blend_rgb(onedark_bg, 0x3fb950, 0.24), "dark JprDiffAdd blend")
+assert(dark_groups.JprDiffAdd.ctermbg == 22, "dark JprDiffAdd ctermbg is dark green 22")
 assert(dark_groups.JprDiffAddText.bg == highlights.blend_rgb(onedark_bg, 0x3fb950, 0.38), "dark JprDiffAddText blend")
+assert(dark_groups.JprDiffAddText.ctermbg == 28, "dark JprDiffAddText ctermbg is green 28")
 assert(dark_groups.JprDiffDelete.bg == highlights.blend_rgb(onedark_bg, 0xf85149, 0.24), "dark JprDiffDelete blend")
+assert(dark_groups.JprDiffDelete.ctermbg == 52, "dark JprDiffDelete ctermbg is dark red 52")
 assert(dark_groups.JprDiffDeleteText.bg == highlights.blend_rgb(onedark_bg, 0xf85149, 0.38), "dark JprDiffDeleteText blend")
+assert(dark_groups.JprDiffDeleteText.ctermbg == 88, "dark JprDiffDeleteText ctermbg is red 88")
 local add_contrast = math.abs(rgb_to_luminance(dark_groups.JprDiffAdd.bg) - rgb_to_luminance(onedark_bg))
 local solid_contrast = math.abs(rgb_to_luminance(solid_bright_green) - rgb_to_luminance(onedark_bg))
 assert(add_contrast < solid_contrast * 0.25, "soft diff tint has much lower contrast than solid bright green")
@@ -73,8 +86,9 @@ jpr.define_highlights()
 for _, group_name in ipairs({ "JprDiffAdd", "JprDiffAddText", "JprDiffDelete", "JprDiffDeleteText" }) do
     local raw_highlight = vim.api.nvim_get_hl(0, { name = group_name, link = true })
     assert(raw_highlight.link == nil, group_name .. " is not linked to DiffAdd/DiffText/DiffDelete")
-    assert(raw_highlight.fg == nil, group_name .. " leaves fg unset so syntax colors show through")
+    assert(raw_highlight.fg == nil and raw_highlight.ctermfg == nil, group_name .. " leaves fg and ctermfg unset so syntax colors show through")
     assert(raw_highlight.bg == dark_groups[group_name].bg, group_name .. " bg matches blended dark tint")
+    assert(raw_highlight.ctermbg == dark_groups[group_name].ctermbg, group_name .. " ctermbg matches dark 256-color tint")
 end
 
 local title_highlight = vim.api.nvim_get_hl(0, { name = "JprTitle", link = true })
@@ -91,12 +105,13 @@ vim.api.nvim_set_hl(0, "Normal", { bg = light_bg, fg = 0x24292f })
 vim.api.nvim_exec_autocmds("ColorScheme", {})
 local updated_add = vim.api.nvim_get_hl(0, { name = "JprDiffAdd", link = true })
 assert(updated_add.bg == light_groups.JprDiffAdd.bg, "ColorScheme recalculates JprDiffAdd for new Normal.bg")
-assert(updated_add.fg == nil and updated_add.link == nil, "updated JprDiffAdd remains background-only")
+assert(updated_add.ctermbg == 194, "ColorScheme switches JprDiffAdd ctermbg to light green 194")
+assert(updated_add.fg == nil and updated_add.ctermfg == nil and updated_add.link == nil, "updated JprDiffAdd remains background-only")
 
--- User overrides are preserved across define_highlights calls.
-vim.api.nvim_set_hl(0, "JprDiffAdd", { bg = 0x112233 })
+-- User overrides are preserved across define_highlights calls (both bg and ctermbg).
+vim.api.nvim_set_hl(0, "JprDiffAdd", { bg = 0x112233, ctermbg = 23 })
 jpr.define_highlights()
 local custom_add = vim.api.nvim_get_hl(0, { name = "JprDiffAdd", link = true })
-assert(custom_add.bg == 0x112233, "user custom JprDiffAdd is preserved")
+assert(custom_add.bg == 0x112233 and custom_add.ctermbg == 23, "user custom JprDiffAdd bg and ctermbg are preserved")
 
 print("highlights_spec: ok")

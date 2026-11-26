@@ -51,6 +51,7 @@ M.defaults = {
         send_agent = "gS",
         submit_review = "gs",
         toggle_agent = "ga",
+        toggle_panel = "gp",
     },
 }
 
@@ -116,12 +117,13 @@ local function bind_plug_key(buf, modes, lhs, plug, desc)
 end
 
 --- Binds review-wide session keys (`send_agent`, `submit_review`,
---- `toggle_agent`) on `buf`, skipping any entry set to `false` or empty.
+--- `toggle_agent`, `toggle_panel`) on `buf`, skipping any entry set to `false` or empty.
 function M.bind_session_keys(buf)
     local keys = M.config.keys or {}
     bind_plug_key(buf, "n", keys.send_agent, "<Plug>(jpr-send-agent)", "Send local threads to coding agent")
     bind_plug_key(buf, "n", keys.submit_review, "<Plug>(jpr-submit-review)", "Open GitHub review submission modal")
     bind_plug_key(buf, "n", keys.toggle_agent, "<Plug>(jpr-toggle-agent)", "Toggle coding agent terminal panel")
+    bind_plug_key(buf, "n", keys.toggle_panel, "<Plug>(jpr-toggle-panel)", "Toggle diff sidebar panel")
 end
 
 --- Binds configured comment, thread, and review session keys in buffer `buf`
@@ -154,6 +156,23 @@ function M.bind_tab_aware_full_diff_key(buf)
         end
         return full_diff_key
     end, { buffer = buf, expr = true, remap = true, silent = true, nowait = true, desc = "Switch to the full branch diff view" })
+end
+
+--- Binds `keys.toggle_panel` on a non-changed worktree buffer `buf` with an
+--- expr guard so it toggles the diff sidebar inside review tabs and falls back
+--- to native `keys.toggle_panel` in non-review tabs.
+function M.bind_tab_aware_toggle_panel_key(buf)
+    local panel_key = M.config.keys and M.config.keys.toggle_panel
+    if type(panel_key) ~= "string" or panel_key == "" then
+        return
+    end
+    vim.keymap.set("n", panel_key, function()
+        local session_module = package.loaded["jpr.session"]
+        if session_module and session_module.current() ~= nil then
+            return "<Plug>(jpr-toggle-panel)"
+        end
+        return panel_key
+    end, { buffer = buf, expr = true, remap = true, silent = true, nowait = true, desc = "Toggle diff sidebar panel" })
 end
 
 --- The PR number in a `:Jpr open` argument: `123`, `#123`, or a pull request
@@ -304,6 +323,7 @@ end
 local OPTIONAL_ARG_SUBCOMMANDS = { open = true, ["local"] = true, toggle = true, comment = true, agent = true }
 local ZERO_ARG_SESSION_METHODS = {
     sync = "sync_current",
+    panel = "panel_current",
     stream = "stream_current",
     suggest = "suggest_current",
     expand = "expand_current",
@@ -446,6 +466,7 @@ function M.action(name)
         send_agent = session.send_current,
         submit_review = session.submit_current,
         toggle_agent = session.agent_current,
+        toggle_panel = session.panel_current,
     }
     local handler = dispatch[name]
     if handler then

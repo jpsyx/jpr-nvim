@@ -162,7 +162,8 @@ assert(derived_string_add == highlights.build_contrast_group_name("@string", "ad
 assert(highlights.get_contrast_group("@string", "add") == derived_string_add, "returns cached derived group")
 local derived_spec = vim.api.nvim_get_hl(0, { name = derived_string_add, link = false })
 local active_add_bg = vim.api.nvim_get_hl(0, { name = "JprDiffAdd", link = false }).bg
-assert(derived_spec.bg == nil, "derived contrast group leaves bg unset")
+assert(derived_spec.bg == nil and derived_spec.ctermbg == nil, "derived contrast group leaves bg and ctermbg unset")
+assert(derived_spec.ctermfg == highlights.rgb_to_cterm256(derived_spec.fg), "derived contrast group sets matching 256-color ctermfg")
 assert(derived_spec.italic == true and derived_spec.bold == true, "derived contrast group preserves text styles")
 assert(
     contrast.contrast_ratio(derived_spec.fg, active_add_bg) > contrast.contrast_ratio(0x98c379, active_add_bg),

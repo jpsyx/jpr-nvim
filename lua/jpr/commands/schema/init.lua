@@ -1,4 +1,4 @@
--- Declarative schema for all 16 `:Jpr` subcommands, driving the floating
+-- Declarative schema for all 17 `:Jpr` subcommands, driving the floating
 -- command palette, interactive steppers, and subcommand argument completion.
 -- Command aliases live in `COMMAND_ALIASES` and are not palette entries.
 local open_spec = require("jpr.commands.schema.open")
@@ -248,7 +248,7 @@ local function create_local_command_spec()
     }
 end
 
---- Builds the ordered list of declarative specs for all 16 `:Jpr` subcommands.
+--- Builds the ordered list of declarative specs for all 17 `:Jpr` subcommands.
 --- @return table[]
 function M.create_command_specs()
     return {
@@ -256,6 +256,7 @@ function M.create_command_specs()
         create_local_command_spec(),
         create_session_action_spec("sync", "Sync with GitHub", "Sync with GitHub (or detect and link an open PR when reviewing locally).", "sync_current", predicates.is_live_session),
         create_toggle_command_spec(),
+        create_session_action_spec("panel", "Toggle Diff Sidebar", "Show or hide the pull request file-tree sidebar in the current review tab.", "panel_current"),
         create_session_action_spec("stream", "Full Branch Diff", "Return to the full branch diff view showing all changed files in a continuous scroll.", "stream_current", predicates.is_stream_executable),
         create_comment_command_spec(),
         create_session_action_spec("suggest", "Suggest Code Change", "Draft a review comment pre-filled with a GitHub suggestion block for the current line.", "suggest_current", predicates.is_suggest_executable),
@@ -334,7 +335,7 @@ function M.validate_command_aliases()
     return true
 end
 
---- Returns the ordered list of all 16 `:Jpr` subcommand IDs.
+--- Returns the ordered list of all 17 `:Jpr` subcommand IDs.
 --- @return string[]
 function M.list_command_ids()
     local ids = {}

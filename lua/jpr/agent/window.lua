@@ -45,6 +45,7 @@ local function style_agent_window(win, direction)
     set_local("signcolumn", "no")
     if direction == "vertical" then
         vim.w[win].jpr_side = true
+        vim.w[win].jpr_agent_vertical = true
         set_local("winfixwidth", true)
     elseif direction == "horizontal" then
         vim.w[win].jpr_side = true

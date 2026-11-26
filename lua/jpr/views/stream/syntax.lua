@@ -177,26 +177,114 @@ local function apply_normal_fallbacks(buf, rows)
     end
 end
 
-local function apply_spans_to_rows(buf, rows, spans_by_line)
-    for row_index, spans in pairs(spans_by_line) do
-        local entry = rows[row_index]
-        if entry then
-            local contrast_kind = CHANGE_TO_CONTRAST_KIND[entry.change]
-            for _, span in ipairs(spans) do
-                local effective_group = contrast_kind and highlights.get_contrast_group(span.hl_group, contrast_kind)
-                    or span.hl_group
-                vim.api.nvim_buf_set_extmark(buf, syntax_namespace, entry.line, entry.gutter_length + span.col_start, {
-                    end_col = entry.gutter_length + span.col_end,
-                    hl_group = effective_group,
-                    priority = SYNTAX_PRIORITY,
-                    strict = false,
-                })
-            end
+--- Strips the minimum common leading whitespace across all non-blank lines in
+--- `lines`, returning `(dedented_lines, stripped_bytes)`.
+function M.dedent_lines(lines)
+    local min_indent = nil
+    for _, line_text in ipairs(lines) do
+        if line_text:match("%S") ~= nil then
+            local indent = #(line_text:match("^[ \t]*") or "")
+            min_indent = min_indent and math.min(min_indent, indent) or indent
+        end
+    end
+    if not min_indent or min_indent == 0 then
+        return lines, 0
+    end
+    local dedented = {}
+    for index, line_text in ipairs(lines) do
+        dedented[index] = #line_text >= min_indent and line_text:sub(min_indent + 1) or ""
+    end
+    return dedented, min_indent
+end
+
+local function apply_row_spans(buf, entry, spans, col_offset)
+    if not spans or #spans == 0 then
+        return
+    end
+    local contrast_kind = CHANGE_TO_CONTRAST_KIND[entry.change]
+    local offset = col_offset or 0
+    local line_length = #entry.text
+    for _, span in ipairs(spans) do
+        local col_start = math.max(0, math.min(span.col_start + offset, line_length))
+        local col_end = math.max(col_start, math.min(span.col_end + offset, line_length))
+        if col_end > col_start then
+            local effective_group = contrast_kind and highlights.get_contrast_group(span.hl_group, contrast_kind)
+                or span.hl_group
+            vim.api.nvim_buf_set_extmark(buf, syntax_namespace, entry.line, entry.gutter_length + col_start, {
+                end_col = entry.gutter_length + col_end,
+                hl_group = effective_group,
+                priority = SYNTAX_PRIORITY,
+                strict = false,
+            })
         end
     end
 end
 
-local function highlight_file_group(buf, file_group)
+local function read_worktree_file_lines(worktree, path)
+    if type(worktree) ~= "string" or worktree == "" or type(path) ~= "string" or path == "" then
+        return nil
+    end
+    local full_path = worktree .. "/" .. path
+    if require("jpr.views.diff").name_to_relative_path(worktree, full_path) ~= path then
+        return nil
+    end
+    local is_ok, file_lines = pcall(vim.fn.readfile, full_path)
+    if not is_ok or type(file_lines) ~= "table" or #file_lines == 0 or #file_lines > MAX_FILE_ROWS then
+        return nil
+    end
+    return file_lines
+end
+
+local function get_full_file_context(worktree, path, language, file_cache)
+    local cached = file_cache[path]
+    if cached ~= nil then
+        return cached or nil
+    end
+    local file_lines = read_worktree_file_lines(worktree, path)
+    if not file_lines then
+        file_cache[path] = false
+        return nil
+    end
+    local context = { lines = file_lines, spans = M.collect_line_spans(file_lines, language) }
+    file_cache[path] = context
+    return context
+end
+
+local function group_fallback_rows(rows)
+    local groups = {}
+    local current = nil
+    for _, entry in ipairs(rows) do
+        local is_removed = entry.change == "removed"
+        local group_key = tostring(entry.hunk_index or 0) .. ":" .. tostring(is_removed)
+        if not current or current.key ~= group_key then
+            current = { key = group_key, rows = {} }
+            groups[#groups + 1] = current
+        end
+        current.rows[#current.rows + 1] = entry
+    end
+    return groups
+end
+
+local function highlight_fallback_subgroup(buf, rows, language)
+    local source_lines = {}
+    for index, entry in ipairs(rows) do
+        source_lines[index] = entry.text
+    end
+    local dedented, stripped_bytes = M.dedent_lines(source_lines)
+    local spans_by_line = M.collect_line_spans(dedented, language)
+    for row_index, entry in ipairs(rows) do
+        local spans = spans_by_line[row_index]
+        if spans and #spans > 0 then
+            apply_row_spans(buf, entry, spans, stripped_bytes)
+        elseif entry.text:match("%S") ~= nil then
+            local single_dedented, single_stripped_bytes = M.dedent_lines({ entry.text })
+            local recovered = M.collect_line_spans(single_dedented, language)
+            apply_row_spans(buf, entry, recovered[1], single_stripped_bytes)
+        end
+    end
+end
+
+local function highlight_file_group(buf, file_group, worktree, file_cache)
     if #file_group.rows == 0 or #file_group.rows > MAX_FILE_ROWS then
         return
     end
@@ -205,22 +293,32 @@ local function highlight_file_group(buf, file_group)
     if not language then
         return
     end
-    local source_lines = {}
-    for index, entry in ipairs(file_group.rows) do
-        source_lines[index] = entry.text
+    local full_file = get_full_file_context(worktree, file_group.path, language, file_cache)
+    local fallback_rows = {}
+    for _, entry in ipairs(file_group.rows) do
+        local right_line = entry.right_line
+        if full_file and type(right_line) == "number" and full_file.lines[right_line] == entry.text then
+            apply_row_spans(buf, entry, full_file.spans[right_line], 0)
+        else
+            fallback_rows[#fallback_rows + 1] = entry
+        end
     end
-    local spans_by_line = M.collect_line_spans(source_lines, language)
-    apply_spans_to_rows(buf, file_group.rows, spans_by_line)
+    for _, subgroup in ipairs(group_fallback_rows(fallback_rows)) do
+        highlight_fallback_subgroup(buf, subgroup.rows, language)
+    end
 end
 
 --- Applies per-file Treesitter syntax extmarks and diff-row contrast fallbacks
 --- onto `buf` for all code rows in `column`, clearing previous syntax extmarks
---- first. Called by `jpr.views.stream` whenever a stream buffer is filled.
-function M.apply(buf, column)
+--- first. Optional `opts.worktree` enables full-file parsing so mid-file hunks
+--- retain accurate language context.
+function M.apply(buf, column, opts)
     vim.api.nvim_buf_clear_namespace(buf, syntax_namespace, 0, -1)
     local code_rows = column and column.code_rows or {}
+    local worktree = type(opts) == "table" and opts.worktree or nil
+    local file_cache = {}
     for _, file_group in ipairs(group_code_rows_by_path(code_rows)) do
-        highlight_file_group(buf, file_group)
+        highlight_file_group(buf, file_group, worktree, file_cache)
     end
 end
 

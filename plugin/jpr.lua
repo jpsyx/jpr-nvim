@@ -54,3 +54,6 @@ end, { desc = "Open the GitHub review submission modal (confirms before submitti
 vim.keymap.set("n", "<Plug>(jpr-toggle-agent)", function()
     require("jpr").action("toggle_agent")
 end, { desc = "Toggle the coding agent terminal panel without quitting it" })
+vim.keymap.set("n", "<Plug>(jpr-toggle-panel)", function()
+    require("jpr").action("toggle_panel")
+end, { desc = "Toggle or reopen the diff sidebar panel in the current review tab" })

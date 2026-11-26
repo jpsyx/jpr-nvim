@@ -186,6 +186,7 @@ local function forget(session, close_tab)
     close_optional_view("jpr.views.loading", session)
     require("jpr.views.stream").close(session)
     require("jpr.views.diff").detach(session)
+    require("jpr.views.layout").detach(session)
     panel.close(session)
     local tab = session.tab
     if (close_tab or not session.ready) and vim.api.nvim_tabpage_is_valid(tab) and #vim.api.nvim_list_tabpages() > 1 then
@@ -283,6 +284,7 @@ function M.start(info, pending_session)
         return
     end
     require("jpr.views.diff").attach(session)
+    require("jpr.views.layout").attach(session)
     -- Registered only once the panel and the engine are up, so a failure here
     -- never leaves a half-built session for `:Jpr open` to refocus.
     local is_opened, open_error = pcall(panel.open, session)

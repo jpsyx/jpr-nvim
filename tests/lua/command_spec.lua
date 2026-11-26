@@ -52,13 +52,13 @@ assert(
 assert(
     vim.deep_equal(
         jpr.complete("", "Jpr "),
-        { "open", "local", "sync", "toggle", "stream", "comment", "suggest", "expand", "conversation", "submit", "push", "agent", "send", "prepass", "close", "keys" }
+        { "open", "local", "sync", "toggle", "panel", "stream", "comment", "suggest", "expand", "conversation", "submit", "push", "agent", "send", "prepass", "close", "keys" }
     ),
     "all subcommands"
 )
 assert(vim.deep_equal(jpr.complete("k", "Jpr k"), { "keys" }), "filtered k subcommand")
 assert(vim.deep_equal(jpr.complete("s", "Jpr s"), { "sync", "stream", "suggest", "submit", "send" }), "filtered s subcommands")
-assert(vim.deep_equal(jpr.complete("p", "Jpr p"), { "push", "prepass" }), "filtered p subcommands")
+assert(vim.deep_equal(jpr.complete("p", "Jpr p"), { "panel", "push", "prepass" }), "filtered p subcommands")
 assert(vim.deep_equal(jpr.complete("c", "Jpr c"), { "comment", "conversation", "close" }), "filtered c subcommands")
 assert(vim.deep_equal(jpr.complete("", "Jpr open "), {}), "nothing after open subcommand")
 assert(vim.deep_equal(jpr.complete("", "Jpr toggle "), { "unified", "split" }), "toggle argument completions")

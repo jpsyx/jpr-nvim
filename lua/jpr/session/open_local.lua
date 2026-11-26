@@ -152,6 +152,7 @@ local function start_local_session(info, hooks)
         return jpr().error("could not enter worktree: " .. crash.build_clean_text_from_raw(tcd_error))
     end
     require("jpr.views.diff").attach(session)
+    require("jpr.views.layout").attach(session)
     local is_opened, open_error = pcall(require("jpr.views.panel").open, session)
     if not is_opened then
         hooks.forget(session)

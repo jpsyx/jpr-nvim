@@ -227,8 +227,44 @@ local function bind_action_keymaps(session, buf)
     end
 end
 
---- Opens the panel on the left of the current tab for `session`.
+local function count_non_floating_windows(tab)
+    if not tab or not vim.api.nvim_tabpage_is_valid(tab) then
+        return 0
+    end
+    local window_count = 0
+    for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
+        local win_config = vim.api.nvim_win_get_config(win)
+        if not win_config.relative or win_config.relative == "" then
+            window_count = window_count + 1
+        end
+    end
+    return window_count
+end
+
+--- Returns whether `session`'s diff sidebar panel window is currently open.
+function M.is_open(session)
+    local panel = session and session.panel
+    return panel ~= nil
+        and panel.win ~= nil
+        and panel.buf ~= nil
+        and vim.api.nvim_win_is_valid(panel.win)
+        and vim.api.nvim_buf_is_valid(panel.buf)
+        and vim.api.nvim_win_get_buf(panel.win) == panel.buf
+        and vim.api.nvim_win_get_tabpage(panel.win) == session.tab
+end
+
+--- Opens the panel on the left of `session`'s tab (or focuses it if already open).
 function M.open(session)
+    if M.is_open(session) then
+        vim.api.nvim_set_current_win(session.panel.win)
+        require("jpr.views.layout").reconcile(session, { force = true })
+        return
+    end
+    if session.tab and vim.api.nvim_tabpage_is_valid(session.tab) and vim.api.nvim_get_current_tabpage() ~= session.tab then
+        vim.api.nvim_set_current_tabpage(session.tab)
+    end
+    local collapsed_dirs = (session.panel and session.panel.collapsed_dirs) or session.panel_collapsed_dirs or {}
+    M.close(session)
     local buf = vim.api.nvim_create_buf(false, true)
     local buf_key = require("jpr.session").buf_key(session)
     local named, name_err = pcall(vim.api.nvim_buf_set_name, buf, "jpr://panel/" .. buf_key)
@@ -244,7 +280,8 @@ function M.open(session)
     vim.api.nvim_win_set_buf(win, buf)
     vim.api.nvim_win_set_width(win, require("jpr").config.panel_width)
     style_window(win)
-    session.panel = { buf = buf, win = win, paths = {}, rows = {}, selectable_lines = {}, collapsed_dirs = {} }
+    session.panel_collapsed_dirs = collapsed_dirs
+    session.panel = { buf = buf, win = win, paths = {}, rows = {}, selectable_lines = {}, collapsed_dirs = collapsed_dirs }
     vim.api.nvim_create_autocmd("CursorMoved", {
         buffer = buf,
         callback = function()
@@ -254,12 +291,34 @@ function M.open(session)
     bind_navigation_keymaps(session, buf)
     bind_action_keymaps(session, buf)
     M.render(session, session.view or {})
+    require("jpr.views.layout").reconcile(session, { force = true })
+end
+
+--- Toggles `session`'s diff sidebar panel, preserving collapsed directories and
+--- refusing to close the last window in the tab.
+function M.toggle(session)
+    if M.is_open(session) then
+        if count_non_floating_windows(session.tab) <= 1 then
+            require("jpr").error("cannot close the last window in the tab")
+            return false
+        end
+        session.panel_collapsed_dirs = session.panel.collapsed_dirs
+        M.close(session)
+        session.panel = nil
+        require("jpr.views.layout").reconcile(session, { force = true })
+        return true
+    end
+    M.open(session)
+    return true
 end
 
 --- Wipes the panel buffer, which also closes its window.
 function M.close(session)
     local panel = session.panel
-    if panel and vim.api.nvim_buf_is_valid(panel.buf) then
+    if panel and panel.collapsed_dirs then
+        session.panel_collapsed_dirs = panel.collapsed_dirs
+    end
+    if panel and panel.buf and vim.api.nvim_buf_is_valid(panel.buf) then
         vim.api.nvim_buf_delete(panel.buf, { force = true })
     end
 end

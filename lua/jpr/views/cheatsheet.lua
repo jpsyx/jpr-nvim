@@ -82,6 +82,7 @@ local function create_session_and_agent_section_from_keys(keys)
             create_key_entry_from_binding(configured.send_agent, "Send local threads to agent (confirms)"),
             create_key_entry_from_binding(configured.submit_review, "Submit GitHub review (confirms)"),
             create_key_entry_from_binding(configured.toggle_agent, "Toggle coding agent panel (hides without quitting)"),
+            create_key_entry_from_binding(configured.toggle_panel, "Toggle or reopen diff sidebar panel"),
             { key = ":q / <C-q> / <M-q>", desc = "Hide agent terminal window without quitting" },
         },
     }

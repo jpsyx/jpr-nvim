@@ -163,8 +163,9 @@ function M.refresh(session, force)
 end
 
 --- Replaces `buf`'s lines and highlights with `column`'s, keeping each
---- window's cursor line.
-function M.fill(buf, column)
+--- window's cursor line. Optional `opts` (`{ worktree? }`) forwards full-file
+--- syntax context to `jpr.views.stream.syntax`.
+function M.fill(buf, column, opts)
     local cursors = {}
     for _, win in ipairs(vim.fn.win_findbuf(buf)) do
         cursors[win] = vim.api.nvim_win_get_cursor(win)
@@ -191,7 +192,7 @@ function M.fill(buf, column)
             strict = false,
         })
     end
-    require("jpr.views.stream.syntax").apply(buf, column)
+    require("jpr.views.stream.syntax").apply(buf, column, opts)
     for win, cursor in pairs(cursors) do
         pcall(vim.api.nvim_win_set_cursor, win, { math.max(1, math.min(cursor[1], #column.lines)), 0 })
     end
@@ -226,8 +227,9 @@ function M.draw(session, stream, opts)
     state.layout, state.key = layout, opts.key or build_stream_key(session, stream.mode or view_mode.get())
     local main_buf = get_or_create_stream_buffer(session, "main")
     local buffers = #layout.columns == 2 and { get_or_create_stream_buffer(session, "left"), main_buf } or { main_buf }
+    local fill_opts = { worktree = session.worktree }
     for index, column in ipairs(layout.columns) do
-        M.fill(buffers[index], column)
+        M.fill(buffers[index], column, fill_opts)
     end
     release_left_window(session)
     if opts.only_if_free and not is_free(session, find_stream_window(session)) then
