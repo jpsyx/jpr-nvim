@@ -203,6 +203,14 @@ local function attach_view_commands(session_mod, forget)
         end)
     end
 
+    --- `:Jpr panel`: toggles or reopens the diff sidebar panel in the current
+    --- review tab.
+    function session_mod.panel_current()
+        return run_with_current(session_mod, function(session)
+            require("jpr.views.panel").toggle(session)
+        end)
+    end
+
     --- Toggles viewed on the current file or directory across the sidebar panel,
     --- full diff stream, and single-file editor or split base buffers.
     function session_mod.toggle_viewed_current()

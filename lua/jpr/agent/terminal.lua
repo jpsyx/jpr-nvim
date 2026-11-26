@@ -47,6 +47,16 @@ local function bind_agent_buffer_keys(config, buf, on_toggle_hide)
             desc = "Hide Jpr coding agent panel",
         })
     end
+    local panel_key = keys.toggle_panel
+    if type(panel_key) == "string" and panel_key ~= "" then
+        vim.keymap.set("n", panel_key, "<Plug>(jpr-toggle-panel)", {
+            buffer = buf,
+            remap = true,
+            nowait = true,
+            silent = true,
+            desc = "Toggle Jpr diff sidebar panel",
+        })
+    end
 end
 
 local function apply_toggleterm_window_hooks(config, buf, win, on_toggle_hide)
@@ -277,6 +287,7 @@ function M.spawn(session, argv, env, opts)
     vim.bo[buf].bufhidden = "hide"
     attach_window_integrations(config, agent_state, win, options.on_toggle_hide)
     session.agent = agent_state
+    require("jpr.views.layout").reconcile(session, { force = true })
     apply_focus_policy(agent_state, origin_win, should_focus)
     return agent_state
 end
@@ -310,6 +321,7 @@ function M.show(session, agent_state, opts)
     end
     agent_state.win = win
     attach_window_integrations(config, agent_state, win, options.on_toggle_hide)
+    require("jpr.views.layout").reconcile(session, { force = true })
     apply_focus_policy(agent_state, origin_win, should_focus)
     return win
 end
@@ -344,6 +356,7 @@ function M.hide(session, agent_state)
     if win_tab ~= session.tab and session.tab and vim.api.nvim_tabpage_is_valid(session.tab) then
         pcall(vim.api.nvim_set_current_tabpage, session.tab)
     end
+    require("jpr.views.layout").reconcile(session, { force = true })
     return true
 end
 

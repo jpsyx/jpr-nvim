@@ -19,7 +19,9 @@ function M.find(session)
     local anchor = (panel and vim.api.nvim_win_is_valid(panel.win)) and panel.win or vim.api.nvim_get_current_win()
     local placeholder = vim.api.nvim_create_buf(false, true)
     vim.bo[placeholder].bufhidden = "wipe"
-    return vim.api.nvim_open_win(placeholder, false, { split = "right", win = anchor })
+    local win = vim.api.nvim_open_win(placeholder, false, { split = "right", win = anchor })
+    require("jpr.views.layout").reconcile(session, { force = true })
+    return win
 end
 
 --- Opens `path` (from the pull request, so untrusted) in `win`, focused, at
@@ -35,6 +37,7 @@ function M.edit(session, win, path, line)
     end
     vim.api.nvim_set_current_win(win)
     vim.cmd.edit(vim.fn.fnameescape(full_path))
+    require("jpr").bind_session_keys(vim.api.nvim_win_get_buf(win))
     if line then
         local last_line = vim.api.nvim_buf_line_count(0)
         vim.api.nvim_win_set_cursor(win, { math.max(1, math.min(line, last_line)), 0 })

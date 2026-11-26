@@ -45,6 +45,7 @@ function M.apply(session, win)
     end
     local record = { buf = buf, mode = mode }
     session.diff.applied[win] = record
+    require("jpr").bind_buffer_keys(buf)
     vim.api.nvim_echo({ { ("jpr: Loading diff for %s..."):format(path), "JprMuted" } }, false, {})
     require("jpr.session").request(session, "fileDiff", { path = path }, function(diff)
         if not is_current(session, win, record) then
@@ -261,6 +262,7 @@ function M.reconcile(session)
             M.apply(session, win)
         elseif vim.bo[buf].buftype == "" and vim.api.nvim_buf_get_name(buf) ~= "" then
             require("jpr").bind_tab_aware_full_diff_key(buf)
+            require("jpr").bind_tab_aware_toggle_panel_key(buf)
         end
     end
 end
