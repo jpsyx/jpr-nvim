@@ -216,6 +216,13 @@ local function bind_action_keymaps(session, buf)
     vim.keymap.set("n", "?", function()
         require("jpr.views.cheatsheet").open()
     end, { buffer = buf, nowait = true, silent = true, desc = "Show Jpr keyboard shortcuts" })
+    local keys = require("jpr").config.keys or {}
+    if type(keys.full_diff) == "string" and keys.full_diff ~= "" then
+        vim.keymap.set("n", keys.full_diff, "<Plug>(jpr-full-diff)", { buffer = buf, remap = true, silent = true, nowait = true, desc = "Switch to the full branch diff view" })
+    end
+    if type(keys.toggle_viewed) == "string" and keys.toggle_viewed ~= "" and keys.toggle_viewed ~= "v" then
+        vim.keymap.set("n", keys.toggle_viewed, "<Plug>(jpr-toggle-viewed)", { buffer = buf, remap = true, silent = true, nowait = true, desc = "Toggle viewed for the file or directory under the cursor" })
+    end
 end
 
 --- Opens the panel on the left of the current tab for `session`.

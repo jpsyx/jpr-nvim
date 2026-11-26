@@ -106,6 +106,9 @@ local function validate_command_spec(command, command_index, seen_command_ids)
     if not M.is_non_blank_string(command.help) then
         return false, ("command %q: missing non-empty help"):format(command.id)
     end
+    if command.when ~= nil and type(command.when) ~= "function" then
+        return false, ("command %q: when predicate must be a function"):format(command.id)
+    end
     if command.steps == nil then
         return true, nil
     end
@@ -138,6 +141,22 @@ function M.validate_command_specs(commands)
         end
     end
     return true, nil
+end
+
+--- Returns the ordered subset of `commands` whose optional `when(context)`
+--- predicate is absent or evaluates to `true`.
+--- @param commands table[]
+--- @param context table|nil
+--- @return table[]
+function M.get_active_commands(commands, context)
+    local active_commands = {}
+    local current_context = context or {}
+    for _, command in ipairs(commands or {}) do
+        if command.when == nil or command.when(current_context) == true then
+            active_commands[#active_commands + 1] = command
+        end
+    end
+    return active_commands
 end
 
 --- Returns the ordered list of active steps for `command` given `answers` and `context`,

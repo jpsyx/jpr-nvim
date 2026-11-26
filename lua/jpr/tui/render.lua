@@ -155,7 +155,7 @@ end
 --- @return table { lines: string[], highlights: table[], cursor_line: integer, item_for_line: table<integer, integer> }
 function M.create_palette_layout_from_commands(commands, selected_index, max_width, context)
     local layout = { lines = {}, highlights = {}, cursor_line = 1, item_for_line = {} }
-    local command_list = commands or {}
+    local command_list = schema.get_active_commands(commands or {}, context)
     local width = math.max(1, tonumber(max_width) or 80)
     local has_session = (context and context.has_session) == true
     local is_git_repo = not (context and context.is_git_repo == false)

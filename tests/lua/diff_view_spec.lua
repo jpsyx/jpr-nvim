@@ -333,4 +333,95 @@ for _, mark in ipairs(vim.api.nvim_buf_get_extmarks(scratch, namespace, 0, -1, {
 end
 assert(vim.deep_equal(added_lines, { 0 }), "only line 1 is added: " .. vim.inspect(added_lines))
 
+-- gF returns to the full branch diff view from a changed file or unchanged worktree file,
+-- and gv toggles viewed in single-file editor view (advancing to the next unviewed file
+-- when marking viewed, or returning to full diff when all files are viewed, and staying
+-- in place when unmarking).
+dofile(root .. "/plugin/jpr.lua")
+local nav_set_viewed_file = vim.fn.tempname()
+vim.env.FAKE_ENGINE_SET_VIEWED_FILE = nav_set_viewed_file
+vim.fn.writefile({ "second file" }, worktree .. "/OTHER.md")
+vim.fn.writefile({ "helper" }, worktree .. "/helper.txt")
+session.start({ worktree = worktree, repo = "octo/widgets", number = 9 })
+local nav_review = session.current()
+assert(vim.wait(3000, function()
+    return nav_review.stream ~= nil and nav_review.stream.layout ~= nil
+end), "nav review syncs and opens stream")
+
+local two_file_view = {
+    pr = nav_review.view.pr,
+    files = {
+        { path = "README.md", additions = 2, deletions = 1, viewed = "UNVIEWED", threads = 0 },
+        { path = "OTHER.md", additions = 1, deletions = 0, viewed = "UNVIEWED", threads = 0 },
+    },
+    tree = {
+        { depth = 0, name = "OTHER.md", file = 1 },
+        { depth = 0, name = "README.md", file = 0 },
+    },
+    viewedCount = 0,
+    threadCount = 0,
+    draftCount = 0,
+    conversationCount = 0,
+    sync = { state = "synced", at = 1 },
+}
+nav_review.view = two_file_view
+local nav_main = main_window.find(nav_review)
+main_window.edit(nav_review, nav_main, "OTHER.md", 1)
+assert(vim.wait(3000, function()
+    local maps = vim.api.nvim_buf_get_keymap(vim.api.nvim_win_get_buf(nav_main), "n")
+    for _, mapping in ipairs(maps) do
+        if mapping.lhs == "gv" then
+            return true
+        end
+    end
+    return false
+end), "gv and gF are bound on changed file buffers")
+
+-- Marking OTHER.md viewed via gv advances the main window to README.md.
+local other_viewed = vim.deepcopy(two_file_view)
+other_viewed.files[2].viewed = "VIEWED"
+other_viewed.viewedCount = 1
+vim.fn.writefile({ vim.json.encode(other_viewed) }, nav_set_viewed_file)
+vim.api.nvim_set_current_win(nav_main)
+jpr.action("toggle_viewed")
+assert(vim.wait(3000, function()
+    return vim.fn.resolve(vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(nav_main)))
+        == vim.fn.resolve(worktree .. "/README.md")
+end), "gv on OTHER.md advances to next unviewed file README.md")
+
+-- Unmarking a viewed file stays in that file buffer.
+main_window.edit(nav_review, nav_main, "OTHER.md", 1)
+vim.fn.writefile({ vim.json.encode(two_file_view) }, nav_set_viewed_file)
+jpr.action("toggle_viewed")
+assert(vim.wait(3000, function()
+    return nav_review.view.viewedCount == 0
+end), "gv on viewed OTHER.md unmarks it")
+assert(
+    vim.fn.resolve(vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(nav_main)))
+        == vim.fn.resolve(worktree .. "/OTHER.md"),
+    "unmarking OTHER.md keeps focus on OTHER.md"
+)
+
+-- Opening an unchanged worktree file in the review tab still gets tab-aware gF.
+vim.cmd.edit(vim.fn.fnameescape(worktree .. "/helper.txt"))
+diff_view.reconcile(nav_review)
+local helper_has_gf = false
+for _, mapping in ipairs(vim.api.nvim_buf_get_keymap(vim.api.nvim_win_get_buf(nav_main), "n")) do
+    if mapping.lhs == "gF" then
+        helper_has_gf = true
+    end
+end
+assert(helper_has_gf, "unchanged worktree file in review tab gets tab-aware gF")
+
+-- gF (full_diff action) returns to and focuses the full branch diff view.
+jpr.action("full_diff")
+assert(vim.wait(3000, function()
+    return require("jpr.views.stream").is_visible(nav_review)
+        and vim.api.nvim_get_current_buf() == nav_review.stream.buffers.main
+end), "gF returns to and focuses the full branch diff stream")
+
+os.remove(nav_set_viewed_file)
+vim.env.FAKE_ENGINE_SET_VIEWED_FILE = nil
+session.close_current()
+
 print("diff_view_spec: ok")

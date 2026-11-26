@@ -99,8 +99,8 @@ function M.open_at(controller, commands, context, initial_index, preserved_origi
     controller.close()
     require("jpr").define_highlights()
 
-    local command_list = commands or {}
     local current_context = context or {}
+    local command_list = schema.get_active_commands(commands or {}, current_context)
     local clamped_index = math.max(1, math.min(tonumber(initial_index) or 1, math.max(1, #command_list)))
     local width = window.get_modal_width()
     local layout = render.create_palette_layout_from_commands(command_list, clamped_index, width, current_context)

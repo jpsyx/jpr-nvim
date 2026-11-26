@@ -304,4 +304,32 @@ assert(
     "toggle options match expected structure: " .. vim.inspect(toggle_options)
 )
 
+-- 8. command.when validation and get_active_commands filtering.
+assert_invalid({ { id = "stream", label = "Full Branch Diff", help = "Show stream.", when = "not-a-fn" } }, "when", "non-function command.when")
+local conditional_commands = {
+    { id = "open", label = "Open", help = "Open PR." },
+    {
+        id = "stream",
+        label = "Full Branch Diff",
+        help = "Return to full diff.",
+        when = function(context)
+            return not (context and context.is_stream_visible == true)
+        end,
+    },
+}
+assert(
+    vim.deep_equal(
+        vim.tbl_map(function(cmd) return cmd.id end, schema.get_active_commands(conditional_commands, { is_stream_visible = true })),
+        { "open" }
+    ),
+    "get_active_commands hides commands whose when(context) returns false"
+)
+assert(
+    vim.deep_equal(
+        vim.tbl_map(function(cmd) return cmd.id end, schema.get_active_commands(conditional_commands, { is_stream_visible = false })),
+        { "open", "stream" }
+    ),
+    "get_active_commands keeps commands whose when(context) returns true"
+)
+
 print("tui_schema_spec: ok")

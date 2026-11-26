@@ -156,6 +156,40 @@ local function attach_view_commands(session_mod, forget)
             require("jpr.views.stream").show(session, { focus = true })
         end)
     end
+
+    --- Toggles viewed on the current file or directory across the sidebar panel,
+    --- full diff stream, and single-file editor or split base buffers.
+    function session_mod.toggle_viewed_current()
+        return run_with_current(session_mod, function(session)
+            local buf = vim.api.nvim_get_current_buf()
+            if session.panel and buf == session.panel.buf then
+                return require("jpr.views.panel").toggle_viewed_under_cursor(session)
+            end
+            local stream_buffers = session.stream and session.stream.buffers
+            if stream_buffers and (buf == stream_buffers.main or buf == stream_buffers.left) then
+                return require("jpr.views.stream").toggle_viewed(session)
+            end
+            local path = vim.b[buf].jpr_base_path
+            if type(path) ~= "string" or path == "" then
+                path = require("jpr.views.diff").buffer_to_changed_path(session, buf)
+            end
+            if not path then
+                return jpr().error("move to a changed file, directory, or the full diff view to toggle viewed")
+            end
+            local viewed
+            for _, file in ipairs((session.view and session.view.files) or {}) do
+                if file.path == path then
+                    viewed = file.viewed
+                end
+            end
+            local target_viewed = viewed ~= "VIEWED"
+            session_mod.request(session, "setViewed", { path = path, viewed = target_viewed }, function(updated_view)
+                if target_viewed then
+                    require("jpr.views.panel").advance_after_viewed(session, updated_view, { path }, { focus_next = true })
+                end
+            end)
+        end)
+    end
 end
 
 --- Attaches sync, push, close, view-toggle, stream, and coding-agent command

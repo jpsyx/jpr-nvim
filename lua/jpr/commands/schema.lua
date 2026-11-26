@@ -7,6 +7,7 @@ local M = {}
 --- Add a row to accept another typed name without a palette entry or a
 --- completion candidate. Keys are the alias; values are canonical command ids.
 local COMMAND_ALIASES = {
+    full = "stream",
     review = "open",
     self = "local",
 }
@@ -348,6 +349,21 @@ local function create_local_command_spec()
     }
 end
 
+local function create_stream_command_spec()
+    return {
+        id = "stream",
+        label = "Full Branch Diff",
+        help = "Return to the full branch diff view showing all changed files in a continuous scroll.",
+        requires_session = true,
+        when = function(context)
+            return not (context and context.is_stream_visible == true)
+        end,
+        execute = function()
+            session_module().stream_current()
+        end,
+    }
+end
+
 --- Builds the ordered list of declarative specs for all 16 `:Jpr` subcommands.
 --- @return table[]
 function M.create_command_specs()
@@ -356,7 +372,7 @@ function M.create_command_specs()
         create_local_command_spec(),
         create_session_action_spec("sync", "Sync with GitHub", "Sync with GitHub (or detect and link an open PR when reviewing locally).", "sync_current"),
         create_toggle_command_spec(),
-        create_session_action_spec("stream", "Open Stream View", "View all changed files stacked continuously in a single scrollable diff stream.", "stream_current"),
+        create_stream_command_spec(),
         create_comment_command_spec(),
         create_session_action_spec("suggest", "Suggest Code Change", "Draft a review comment pre-filled with a GitHub suggestion block for the current line.", "suggest_current"),
         create_session_action_spec("expand", "Expand Inline Threads", "Toggle inline expansion of review threads across diff and stream buffers.", "expand_current"),

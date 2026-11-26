@@ -10,16 +10,19 @@ assert(
     vim.deep_equal(
         commands_schema.list_command_aliases(),
         {
+            { alias = "full", command_id = "stream" },
             { alias = "review", command_id = "open" },
             { alias = "self", command_id = "local" },
         }
     ),
-    "review and self are the configured aliases: " .. vim.inspect(commands_schema.list_command_aliases())
+    "full, review, and self are the configured aliases: " .. vim.inspect(commands_schema.list_command_aliases())
 )
+assert(commands_schema.resolve_command_id("full") == "stream", "full resolves to stream")
 assert(commands_schema.resolve_command_id("review") == "open", "review resolves to open")
 assert(commands_schema.resolve_command_id("self") == "local", "self resolves to local")
 assert(commands_schema.resolve_command_id("open") == "open", "a canonical id resolves to itself")
 assert(commands_schema.resolve_command_id("frobnicate") == nil, "an unknown name does not resolve")
+assert(not vim.tbl_contains(commands_schema.list_command_ids(), "full"), "full is not a command id")
 assert(not vim.tbl_contains(commands_schema.list_command_ids(), "review"), "review is not a command id")
 assert(not vim.tbl_contains(commands_schema.list_command_ids(), "self"), "self is not a command id")
 
@@ -66,6 +69,7 @@ assert(vim.deep_equal(jpr.complete("", "Jpr toggle split "), {}), "no completion
 assert(vim.deep_equal(jpr.complete("", "1,2 Jpr toggle "), { "unified", "split" }), "spaced range toggle completions")
 assert(vim.deep_equal(jpr.complete("s", "1,2 Jpr toggle s"), { "split" }), "spaced range filtered toggle completion")
 assert(vim.deep_equal(jpr.complete("c", "'<,'> Jpr c"), { "comment", "conversation", "close" }), "spaced visual range subcommands")
+assert(vim.deep_equal(jpr.complete("f", "Jpr f"), {}), "full alias is not offered by completion")
 assert(vim.deep_equal(jpr.complete("re", "Jpr re"), {}), "review alias is not offered by completion")
 assert(vim.deep_equal(jpr.complete("r", "Jpr r"), {}), "review alias is not offered by a shorter prefix")
 
@@ -101,12 +105,15 @@ for _, plug in ipairs({
     "<Plug>(jpr-comment)",
     "<Plug>(jpr-suggest-comment)",
     "<Plug>(jpr-file-comment)",
+    "<Plug>(jpr-full-diff)",
+    "<Plug>(jpr-toggle-viewed)",
     "<Plug>(jpr-thread-popup)",
     "<Plug>(jpr-next-thread)",
     "<Plug>(jpr-prev-thread)",
 }) do
     assert(vim.fn.maparg(plug, "n", false, true).lhs == plug, plug .. " exists in normal mode")
 end
+assert(vim.fn.maparg("<Plug>(jpr-toggle-viewed)", "x", false, true).lhs == nil, "toggle-viewed is Normal-mode only")
 for _, plug in ipairs({ "<Plug>(jpr-comment)", "<Plug>(jpr-suggest-comment)" }) do
     assert(vim.fn.maparg(plug, "x", false, true).lhs == plug, plug .. " exists in visual mode")
 end
@@ -153,6 +160,8 @@ assert(vim.fn.maparg("<Plug>(jpr-comment)", "n", false, true).lhs == "<Plug>(jpr
 assert(buf_has_map(key_buf, "n", "gC") and buf_has_map(key_buf, "x", "gC"), "gC bound in n and x")
 assert(buf_map(key_buf, "n", "gC").nowait == 1, "buffer keys use nowait")
 assert(buf_has_map(key_buf, "n", "gf"), "gf bound in n")
+assert(buf_has_map(key_buf, "n", "gF"), "gF bound in n")
+assert(buf_has_map(key_buf, "n", "gv") and not buf_has_map(key_buf, "x", "gv"), "gv bound in n only")
 assert(buf_has_map(key_buf, "n", "gt"), "gt bound in n")
 assert(buf_has_map(key_buf, "n", "]t"), "]t bound in n")
 assert(buf_has_map(key_buf, "n", "[t"), "[t bound in n")
