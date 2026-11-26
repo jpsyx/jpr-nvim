@@ -231,14 +231,14 @@ local function count_non_floating_windows(tab)
     if not tab or not vim.api.nvim_tabpage_is_valid(tab) then
         return 0
     end
-    local count = 0
+    local window_count = 0
     for _, win in ipairs(vim.api.nvim_tabpage_list_wins(tab)) do
         local win_config = vim.api.nvim_win_get_config(win)
         if not win_config.relative or win_config.relative == "" then
-            count = count + 1
+            window_count = window_count + 1
         end
     end
-    return count
+    return window_count
 end
 
 --- Returns whether `session`'s diff sidebar panel window is currently open.

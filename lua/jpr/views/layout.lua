@@ -37,10 +37,10 @@ function M.compute_layout_widths(state)
     local agent_target = math.max(MIN_SIDE_WIDTH, math.floor(tonumber(state.agent_width) or 60))
 
     if state.has_panel and state.has_editor and state.has_agent then
-        local panel_w, agent_w = clamp_side_pair(panel_target, agent_target, total_columns)
+        local panel_width, agent_width = clamp_side_pair(panel_target, agent_target, total_columns)
         return {
-            panel_width = panel_w,
-            agent_width = agent_w,
+            panel_width = panel_width,
+            agent_width = agent_width,
             panel_fixwidth = true,
             agent_fixwidth = true,
         }

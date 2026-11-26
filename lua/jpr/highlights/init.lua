@@ -130,16 +130,20 @@ end
 --- terminals running without `termguicolors`.
 function M.rgb_to_cterm256(rgb)
     local red, green, blue = rgb_to_channels(rgb)
-    local cube_r, cube_g, cube_b = nearest_cube_index(red), nearest_cube_index(green), nearest_cube_index(blue)
-    local cr, cg, cb = XTERM_CUBE_LEVELS[cube_r + 1], XTERM_CUBE_LEVELS[cube_g + 1], XTERM_CUBE_LEVELS[cube_b + 1]
-    local cube_dist = (red - cr) ^ 2 + (green - cg) ^ 2 + (blue - cb) ^ 2
-    local cube_code = 16 + 36 * cube_r + 6 * cube_g + cube_b
+    local cube_red_index = nearest_cube_index(red)
+    local cube_green_index = nearest_cube_index(green)
+    local cube_blue_index = nearest_cube_index(blue)
+    local cube_red = XTERM_CUBE_LEVELS[cube_red_index + 1]
+    local cube_green = XTERM_CUBE_LEVELS[cube_green_index + 1]
+    local cube_blue = XTERM_CUBE_LEVELS[cube_blue_index + 1]
+    local cube_distance = (red - cube_red) ^ 2 + (green - cube_green) ^ 2 + (blue - cube_blue) ^ 2
+    local cube_code = 16 + 36 * cube_red_index + 6 * cube_green_index + cube_blue_index
 
     local average = (red + green + blue) / 3
     local grey_step = math.max(0, math.min(23, math.floor((average - 8) / 10 + 0.5)))
     local grey_level = 8 + 10 * grey_step
-    local grey_dist = (red - grey_level) ^ 2 + (green - grey_level) ^ 2 + (blue - grey_level) ^ 2
-    return grey_dist < cube_dist and (232 + grey_step) or cube_code
+    local grey_distance = (red - grey_level) ^ 2 + (green - grey_level) ^ 2 + (blue - grey_level) ^ 2
+    return grey_distance < cube_distance and (232 + grey_step) or cube_code
 end
 
 --- Blends 24-bit `base_rgb` toward `tint_rgb` by `alpha`, returning a 24-bit RGB

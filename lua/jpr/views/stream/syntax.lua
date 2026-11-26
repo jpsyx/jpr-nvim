@@ -270,16 +270,16 @@ local function highlight_fallback_subgroup(buf, rows, language)
     for index, entry in ipairs(rows) do
         source_lines[index] = entry.text
     end
-    local dedented, stripped = M.dedent_lines(source_lines)
+    local dedented, stripped_bytes = M.dedent_lines(source_lines)
     local spans_by_line = M.collect_line_spans(dedented, language)
     for row_index, entry in ipairs(rows) do
         local spans = spans_by_line[row_index]
         if spans and #spans > 0 then
-            apply_row_spans(buf, entry, spans, stripped)
+            apply_row_spans(buf, entry, spans, stripped_bytes)
         elseif entry.text:match("%S") ~= nil then
-            local single_dedented, single_stripped = M.dedent_lines({ entry.text })
+            local single_dedented, single_stripped_bytes = M.dedent_lines({ entry.text })
             local recovered = M.collect_line_spans(single_dedented, language)
-            apply_row_spans(buf, entry, recovered[1], single_stripped)
+            apply_row_spans(buf, entry, recovered[1], single_stripped_bytes)
         end
     end
 end
