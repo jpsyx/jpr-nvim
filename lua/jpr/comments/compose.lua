@@ -2,6 +2,8 @@
 -- suggestion blocks. `<C-s>` submits; `q` / `<Esc>` cancels; `<C-g>s` inserts
 -- a suggestion fence pre-filled with the anchored lines.
 local mentions = require("jpr.comments.mentions")
+local render_threads = require("jpr.render.threads")
+local reply_history = require("jpr.comments.reply_history")
 
 local M = {}
 
@@ -13,7 +15,16 @@ local function next_request_id(session)
     return session.compose_request_id
 end
 
---- Closes the active floating compose buffer for `session`, if any.
+local function close_window_and_buffer(win, buf)
+    if win and vim.api.nvim_win_is_valid(win) then
+        pcall(vim.api.nvim_win_close, win, true)
+    end
+    if buf and vim.api.nvim_buf_is_valid(buf) then
+        pcall(vim.api.nvim_buf_delete, buf, { force = true })
+    end
+end
+
+--- Closes the active floating compose buffer (and any docked history pane) for `session`.
 function M.close(session)
     if not session then
         return
@@ -24,12 +35,8 @@ function M.close(session)
         return
     end
     session.compose = nil
-    if compose.win and vim.api.nvim_win_is_valid(compose.win) then
-        pcall(vim.api.nvim_win_close, compose.win, true)
-    end
-    if compose.buf and vim.api.nvim_buf_is_valid(compose.buf) then
-        pcall(vim.api.nvim_buf_delete, compose.buf, { force = true })
-    end
+    close_window_and_buffer(compose.win, compose.buf)
+    close_window_and_buffer(compose.history_win, compose.history_buf)
 end
 
 local function buffer_body(buf)
@@ -105,7 +112,7 @@ local function is_local_only_anchor(session, anchor)
     return false
 end
 
-local function build_footer(allow_destination_toggle, is_local_only, is_unlinked_local)
+local function build_footer(allow_destination_toggle, is_local_only, is_unlinked_local, has_history)
     if is_unlinked_local then
         return " <C-s> save · local review (no linked PR) · q cancel "
     end
@@ -114,6 +121,9 @@ local function build_footer(allow_destination_toggle, is_local_only, is_unlinked
     end
     if allow_destination_toggle then
         return " <C-s> save · <C-g> flip dest · <M-s> other dest · <C-g>s suggest · q cancel "
+    end
+    if has_history then
+        return " <C-s> save · <Tab> thread · <C-g>s suggest · @ mention · q cancel "
     end
     return " <C-s> save · <C-g>s suggest · @ mention · q cancel "
 end
@@ -146,10 +156,8 @@ local function flip_destination(session, compose)
     })
 end
 
-local function bind_compose_keys(session, compose, opts)
-    local buf = compose.buf
-    local initial_text = opts.initial_text or ""
-    local cancel = function()
+local function create_cancel_handler(session, buf, initial_text)
+    return function()
         if vim.api.nvim_buf_is_valid(buf) and buffer_body(buf) ~= initial_text then
             if vim.fn.confirm("Discard unsaved comment text?", "&Discard\n&Keep editing", 2) ~= 1 then
                 return
@@ -157,9 +165,11 @@ local function bind_compose_keys(session, compose, opts)
         end
         M.close(session)
     end
-    vim.keymap.set({ "n", "i" }, "<C-s>", function()
-        submit_compose(session, buf, opts.on_submit, compose.origin)
-    end, { buffer = buf, silent = true, desc = "Save comment" })
+end
+
+local function bind_compose_keys(session, compose, opts, on_cancel, on_submit)
+    local buf = compose.buf
+    vim.keymap.set({ "n", "i" }, "<C-s>", on_submit, { buffer = buf, silent = true, desc = "Save comment" })
     if opts.allow_destination_toggle then
         vim.keymap.set({ "n", "i" }, "<M-s>", function()
             submit_compose(session, buf, opts.on_submit, alternate_origin(compose.origin))
@@ -171,11 +181,68 @@ local function bind_compose_keys(session, compose, opts)
             flip_destination(session, compose)
         end, { buffer = buf, silent = true, desc = "Flip comment destination" })
     end
-    vim.keymap.set("n", "q", cancel, { buffer = buf, nowait = true, silent = true, desc = "Cancel comment" })
-    vim.keymap.set("n", "<Esc>", cancel, { buffer = buf, nowait = true, silent = true, desc = "Cancel comment" })
+    vim.keymap.set("n", "q", on_cancel, { buffer = buf, nowait = true, silent = true, desc = "Cancel comment" })
+    vim.keymap.set("n", "<Esc>", on_cancel, { buffer = buf, nowait = true, silent = true, desc = "Cancel comment" })
     vim.keymap.set("i", "<C-g>s", function()
         insert_suggestion_fence(session, buf, opts.anchor)
     end, { buffer = buf, nowait = true, silent = true, desc = "Insert GitHub suggestion block" })
+end
+
+local function register_wipeout_guard(session, compose, wiped_buf)
+    vim.api.nvim_create_autocmd("BufWipeout", {
+        buffer = wiped_buf,
+        once = true,
+        callback = function()
+            if session.compose ~= compose then
+                return
+            end
+            session.compose = nil
+            if wiped_buf ~= compose.buf then
+                close_window_and_buffer(compose.win, compose.buf)
+            end
+            if wiped_buf ~= compose.history_buf then
+                close_window_and_buffer(compose.history_win, compose.history_buf)
+            end
+        end,
+    })
+end
+
+local function resolve_editor_geometry(history_thread)
+    local has_history = type(history_thread) == "table" and #(history_thread.messages or {}) > 0
+    if has_history then
+        local layout = render_threads.create_popup_layout_from_threads({ history_thread }, { include_footer = false })
+        return reply_history.compute_stacked_geometry(vim.o.lines, vim.o.columns, #layout.lines), true
+    end
+    local width = math.min(86, math.max(54, vim.o.columns - 12))
+    local height = 12
+    return {
+        width = width,
+        col = math.max(2, math.floor((vim.o.columns - width) / 2)),
+        reply_row = math.max(1, math.floor((vim.o.lines - height) / 2) - 1),
+        reply_height = height,
+    }, false
+end
+
+local function attach_docked_history(session, compose, thread, geometry, on_cancel, on_submit)
+    local history = reply_history.open(thread, geometry, {
+        on_focus_reply = function()
+            if vim.api.nvim_win_is_valid(compose.win) then
+                vim.api.nvim_set_current_win(compose.win)
+            end
+        end,
+        on_cancel = on_cancel,
+        on_submit = on_submit,
+    })
+    compose.history_buf = history.buf
+    compose.history_win = history.win
+    local focus_history = function()
+        if vim.api.nvim_win_is_valid(history.win) then
+            vim.api.nvim_set_current_win(history.win)
+        end
+    end
+    vim.keymap.set("n", "<Tab>", focus_history, { buffer = compose.buf, nowait = true, silent = true, desc = "Focus thread history" })
+    vim.keymap.set("n", "<C-w>k", focus_history, { buffer = compose.buf, nowait = true, silent = true, desc = "Focus thread history" })
+    register_wipeout_guard(session, compose, history.buf)
 end
 
 local function open_editor(session, opts)
@@ -189,35 +256,33 @@ local function open_editor(session, opts)
     vim.bo[buf].filetype = "markdown"
     local initial_text = opts.initial_text or ""
     vim.api.nvim_buf_set_lines(buf, 0, -1, false, vim.split(initial_text, "\n", { plain = true }))
-    local width = math.min(86, math.max(54, vim.o.columns - 12))
-    local height = 12
+    local geometry, has_history = resolve_editor_geometry(opts.history_thread)
     local win = vim.api.nvim_open_win(buf, true, {
         relative = "editor",
-        row = math.max(1, math.floor((vim.o.lines - height) / 2) - 1),
-        col = math.max(2, math.floor((vim.o.columns - width) / 2)),
-        width = width,
-        height = height,
+        row = geometry.reply_row,
+        col = geometry.col,
+        width = geometry.width,
+        height = geometry.reply_height,
         style = "minimal",
         border = "rounded",
         title = " " .. opts.title .. " ",
         title_pos = "center",
-        footer = build_footer(opts.allow_destination_toggle, opts.is_local_only, opts.is_unlinked_local),
+        footer = build_footer(opts.allow_destination_toggle, opts.is_local_only, opts.is_unlinked_local, has_history),
         footer_pos = "center",
     })
     vim.api.nvim_set_option_value("wrap", true, { win = win, scope = "local" })
     local compose = { buf = buf, win = win, origin = opts.origin, anchor = opts.anchor }
     session.compose = compose
-    vim.api.nvim_create_autocmd("BufWipeout", {
-        buffer = buf,
-        once = true,
-        callback = function()
-            if session.compose == compose then
-                session.compose = nil
-            end
-        end,
-    })
+    local on_cancel = create_cancel_handler(session, buf, initial_text)
+    local on_submit = function()
+        submit_compose(session, buf, opts.on_submit, compose.origin)
+    end
+    register_wipeout_guard(session, compose, buf)
     mentions.attach(session, buf)
-    bind_compose_keys(session, compose, opts)
+    bind_compose_keys(session, compose, opts, on_cancel, on_submit)
+    if has_history then
+        attach_docked_history(session, compose, opts.history_thread, geometry, on_cancel, on_submit)
+    end
     return buf
 end
 
@@ -304,6 +369,7 @@ function M.open_reply(session, thread)
             title = badge .. " Reply",
             initial_text = initial_text,
             anchor = thread.anchor,
+            history_thread = thread,
             allow_destination_toggle = false,
             on_submit = function(body)
                 submit_with_draft_recovery(session, "reply", { threadId = thread_id, body = body }, function()
