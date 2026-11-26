@@ -198,7 +198,7 @@ function M.create_text_window(title, footer, initial_text, virt_lines, width)
     return buf, win
 end
 
-local function compute_palette_stack_geometry(results_line_count, width)
+local function create_palette_stack_geometry(results_line_count, width)
     local max_results_height = math.max(1, vim.o.lines - PROMPT_OUTER_HEIGHT - 4)
     local floor_height = math.min(6, max_results_height)
     local results_height = math.min(math.max(floor_height, tonumber(results_line_count) or floor_height), max_results_height)
@@ -260,7 +260,7 @@ end
 --- @param width integer
 --- @return integer prompt_buf, integer prompt_win, integer results_buf, integer results_win
 function M.create_palette_windows(title, layout, width)
-    local geometry = compute_palette_stack_geometry(#layout.lines, width)
+    local geometry = create_palette_stack_geometry(#layout.lines, width)
 
     local results_buf = vim.api.nvim_create_buf(false, true)
     vim.bo[results_buf].buftype = "nofile"
@@ -305,7 +305,7 @@ function M.paint_palette_results(results_buf, results_win, prompt_win, layout, w
         return
     end
     apply_layout_to_buffer(results_buf, layout)
-    local geometry = compute_palette_stack_geometry(#layout.lines, width)
+    local geometry = create_palette_stack_geometry(#layout.lines, width)
     if prompt_win and vim.api.nvim_win_is_valid(prompt_win) then
         pcall(vim.api.nvim_win_set_config, prompt_win, {
             relative = "editor",

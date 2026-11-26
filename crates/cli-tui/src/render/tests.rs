@@ -92,16 +92,16 @@ fn render_palette_shows_filter_prompt_labels_ids_and_hover_only_help() {
         )
     );
 
-    for ch in "chk".chars() {
-        let _ = state.handle_key(KeyAction::Char(ch), &commands);
+    for character in "chk".chars() {
+        let _ = state.handle_key(KeyAction::Char(character), &commands);
     }
     let filtered_frame = render_palette("jpr-review Commands", &commands, &state, 80, false);
     assert!(filtered_frame.contains("> chk"));
     assert!(filtered_frame.contains("▸ Check Out Pull Request  [checkout]"));
     assert!(!filtered_frame.contains("List Open Pull Requests"));
 
-    for ch in "zzz".chars() {
-        let _ = state.handle_key(KeyAction::Char(ch), &commands);
+    for character in "zzz".chars() {
+        let _ = state.handle_key(KeyAction::Char(character), &commands);
     }
     let no_match_frame = render_palette("jpr-review Commands", &commands, &state, 80, false);
     assert!(no_match_frame.contains("(no matching commands)"));

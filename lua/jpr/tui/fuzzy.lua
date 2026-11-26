@@ -15,8 +15,8 @@ local function is_blank(text)
     return type(text) ~= "string" or text:match("%S") == nil
 end
 
-local function find_byte_index(haystack, target_byte, start_index, haystack_len)
-    for candidate_index = start_index, haystack_len do
+local function find_byte_index(haystack, target_byte, start_index, haystack_length)
+    for candidate_index = start_index, haystack_length do
         if haystack:byte(candidate_index) == target_byte then
             return candidate_index
         end
@@ -24,7 +24,7 @@ local function find_byte_index(haystack, target_byte, start_index, haystack_len)
     return nil
 end
 
-local function compute_char_score(haystack, matched_index, previous_match_index)
+local function score_matched_character(haystack, matched_index, previous_match_index)
     local delta = BASE_MATCH_SCORE
     if matched_index == 1 then
         return delta + START_OF_TEXT_BONUS
@@ -56,9 +56,9 @@ function M.score_match(query, candidate)
 
     local needle = string.lower(query)
     local haystack = string.lower(candidate)
-    local needle_len = #needle
-    local haystack_len = #haystack
-    if needle_len > haystack_len then
+    local needle_length = #needle
+    local haystack_length = #haystack
+    if needle_length > haystack_length then
         return nil
     end
 
@@ -66,12 +66,12 @@ function M.score_match(query, candidate)
     local search_start = 1
     local previous_match_index = nil
 
-    for query_index = 1, needle_len do
-        local matched_index = find_byte_index(haystack, needle:byte(query_index), search_start, haystack_len)
+    for query_index = 1, needle_length do
+        local matched_index = find_byte_index(haystack, needle:byte(query_index), search_start, haystack_length)
         if matched_index == nil then
             return nil
         end
-        total_score = total_score + compute_char_score(haystack, matched_index, previous_match_index)
+        total_score = total_score + score_matched_character(haystack, matched_index, previous_match_index)
         previous_match_index = matched_index
         search_start = matched_index + 1
     end

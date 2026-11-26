@@ -224,9 +224,9 @@ mod tests {
         let commands = sample_commands();
         let mut palette = PaletteState::new();
 
-        for ch in "thr".chars() {
+        for character in "thr".chars() {
             assert_eq!(
-                palette.handle_key(KeyAction::Char(ch), &commands),
+                palette.handle_key(KeyAction::Char(character), &commands),
                 PaletteAction::Continue
             );
         }
@@ -279,8 +279,8 @@ mod tests {
         );
 
         let mut unmatched = PaletteState::new();
-        for ch in "zzzz".chars() {
-            let _ = unmatched.handle_key(KeyAction::Char(ch), &commands);
+        for character in "zzzz".chars() {
+            let _ = unmatched.handle_key(KeyAction::Char(character), &commands);
         }
         assert_eq!(
             unmatched.handle_key(KeyAction::Confirm, &commands),

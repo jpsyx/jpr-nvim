@@ -165,7 +165,7 @@ local function create_palette_actions(controller, state)
     }
 end
 
-local function bind_normal_palette_keys(buf, actions, close_fn)
+local function bind_normal_palette_keys(buf, actions, on_close)
     local map = function(lhs, handler)
         vim.keymap.set("n", lhs, handler, { buffer = buf, nowait = true, silent = true })
     end
@@ -178,7 +178,7 @@ local function bind_normal_palette_keys(buf, actions, close_fn)
     if actions.go_back then
         for _, lhs in ipairs({ "h", "<Left>", "<S-Tab>" }) do map(lhs, actions.go_back) end
     end
-    for _, lhs in ipairs({ "q", "<Esc>" }) do map(lhs, close_fn) end
+    for _, lhs in ipairs({ "q", "<Esc>" }) do map(lhs, on_close) end
 end
 
 local function bind_insert_palette_keys(prompt_buf, actions)
@@ -214,6 +214,21 @@ local function register_prompt_filter_autocmds(controller, state)
     })
 end
 
+local function create_palette_state(command_list, clamped_index, layout, current_context, origin_win)
+    return {
+        kind = "palette",
+        all_commands = command_list,
+        commands = command_list,
+        query = "",
+        context = current_context,
+        selected_index = clamped_index,
+        layout = layout,
+        origin_win = origin_win,
+        is_painting = true,
+        is_normalizing_prompt = false,
+    }
+end
+
 --- Opens the filterable floating command palette at `initial_index`, preserving `preserved_origin_win` when given.
 --- @param controller table
 --- @param commands table[]
@@ -234,18 +249,7 @@ function M.open_at(controller, commands, context, initial_index, preserved_origi
             and current_context.title
         or " Jpr Commands "
 
-    local state = {
-        kind = "palette",
-        all_commands = command_list,
-        commands = command_list,
-        query = "",
-        context = current_context,
-        selected_index = clamped_index,
-        layout = layout,
-        origin_win = origin_win,
-        is_painting = true,
-        is_normalizing_prompt = false,
-    }
+    local state = create_palette_state(command_list, clamped_index, layout, current_context, origin_win)
     state.prompt_buf, state.prompt_win, state.buf, state.win = window.create_palette_windows(title, layout, width)
     controller.set_active_state(state)
     state.is_painting = false

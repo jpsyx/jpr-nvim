@@ -27,8 +27,8 @@ fn compute_char_score(
     if is_word_separator(haystack[matched_index - 1]) {
         delta += WORD_BOUNDARY_BONUS;
     }
-    if let Some(prev_index) = previous_match_index {
-        let gap = i64::try_from(matched_index - prev_index - 1).unwrap_or(i64::MAX);
+    if let Some(previous_index) = previous_match_index {
+        let gap = i64::try_from(matched_index - previous_index - 1).unwrap_or(i64::MAX);
         delta = delta.saturating_sub(gap);
     }
     delta
