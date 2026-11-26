@@ -1,5 +1,6 @@
 -- Reusable centered floating confirmation modal supporting Neovim keyboard
 -- controls and `<LeftMouse>` selection.
+local mouse = require("jpr.mouse")
 local render = require("jpr.tui.render")
 local window = require("jpr.tui.wizard.window")
 
@@ -10,6 +11,10 @@ local UNSELECTED_PREFIX = "  "
 local HELP_INDENT = "    "
 local ITEM_PREFIX = "  • "
 local MODAL_FOOTER = "[j/k] move  [Enter/Click] select  [q/Esc] cancel"
+local MODAL_FOOTER_SPECS = {
+    { token = "[Enter/Click] select", action = "confirm" },
+    { token = "[q/Esc] cancel", action = "cancel" },
+}
 
 local function append_highlight(highlights, line_index, col_start, col_end, group)
     if group and col_end > col_start then
@@ -136,6 +141,27 @@ local function activate_selected(state)
     end
 end
 
+local function handle_confirm_click(state)
+    local click = mouse.get_click()
+    if not click then
+        return
+    end
+    if not mouse.is_click_in_window(click, state.win) then
+        return settle(state, "cancel")
+    end
+    local clicked_index = state.layout and state.layout.item_for_line[click.line]
+    if clicked_index ~= nil then
+        state.selected_index = clicked_index
+        return activate_selected(state)
+    end
+    local action = mouse.hit_test_footer_line(state.layout and state.layout.lines, MODAL_FOOTER_SPECS, click)
+    if action == "confirm" then
+        activate_selected(state)
+    elseif action == "cancel" then
+        settle(state, "cancel")
+    end
+end
+
 local function bind_modal_keys(state)
     local map = function(lhs, handler)
         vim.keymap.set("n", lhs, handler, { buffer = state.buf, nowait = true, silent = true })
@@ -144,24 +170,13 @@ local function bind_modal_keys(state)
         state.selected_index = ((target_index - 1) % 2) + 1
         paint_modal(state)
     end
-    local handle_click = function()
-        local mouse = vim.fn.getmousepos()
-        if type(mouse) ~= "table" or mouse.winid ~= state.win then
-            return
-        end
-        local clicked_index = state.layout and state.layout.item_for_line[mouse.line]
-        if clicked_index ~= nil then
-            state.selected_index = clicked_index
-            activate_selected(state)
-        end
-    end
     for _, lhs in ipairs({ "j", "<Down>" }) do map(lhs, function() move_to(state.selected_index + 1) end) end
     for _, lhs in ipairs({ "k", "<Up>" }) do map(lhs, function() move_to(state.selected_index - 1) end) end
     for _, lhs in ipairs({ "gg", "<Home>" }) do map(lhs, function() move_to(1) end) end
     for _, lhs in ipairs({ "G", "<End>" }) do map(lhs, function() move_to(2) end) end
     for _, lhs in ipairs({ "<CR>", "l", "<Right>", "<Tab>" }) do map(lhs, function() activate_selected(state) end) end
     for _, lhs in ipairs({ "q", "<Esc>" }) do map(lhs, function() settle(state, "cancel") end) end
-    map("<LeftMouse>", handle_click)
+    map("<LeftMouse>", function() handle_confirm_click(state) end)
 end
 
 local function register_modal_autocmds(state)

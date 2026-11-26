@@ -114,6 +114,8 @@ local EXPECTED_DEFAULT_ITEMS = {
     "l/<Right>/<Tab>/<CR>",
     "h/<Left>/<S-Tab>",
     "gg / G",
+    "<LeftMouse>",
+    "<2-LeftMouse>",
 }
 
 local function test_default_layout_contains_all_sections_and_real_keybindings()
@@ -293,11 +295,31 @@ local function test_question_mark_opens_cheatsheet_in_ui_buffers_only()
     jpr.setup({})
 end
 
+local function test_cheatsheet_mouse_outside_click_closes_and_inside_stays_open()
+    local original_getmousepos = vim.fn.getmousepos
+    local is_ok, test_error = pcall(function()
+        cheatsheet.open()
+        assert(cheatsheet.is_open() == true, "cheatsheet opens for mouse test")
+        local cheatsheet_win = vim.api.nvim_get_current_win()
+        vim.fn.getmousepos = function() return { winid = cheatsheet_win, line = 2, column = 3 } end
+        press_normal_key("<LeftMouse>")
+        assert(cheatsheet.is_open() == true, "clicking inside cheatsheet keeps it open")
+
+        vim.fn.getmousepos = function() return { winid = 999999, line = 1, column = 1 } end
+        press_normal_key("<LeftMouse>")
+        assert(cheatsheet.is_open() == false, "clicking outside cheatsheet closes it")
+    end)
+    vim.fn.getmousepos = original_getmousepos
+    cheatsheet.close()
+    assert(is_ok, tostring(test_error))
+end
+
 test_default_layout_contains_all_sections_and_real_keybindings()
 test_custom_and_disabled_keys_render_dynamically()
 test_open_idempotency_window_properties_and_close_keys()
 test_palette_launches_keyboard_shortcuts_command()
 test_jpr_keys_command_opens_cheatsheet_without_session_and_rejects_extra_args()
 test_question_mark_opens_cheatsheet_in_ui_buffers_only()
+test_cheatsheet_mouse_outside_click_closes_and_inside_stays_open()
 
 print("cheatsheet_spec: ok")

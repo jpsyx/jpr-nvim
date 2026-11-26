@@ -2,12 +2,25 @@
 -- comments (`anchor.kind == "pr"`) in the main window beside the panel.
 local diff_view = require("jpr.views.diff")
 local main_window = require("jpr.views.main_window")
+local mouse = require("jpr.mouse")
 local render = require("jpr.render.threads")
 local stream_view = require("jpr.views.stream")
 
 local M = {}
 
 local namespace = vim.api.nvim_create_namespace("jpr-conversation")
+
+local CONVERSATION_FOOTER_SPECS = {
+    { token = "[c]omment", action = "comment" },
+    { token = "[r]eply", action = "reply" },
+    { token = "[e]dit", action = "edit" },
+    { token = "[d]elete", action = "delete" },
+    { token = "[p]romote", action = "promote" },
+    { token = "[s]end", action = "send" },
+    { token = "[+]react", action = "react" },
+    { token = "[X]retry", action = "retry" },
+    { token = "[q]uit", action = "close" },
+}
 
 local function filter_pr_threads(threads)
     return vim.tbl_filter(function(thread)
@@ -235,6 +248,46 @@ local function retry_comment(session)
     require("jpr.session").request(session, "retryMessage", { messageId = entry.message_id }, function() end)
 end
 
+local CONVERSATION_FOOTER_HANDLERS = {
+    comment = function(session)
+        require("jpr.comments.compose").open_new(session, { kind = "pr", side = "RIGHT" })
+    end,
+    reply = reply_to_comment,
+    edit = open_edit_comment,
+    delete = delete_comment,
+    promote = promote_comment_thread,
+    send = send_comment_thread,
+    react = react_to_comment,
+    retry = retry_comment,
+    close = function(session) M.close(session) end,
+}
+
+local function handle_conversation_click(session)
+    local state = session and session.conversation
+    local click = mouse.get_click()
+    if not state or not click then
+        return
+    end
+    local is_in_conversation = click.winid ~= nil
+        and vim.api.nvim_win_is_valid(click.winid)
+        and vim.api.nvim_win_get_buf(click.winid) == state.buf
+        and type(click.line) == "number"
+        and click.line >= 1
+    if not is_in_conversation then
+        return mouse.passthrough("<LeftMouse>")
+    end
+    local lines = state.layout and state.layout.lines or {}
+    if click.line == #lines then
+        local action = mouse.hit_test_footer_line(lines, CONVERSATION_FOOTER_SPECS, click)
+        local handler = action and CONVERSATION_FOOTER_HANDLERS[action]
+        if handler then
+            handler(session)
+        end
+        return
+    end
+    mouse.set_cursor_from_click(click.winid, click)
+end
+
 local function bind_keys(session, buf)
     local map = function(lhs, handler, desc)
         vim.keymap.set("n", lhs, handler, { buffer = buf, nowait = true, silent = true, desc = desc })
@@ -251,6 +304,7 @@ local function bind_keys(session, buf)
     map("X", function() retry_comment(session) end, "Retry failed PR comment")
     map("q", function() M.close(session) end, "Close PR conversation")
     map("?", function() require("jpr.views.cheatsheet").open() end, "Show Jpr keyboard shortcuts")
+    map("<LeftMouse>", function() handle_conversation_click(session) end, "Select comment or click conversation footer action")
     local jpr = require("jpr")
     jpr.bind_session_keys(buf)
     local full_diff_key = jpr.config.keys and jpr.config.keys.full_diff

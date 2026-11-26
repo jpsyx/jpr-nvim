@@ -3,11 +3,18 @@
 -- editable review summary buffer, and a final confirmation dialog.
 local confirm = require("jpr.views.confirm")
 local main_window = require("jpr.views.main_window")
+local mouse = require("jpr.mouse")
 local render = require("jpr.render.submit")
 
 local M = {}
 
 local namespace = vim.api.nvim_create_namespace("jpr-submit")
+
+local SUBMIT_FOOTER_SPECS = {
+    { token = "[e] summary", action = "summary" },
+    { token = "[<C-s>] submit", action = "submit" },
+    { token = "[q] cancel", action = "close" },
+}
 
 local EVENT_LABELS = {
     COMMENT = "Comment",
@@ -274,6 +281,39 @@ local function open_summary_editor(session, state)
     bind_editor_keys(session, state, editor)
 end
 
+local function handle_modal_click(session, state)
+    local click = mouse.get_click()
+    if not click then
+        return
+    end
+    if not mouse.is_click_in_window(click, state.win) then
+        return M.close(session)
+    end
+    local rendered = state.rendered
+    if not rendered then
+        return
+    end
+    local event = rendered.event_lines and rendered.event_lines[click.line]
+    if event then
+        return select_event(state, event)
+    end
+    if rendered.draft_anchors and rendered.draft_anchors[click.line] then
+        mouse.set_cursor_from_click(state.win, click)
+        return activate_cursor_row(session, state)
+    end
+    if rendered.summary_lines and rendered.summary_lines[click.line] then
+        return open_summary_editor(session, state)
+    end
+    local action = mouse.hit_test_footer_line(rendered.lines, SUBMIT_FOOTER_SPECS, click, rendered.footer_line)
+    if action == "summary" then
+        open_summary_editor(session, state)
+    elseif action == "submit" then
+        submit_review(session, state)
+    elseif action == "close" then
+        M.close(session)
+    end
+end
+
 local function bind_modal_keys(session, state)
     local map = function(lhs, handler, desc)
         vim.keymap.set("n", lhs, handler, { buffer = state.buf, nowait = true, silent = true, desc = desc })
@@ -286,6 +326,7 @@ local function bind_modal_keys(session, state)
     map("<C-s>", function() submit_review(session, state) end, "Submit review")
     map("q", function() M.close(session) end, "Close submit modal")
     map("<Esc>", function() M.close(session) end, "Close submit modal")
+    map("<LeftMouse>", function() handle_modal_click(session, state) end, "Click submit modal item or action")
 end
 
 local function open_modal(session, preview)

@@ -393,6 +393,87 @@ assert(not vim.api.nvim_win_is_valid(inflight_modal_win), "completing pending su
 hold_submit_callback = nil
 review.client.request = original_request
 
+-- 8. Mouse click support in Submit Review modal (events, restricted events, summary, drafts, footer, outside close).
+local original_getmousepos = vim.fn.getmousepos
+local is_submit_mouse_ok, submit_mouse_error = pcall(function()
+    session.submit_current()
+    assert(vim.wait(3000, function() return find_submit_win() ~= nil end), "modal opens for mouse test")
+    local submit_modal_win = find_submit_win()
+    local lines = win_lines(submit_modal_win)
+
+    -- Click Approve row selects APPROVE.
+    local approve_line = helpers.find_line_number(lines, "  [ ] 2. Approve")
+    assert(approve_line ~= nil, "found Approve line")
+    vim.fn.getmousepos = function() return { winid = submit_modal_win, line = approve_line, column = 5 } end
+    helpers.press_key("<LeftMouse>")
+    assert(helpers.find_line_number(win_lines(submit_modal_win), "  [x] 2. Approve") ~= nil, "clicking Approve selects APPROVE")
+
+    -- Click Summary Body opens summary editor; cancel editor to return to modal.
+    local summary_line = helpers.find_line_number(win_lines(submit_modal_win), "Summary Body")
+    assert(summary_line ~= nil, "found Summary Body line")
+    vim.fn.getmousepos = function() return { winid = submit_modal_win, line = summary_line, column = 4 } end
+    helpers.press_key("<LeftMouse>")
+    assert(find_summary_editor_win() ~= nil, "clicking Summary Body opens summary editor")
+    helpers.press_key("q")
+    assert(find_summary_editor_win() == nil and vim.api.nvim_get_current_win() == submit_modal_win, "editor closed back to modal")
+
+    -- Click [<C-s>] submit in footer opens confirmation modal; cancel confirmation.
+    lines = win_lines(submit_modal_win)
+    local submit_col = lines[#lines]:find("[<C-s>] submit", 1, true)
+    assert(submit_col ~= nil, "found [<C-s>] submit footer token")
+    vim.fn.getmousepos = function() return { winid = submit_modal_win, line = #lines, column = submit_col + 2 } end
+    helpers.press_key("<LeftMouse>")
+    assert(find_submit_confirm_win() ~= nil, "clicking [<C-s>] submit opens confirmation dialog")
+    helpers.press_key("q")
+    assert(find_submit_confirm_win() == nil and vim.api.nvim_get_current_win() == submit_modal_win, "confirm closed back to modal")
+
+    -- Click pending draft row jumps to file:line and closes modal.
+    local draft_line = helpers.find_line_number(win_lines(submit_modal_win), "README.md:2:")
+    assert(draft_line ~= nil, "found draft row")
+    vim.fn.getmousepos = function() return { winid = submit_modal_win, line = draft_line, column = 6 } end
+    helpers.press_key("<LeftMouse>")
+    assert(not vim.api.nvim_win_is_valid(submit_modal_win), "clicking draft row closes submit modal")
+    assert(vim.api.nvim_buf_get_name(0):sub(-9) == "README.md", "clicking draft row opens draft file")
+
+    -- Clicking restricted Approve on own PR keeps COMMENT selected and notifies.
+    review.client.request = function(client_self, method, params, callback)
+        if method == "submitPreview" then
+            vim.schedule(function()
+                callback(nil, { draftCount = 0, drafts = {}, canApproveOrRequestChanges = false })
+            end)
+            return
+        end
+        return original_request(client_self, method, params, callback)
+    end
+    infos = {}
+    session.submit_current()
+    assert(vim.wait(3000, function() return find_submit_win() ~= nil end), "own-PR modal opens")
+    local own_win = find_submit_win()
+    local own_approve_line = helpers.find_line_number(win_lines(own_win), "2. Approve")
+    vim.fn.getmousepos = function() return { winid = own_win, line = own_approve_line, column = 5 } end
+    helpers.press_key("<LeftMouse>")
+    assert(helpers.find_line_number(win_lines(own_win), "  [x] 1. Comment") ~= nil, "own-PR click keeps COMMENT selected")
+    assert(#infos >= 1 and infos[#infos]:find("own PR", 1, true) ~= nil, "own-PR click emits info notice")
+
+    -- Clicking [q] cancel in footer closes modal.
+    local own_lines = win_lines(own_win)
+    local cancel_col = own_lines[#own_lines]:find("[q] cancel", 1, true)
+    vim.fn.getmousepos = function() return { winid = own_win, line = #own_lines, column = cancel_col + 1 } end
+    helpers.press_key("<LeftMouse>")
+    assert(not vim.api.nvim_win_is_valid(own_win), "clicking [q] cancel closes modal")
+
+    -- Clicking outside modal closes it.
+    session.submit_current()
+    assert(vim.wait(3000, function() return find_submit_win() ~= nil end), "modal opens for outside-click close")
+    local outside_modal_win = find_submit_win()
+    vim.fn.getmousepos = function() return { winid = 999999, line = 1, column = 1 } end
+    helpers.press_key("<LeftMouse>")
+    assert(not vim.api.nvim_win_is_valid(outside_modal_win), "clicking outside submit modal closes it")
+end)
+vim.fn.getmousepos = original_getmousepos
+review.client.request = original_request
+assert(is_submit_mouse_ok, tostring(submit_mouse_error))
+
 jpr.error = original_error
 jpr.info = original_info
 session.close_current()

@@ -272,6 +272,113 @@ return function(context)
         wizard.close()
     end
 
+    local function test_palette_clicks_activate_commands_run_footer_actions_and_close_outside()
+        local executed_calls = {}
+        local commands = create_palette_commands(executed_calls)
+        local original_getmousepos = vim.fn.getmousepos
+        local is_ok, test_error = pcall(function()
+            wizard.open_palette(commands, { has_session = true })
+            local results_win = helpers.palette_results_win()
+            local sync_line = helpers.find_line_number(helpers.palette_results_lines(), "Sync with GitHub")
+            assert(sync_line ~= nil, "found Sync with GitHub row")
+            vim.fn.getmousepos = function() return { winid = results_win, line = sync_line, column = 5 } end
+            helpers.press_key("i<LeftMouse>")
+            assert(wizard.is_open() == false, "Insert-mode click on results row activates command and closes palette")
+            assert(#executed_calls == 1 and executed_calls[1].id == "sync", "clicked sync command executed")
+
+            wizard.open_palette(commands, { has_session = true })
+            local prompt_win = helpers.current_float_win()
+            local prompt_buf = vim.api.nvim_win_get_buf(prompt_win)
+            results_win = helpers.palette_results_win()
+            helpers.press_key("isyn<Esc>")
+            vim.wait(50, function() return helpers.palette_results_text():find("Open Pull Request", 1, true) == nil end)
+            local lines = helpers.palette_results_lines()
+            local footer_line = #lines
+            local clear_col = lines[footer_line]:find("[C-u] clear", 1, true)
+            assert(clear_col ~= nil, "found [C-u] clear token in palette footer")
+            vim.fn.getmousepos = function() return { winid = results_win, line = footer_line, column = clear_col + 2 } end
+            helpers.press_key("<LeftMouse>")
+            assert(vim.api.nvim_buf_get_lines(prompt_buf, 0, -1, false)[1] == "", "clicking [C-u] clear empties prompt")
+
+            lines = helpers.palette_results_lines()
+            footer_line = #lines
+            local escape_col = lines[footer_line]:find("[Esc] normal/close", 1, true)
+            assert(escape_col ~= nil, "found [Esc] normal/close token in palette footer")
+            vim.fn.getmousepos = function() return { winid = results_win, line = footer_line, column = escape_col + 1 } end
+            helpers.press_key("<LeftMouse>")
+            assert(wizard.is_open() == false, "clicking [Esc] normal/close closes palette")
+
+            wizard.open_palette(commands, { has_session = true })
+            vim.fn.getmousepos = function() return { winid = 999999, line = 1, column = 1 } end
+            helpers.press_key("<LeftMouse>")
+            assert(wizard.is_open() == false, "clicking outside palette closes it")
+        end)
+        vim.fn.getmousepos = original_getmousepos
+        wizard.close()
+        assert(is_ok, tostring(test_error))
+    end
+
+    local function test_wizard_menu_clicks_select_options_run_footer_actions_and_close_outside()
+        local commands = create_palette_commands({})
+        local original_getmousepos = vim.fn.getmousepos
+        local is_ok, test_error = pcall(function()
+            local stepped_answers = nil
+            local multi_command = {
+                id = "mode",
+                label = "Switch Mode",
+                help = "Pick a mode.",
+                steps = {
+                    {
+                        id = "mode",
+                        kind = "select",
+                        label = "Mode",
+                        help = "Choose view mode.",
+                        options = {
+                            { value = "unified", label = "Unified", badge = "[unified]", help = "Single column." },
+                            { value = "split", label = "Split", badge = "[split]", help = "Two columns." },
+                        },
+                    },
+                },
+                execute = function(answers) stepped_answers = answers end,
+            }
+            wizard.open_command(multi_command, {}, {}, {
+                can_return_to_palette = true,
+                palette_commands = commands,
+                palette_index = 1,
+            })
+            local step_win = helpers.current_float_win()
+            local step_lines = helpers.current_lines()
+            local split_line = helpers.find_line_number(step_lines, "Split")
+            assert(split_line ~= nil, "found Split option line")
+            vim.fn.getmousepos = function() return { winid = step_win, line = split_line, column = 4 } end
+            helpers.press_key("<LeftMouse>")
+            assert(wizard.is_open() == false, "clicking step option completes single-step wizard")
+            assert(stepped_answers ~= nil and stepped_answers.mode == "split", "clicked option value committed")
+
+            wizard.open_command(multi_command, {}, { has_session = true }, {
+                can_return_to_palette = true,
+                palette_commands = commands,
+                palette_index = 1,
+            })
+            step_win = helpers.current_float_win()
+            step_lines = helpers.current_lines()
+            local step_footer_line = #step_lines
+            local back_col = step_lines[step_footer_line]:find("[h] palette", 1, true)
+            assert(back_col ~= nil, "found [h] palette token in step footer")
+            vim.fn.getmousepos = function() return { winid = step_win, line = step_footer_line, column = back_col + 1 } end
+            helpers.press_key("<LeftMouse>")
+            assert(wizard.is_open() == true and helpers.palette_results_win() ~= nil, "clicking [h] palette returns to palette")
+
+            wizard.open_command(multi_command, {}, {})
+            vim.fn.getmousepos = function() return { winid = 999999, line = 1, column = 1 } end
+            helpers.press_key("<LeftMouse>")
+            assert(wizard.is_open() == false, "clicking outside wizard menu closes it")
+        end)
+        vim.fn.getmousepos = original_getmousepos
+        wizard.close()
+        assert(is_ok, tostring(test_error))
+    end
+
     test_palette_renders_floating_window_wraps_hover_navigation_and_closes_without_executing()
     test_palette_filters_live_in_insert_mode_moves_with_ctrl_jk_clears_with_ctrl_u_and_drops_to_normal_on_esc()
     test_palette_folds_multiline_paste_and_closes_sibling_on_external_win_close()
@@ -281,4 +388,6 @@ return function(context)
     test_zero_step_command_executes_immediately_and_prunes_stale_answers()
     test_empty_palette_renders_placeholder_and_ignores_navigation()
     test_modal_opened_by_command_execute_remains_open()
+    test_palette_clicks_activate_commands_run_footer_actions_and_close_outside()
+    test_wizard_menu_clicks_select_options_run_footer_actions_and_close_outside()
 end

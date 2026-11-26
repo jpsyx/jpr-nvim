@@ -238,4 +238,30 @@ with_stubs({
     assert(auth.is_active(), "explicit foreground call clears suppression and opens modal")
 end)
 
+-- 7. Clicking [q/Esc] cancel in auth modal footer or clicking outside cancels cleanly.
+with_stubs({
+    executable = function() return 1 end,
+}, function()
+    local cancelled = 0
+    auth.prompt_and_resume({
+        on_authenticated = function() end,
+        on_cancel = function() cancelled = cancelled + 1 end,
+    })
+    local modal_win = helpers.current_float_win()
+    local modal_lines = helpers.current_lines()
+    local cancel_col = modal_lines[#modal_lines]:find("[q/Esc] cancel", 1, true)
+    assert(cancel_col ~= nil, "found [q/Esc] cancel in auth footer")
+    vim.fn.getmousepos = function() return { winid = modal_win, line = #modal_lines, column = cancel_col + 2 } end
+    helpers.press_key("<LeftMouse>")
+    assert(cancelled == 1 and not auth.is_active(), "footer [q/Esc] cancel click cancels auth modal")
+
+    auth.prompt_and_resume({
+        on_authenticated = function() end,
+        on_cancel = function() cancelled = cancelled + 1 end,
+    })
+    vim.fn.getmousepos = function() return { winid = 999999, line = 1, column = 1 } end
+    helpers.press_key("<LeftMouse>")
+    assert(cancelled == 2 and not auth.is_active(), "outside click cancels auth modal")
+end)
+
 print("auth_spec: ok")

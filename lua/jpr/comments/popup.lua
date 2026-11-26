@@ -1,11 +1,24 @@
 -- Floating thread inspector at the cursor: renders full messages and dispatches
 -- reply (r), edit (e), delete (d), resolve (R), reaction (+), retry (X),
 -- promote (p), and send (s).
+local mouse = require("jpr.mouse")
 local render = require("jpr.render.threads")
 
 local M = {}
 
 local namespace = vim.api.nvim_create_namespace("jpr-popup")
+
+local POPUP_FOOTER_SPECS = {
+    { token = "[r]eply", action = "reply" },
+    { token = "[e]dit", action = "edit" },
+    { token = "[d]elete", action = "delete" },
+    { token = "[R]esolve", action = "resolve" },
+    { token = "[+]react", action = "react" },
+    { token = "[X]retry", action = "retry" },
+    { token = "[p]romote", action = "promote" },
+    { token = "[s]end", action = "send" },
+    { token = "[q]uit", action = "close" },
+}
 
 local function clamp_popup_height(line_count)
     return math.min(22, math.max(6, line_count))
@@ -200,6 +213,39 @@ local function send_current_thread(session)
     require("jpr.agent").send(session, entry.thread_id)
 end
 
+local POPUP_FOOTER_HANDLERS = {
+    reply = open_reply,
+    edit = open_edit,
+    delete = delete_current_message,
+    resolve = toggle_resolved,
+    react = toggle_popup_reaction,
+    retry = retry_current_message,
+    promote = promote_current_thread,
+    send = send_current_thread,
+    close = function(session) M.close(session) end,
+}
+
+local function handle_popup_click(session)
+    local popup = session and session.popup
+    local click = mouse.get_click()
+    if not popup or not click then
+        return
+    end
+    if not mouse.is_click_in_window(click, popup.win) then
+        return M.close(session)
+    end
+    local lines = popup.layout and popup.layout.lines or {}
+    if click.line == #lines then
+        local action = mouse.hit_test_footer_line(lines, POPUP_FOOTER_SPECS, click)
+        local handler = action and POPUP_FOOTER_HANDLERS[action]
+        if handler then
+            handler(session)
+        end
+        return
+    end
+    mouse.set_cursor_from_click(popup.win, click)
+end
+
 local function bind_popup_keys(session, buf)
     local map = function(lhs, handler, desc)
         vim.keymap.set("n", lhs, handler, { buffer = buf, nowait = true, silent = true, desc = desc })
@@ -214,6 +260,7 @@ local function bind_popup_keys(session, buf)
     map("e", function() open_edit(session) end, "Edit own message")
     map("p", function() promote_current_thread(session) end, "Promote local thread to GitHub")
     map("s", function() send_current_thread(session) end, "Send local thread to agent")
+    map("<LeftMouse>", function() handle_popup_click(session) end, "Select message or click popup footer action")
 end
 
 local function paint_popup(popup, threads)

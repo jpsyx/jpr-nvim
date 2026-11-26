@@ -222,6 +222,45 @@ return function(context)
     end
     assert(vim.deep_equal(visited, { 4, 9, 9, 4 }), "]f ]f ]f [f: " .. vim.inspect(visited))
 
+    -- <2-LeftMouse> expands a closed fold in place, opens an expanded diff line, and passes through outside clicks.
+    draw_and_focus(folded_stream)
+    local mouse_mod = require("jpr.mouse")
+    local original_getmousepos = vim.fn.getmousepos
+    local original_passthrough = mouse_mod.passthrough
+    local passthrough_keys = {}
+    mouse_mod.passthrough = function(key) passthrough_keys[#passthrough_keys + 1] = key end
+    local is_double_click_ok, double_click_error = pcall(function()
+        local double_click_map = vim.fn.maparg("<2-LeftMouse>", "n", false, true)
+        assert(type(double_click_map) == "table" and type(double_click_map.callback) == "function", "<2-LeftMouse> mapped on stream")
+
+        -- Double-click on closed fold (line 4: b.md viewed/folded) expands fold without leaving stream.
+        assert(vim.fn.foldclosed(4) == 4, "line 4 starts folded")
+        vim.fn.getmousepos = function() return { winid = stream_win, line = 4, column = 3 } end
+        double_click_map.callback()
+        assert(vim.fn.foldclosed(4) == -1, "<2-LeftMouse> on closed fold opens it in place")
+        assert(vim.api.nvim_get_current_buf() == review.stream.buffers.main, "<2-LeftMouse> on closed fold stays in stream")
+
+        -- Double-click outside stream window passes through <2-LeftMouse>.
+        vim.fn.getmousepos = function() return { winid = review.panel.win, line = 1, column = 1 } end
+        double_click_map.callback()
+        assert(#passthrough_keys == 1 and passthrough_keys[1] == "<2-LeftMouse>", "outside <2-LeftMouse> passes through")
+
+        -- Double-click on an expanded diff line opens the real file at that line.
+        vim.fn.writefile({ "line1", "line2" }, worktree .. "/a.md")
+        draw_and_focus({
+            mode = "unified",
+            rows = { create_file_row("a.md", false), create_hunk_row("a.md", 1), create_added_row("a.md", 2, "line2") },
+        })
+        vim.fn.getmousepos = function() return { winid = stream_win, line = 3, column = 5 } end
+        double_click_map.callback()
+        assert(vim.fn.resolve(vim.api.nvim_buf_get_name(0)) == vim.fn.resolve(worktree .. "/a.md"), "<2-LeftMouse> opens a.md")
+        assert(vim.api.nvim_win_get_cursor(0)[1] == 2, "<2-LeftMouse> jumps to line 2 in a.md")
+    end)
+    vim.fn.getmousepos = original_getmousepos
+    mouse_mod.passthrough = original_passthrough
+    assert(is_double_click_ok, tostring(double_click_error))
+    draw_and_focus(folded_stream)
+
     -- A redraw keeps the cursor line and the top line.
     local long_rows = { create_file_row("long.md", false), create_hunk_row("long.md", 1) }
     for line = 1, 100 do

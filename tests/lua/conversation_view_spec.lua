@@ -454,13 +454,20 @@ local calls_while_hidden = threads_calls
 conversation.refresh(review)
 assert(threads_calls == calls_while_hidden, "refresh does nothing while conversation is hidden")
 
--- Reopen, then q closes cleanly and wipes buffer; M.close also wipes buffer.
+-- Mouse clicks (message select, footer actions, outside passthrough) in dedicated module.
+dofile(root .. "/tests/lua/conversation_view_spec/mouse.lua")({
+    helpers = helpers,
+    main_window = main_window,
+    review = review,
+    session = session,
+})
+
 session.conversation_current()
-local reopened_buf = vim.api.nvim_win_get_buf(main_window.find(review))
-assert(vim.api.nvim_buf_is_valid(reopened_buf), "conversation reopened")
+local quit_buf = vim.api.nvim_win_get_buf(main_window.find(review))
+assert(vim.api.nvim_buf_is_valid(quit_buf), "conversation reopened for q")
 vim.api.nvim_set_current_win(main_window.find(review))
 helpers.press_key("q")
-assert(not vim.api.nvim_buf_is_valid(reopened_buf), "q wipes conversation buffer")
+assert(not vim.api.nvim_buf_is_valid(quit_buf), "q wipes conversation buffer")
 assert(vim.api.nvim_win_is_valid(review.panel.win), "panel stays open after q")
 
 session.conversation_current()

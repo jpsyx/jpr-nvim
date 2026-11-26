@@ -1,11 +1,19 @@
 -- Filterable command palette modal: stacked prompt + results windows, fuzzy filtering,
 -- hover movement, activation, and Insert/Normal keybindings.
 local fuzzy = require("jpr.tui.fuzzy")
+local mouse = require("jpr.mouse")
 local render = require("jpr.tui.render")
 local schema = require("jpr.tui.schema")
 local window = require("jpr.tui.wizard.window")
 
 local M = {}
+
+local PALETTE_FOOTER_SPECS = {
+    { token = "[S-Tab] repos", action = "back" },
+    { token = "[C-u] clear", action = "clear" },
+    { token = "[Enter] select", action = "confirm" },
+    { token = "[Esc] normal/close", action = "close" },
+}
 
 local function is_non_blank(text)
     return type(text) == "string" and text:match("%S") ~= nil
@@ -165,7 +173,47 @@ local function create_palette_actions(controller, state)
     }
 end
 
-local function bind_normal_palette_keys(buf, actions, on_close)
+local function dispatch_palette_footer_click(controller, state, actions, click)
+    local action = mouse.hit_test_footer_line(state.layout and state.layout.lines, PALETTE_FOOTER_SPECS, click)
+    if action == "clear" then
+        actions.clear_filter()
+    elseif action == "back" and actions.go_back then
+        pcall(vim.cmd, "stopinsert")
+        actions.go_back()
+    elseif action == "confirm" then
+        pcall(vim.cmd, "stopinsert")
+        actions.confirm()
+    elseif action == "close" then
+        controller.close()
+    end
+end
+
+local function handle_palette_click(controller, state, actions)
+    local click = mouse.get_click()
+    if not click then
+        return
+    end
+    if mouse.is_click_in_window(click, state.win) then
+        local clicked_index = state.layout and state.layout.item_for_line[click.line]
+        if clicked_index ~= nil then
+            pcall(vim.cmd, "stopinsert")
+            state.selected_index = clicked_index
+            activate_palette_command(controller, state)
+            return
+        end
+        dispatch_palette_footer_click(controller, state, actions, click)
+        return
+    end
+    if mouse.is_click_in_window(click, state.prompt_win) then
+        pcall(vim.api.nvim_set_current_win, state.prompt_win)
+        mouse.set_cursor_from_click(state.prompt_win, click)
+        pcall(vim.cmd, "startinsert")
+        return
+    end
+    controller.close()
+end
+
+local function bind_normal_palette_keys(buf, actions, on_close, on_click)
     local map = function(lhs, handler)
         vim.keymap.set("n", lhs, handler, { buffer = buf, nowait = true, silent = true })
     end
@@ -179,9 +227,10 @@ local function bind_normal_palette_keys(buf, actions, on_close)
         for _, lhs in ipairs({ "h", "<Left>", "<S-Tab>" }) do map(lhs, actions.go_back) end
     end
     for _, lhs in ipairs({ "q", "<Esc>" }) do map(lhs, on_close) end
+    map("<LeftMouse>", on_click)
 end
 
-local function bind_insert_palette_keys(prompt_buf, actions)
+local function bind_insert_palette_keys(prompt_buf, actions, on_click)
     local map = function(lhs, handler)
         vim.keymap.set("i", lhs, handler, { buffer = prompt_buf, nowait = true, silent = true })
     end
@@ -192,6 +241,7 @@ local function bind_insert_palette_keys(prompt_buf, actions)
     if actions.go_back then
         map("<S-Tab>", actions.go_back)
     end
+    map("<LeftMouse>", on_click)
 end
 
 local function register_prompt_filter_autocmds(controller, state)
@@ -263,9 +313,10 @@ function M.open_at(controller, commands, context, initial_index, preserved_origi
         function() paint_palette(controller, state) end
     )
     local actions = create_palette_actions(controller, state)
-    bind_normal_palette_keys(state.prompt_buf, actions, controller.close)
-    bind_normal_palette_keys(state.buf, actions, controller.close)
-    bind_insert_palette_keys(state.prompt_buf, actions)
+    local on_click = function() handle_palette_click(controller, state, actions) end
+    bind_normal_palette_keys(state.prompt_buf, actions, controller.close, on_click)
+    bind_normal_palette_keys(state.buf, actions, controller.close, on_click)
+    bind_insert_palette_keys(state.prompt_buf, actions, on_click)
     register_prompt_filter_autocmds(controller, state)
     ensure_palette_insert_mode(controller, state, state.prompt_win)
 end

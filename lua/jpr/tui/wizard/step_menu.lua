@@ -1,9 +1,18 @@
 -- Menu, toggle, and async_select wizard step painting, keybindings, and async loading.
+local mouse = require("jpr.mouse")
 local render = require("jpr.tui.render")
 local schema = require("jpr.tui.schema")
 local window = require("jpr.tui.wizard.window")
 
 local M = {}
+
+local STEP_FOOTER_SPECS = {
+    { token = "[h] palette", action = "back" },
+    { token = "[h] back", action = "back" },
+    { token = "[Enter/l] next", action = "confirm" },
+    { token = "[Enter/l] run", action = "confirm" },
+    { token = "[q/Esc] close", action = "close" },
+}
 
 local function find_option_index_by_value(options, target_value)
     if target_value == nil then
@@ -103,6 +112,30 @@ local function step_back_from_menu(controller, state, step)
     end
 end
 
+local function handle_menu_click(controller, state, go_back, confirm)
+    local click = mouse.get_click()
+    if not click then
+        return
+    end
+    if not mouse.is_click_in_window(click, state.win) then
+        return controller.close()
+    end
+    local clicked_index = state.layout and state.layout.item_for_line[click.line]
+    if clicked_index ~= nil and not state.step_state.is_loading then
+        state.step_state.selected_option_index = clicked_index
+        confirm()
+        return
+    end
+    local action = mouse.hit_test_footer_line(state.layout and state.layout.lines, STEP_FOOTER_SPECS, click)
+    if action == "back" then
+        go_back()
+    elseif action == "confirm" then
+        confirm()
+    elseif action == "close" then
+        controller.close()
+    end
+end
+
 local function bind_menu_step_keys(controller, state, step)
     local map = function(lhs, handler)
         vim.keymap.set("n", lhs, handler, { buffer = state.buf, nowait = true, silent = true })
@@ -133,6 +166,7 @@ local function bind_menu_step_keys(controller, state, step)
     for _, lhs in ipairs({ "h", "<Left>", "<S-Tab>" }) do map(lhs, go_back) end
     for _, lhs in ipairs({ "<CR>", "l", "<Right>", "<Tab>" }) do map(lhs, confirm) end
     for _, lhs in ipairs({ "q", "<Esc>" }) do map(lhs, controller.close) end
+    map("<LeftMouse>", function() handle_menu_click(controller, state, go_back, confirm) end)
 end
 
 local function apply_async_loaded_result(

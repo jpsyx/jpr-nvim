@@ -135,6 +135,39 @@ local function test_open_confirm_cancel_close_and_winclosed()
     vim.wait(50, function() return false end)
     assert(confirm.is_open(programmatic_state) == false, "confirm.close closes modal")
     assert(confirms == 0 and cancels == 0, "confirm.close never invokes on_cancel")
+
+    -- Mouse clicks: footer [q/Esc] cancel and outside click both invoke on_cancel once.
+    local original_getmousepos = vim.fn.getmousepos
+    local is_mouse_ok, mouse_error = pcall(function()
+        confirms, cancels = 0, 0
+        local footer_state = confirm.open({
+            title = " Footer Cancel ",
+            headline = "Proceed?",
+            confirm_label = "Yes",
+            on_confirm = function() confirms = confirms + 1 end,
+            on_cancel = function() cancels = cancels + 1 end,
+        })
+        local footer_lines = helpers.current_lines()
+        local cancel_col = footer_lines[#footer_lines]:find("[q/Esc] cancel", 1, true)
+        assert(cancel_col ~= nil, "found [q/Esc] cancel in confirm footer")
+        vim.fn.getmousepos = function() return { winid = footer_state.win, line = #footer_lines, column = cancel_col + 2 } end
+        helpers.press_key("<LeftMouse>")
+        assert(confirms == 0 and cancels == 1 and confirm.is_open(footer_state) == false, "footer cancel click cancels modal")
+
+        confirms, cancels = 0, 0
+        local outside_state = confirm.open({
+            title = " Outside Cancel ",
+            headline = "Proceed?",
+            confirm_label = "Yes",
+            on_confirm = function() confirms = confirms + 1 end,
+            on_cancel = function() cancels = cancels + 1 end,
+        })
+        vim.fn.getmousepos = function() return { winid = 999999, line = 1, column = 1 } end
+        helpers.press_key("<LeftMouse>")
+        assert(confirms == 0 and cancels == 1 and confirm.is_open(outside_state) == false, "outside click cancels confirm modal")
+    end)
+    vim.fn.getmousepos = original_getmousepos
+    assert(is_mouse_ok, tostring(mouse_error))
 end
 
 test_layout_renders_headline_items_selection_and_hover_help()
