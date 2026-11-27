@@ -45,6 +45,11 @@ end
 -- The panel's look is local to its window: the global values are untouched.
 local panel_win = review.panel.win
 assert(not vim.wo[panel_win].wrap and vim.wo[panel_win].cursorline and vim.wo[panel_win].winfixwidth, "the panel's look")
+vim.api.nvim_set_current_win(panel_win)
+local panel_guicursor = vim.api.nvim_get_option_value("guicursor", {})
+assert(panel_guicursor:find("JprPanelHiddenCursor", 1, true), "sidebar focus hides the cursor block: " .. panel_guicursor)
+local panel_winhighlight = vim.api.nvim_get_option_value("winhighlight", { win = panel_win, scope = "local" })
+assert(panel_winhighlight:find("CursorLine:JprPanelCursorLine", 1, true), "sidebar row uses the bright cursorline: " .. panel_winhighlight)
 for _, name in ipairs(PANEL_OPTIONS) do
     local global = vim.api.nvim_get_option_value(name, { win = panel_win, scope = "global" })
     assert(global == globals_before[name], ("the panel set the global %s to %s"):format(name, vim.inspect(global)))
@@ -61,6 +66,8 @@ press("<CR>", 9)
 local file_win = vim.api.nvim_get_current_win()
 assert(file_win ~= panel_win, "the file opens beside the panel")
 assert(vim.fn.resolve(vim.api.nvim_buf_get_name(0)) == vim.fn.resolve(worktree .. "/README.md"), "<CR> opens README.md")
+local file_guicursor = vim.api.nvim_get_option_value("guicursor", {})
+assert(not file_guicursor:find("JprPanelHiddenCursor", 1, true), "leaving the sidebar restores the cursor: " .. file_guicursor)
 for _, name in ipairs(PANEL_OPTIONS) do
     assert(vim.wo[file_win][name] == globals_before[name], ("the file has the panel's %s"):format(name))
 end
