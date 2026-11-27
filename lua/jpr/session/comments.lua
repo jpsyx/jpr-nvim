@@ -62,6 +62,111 @@ local function create_anchor_from_diff(session, win, buf, opts)
     return { file = path, kind = kind, side = side, start = first_line, ["end"] = last_line }
 end
 
+local function has_explicit_range(opts)
+    return type(opts.range) == "number" and opts.range > 0
+end
+
+local function comment_request(opts)
+    if opts.suggest == true then
+        return "suggest"
+    end
+    if opts.file == true then
+        return "file"
+    end
+    return "versatile"
+end
+
+local function stream_file_path(session, win)
+    local layout = session.stream and session.stream.layout
+    if not layout then
+        return nil
+    end
+    local cursor_line = vim.api.nvim_win_get_cursor(win)[1]
+    local file = require("jpr.render.stream").find_file_at_line(layout, cursor_line)
+    return file and file.path or nil
+end
+
+local function diff_file_path(session, buf)
+    local path = vim.b[buf].jpr_base_path
+    if type(path) == "string" and path ~= "" then
+        return path
+    end
+    return require("jpr.views.diff").buffer_to_changed_path(session, buf)
+end
+
+--- Sidebar location for the panel buffer, or nil when `buf` is not the panel.
+local function describe_panel_location(session)
+    local panel = session.panel
+    if not panel or vim.api.nvim_get_current_buf() ~= panel.buf then
+        return nil
+    end
+    local info = require("jpr.views.panel").get_row_under_cursor(session)
+    local row = info and info.row or nil
+    if row == nil then
+        return { is_on_diff_line = false, is_pr_surface = false }
+    end
+    return {
+        is_on_diff_line = false,
+        file_path = row.kind == "file" and row.path or nil,
+        is_pr_surface = row.kind == "summary" or row.kind == "conversation",
+    }
+end
+
+--- Where a comment can land: a diff line, a file, a PR conversation surface, or none.
+local function describe_location(session, win, buf)
+    local panel_location = describe_panel_location(session)
+    if panel_location then
+        return panel_location
+    end
+    local conversation = session.conversation
+    if conversation ~= nil and conversation.buf == buf then
+        return { is_on_diff_line = false, is_pr_surface = true }
+    end
+    if is_stream_buffer(session, buf) then
+        local cursor_line = vim.api.nvim_win_get_cursor(win)[1]
+        local anchor = require("jpr.views.stream").anchor_at_range(session, win, cursor_line, cursor_line)
+        local is_on_diff_line = anchor ~= nil and (anchor.kind == "line" or anchor.kind == "range")
+        return { is_on_diff_line = is_on_diff_line, file_path = stream_file_path(session, win) }
+    end
+    local path = diff_file_path(session, buf)
+    return { is_on_diff_line = path ~= nil, file_path = path }
+end
+
+local function create_line_anchor(session, win, buf, opts)
+    if is_stream_buffer(session, buf) then
+        return create_anchor_from_stream(session, win, opts)
+    end
+    return create_anchor_from_diff(session, win, buf, opts)
+end
+
+local function create_static_anchor(kind, file_path)
+    if kind == "pr" then
+        return { kind = "pr", side = "RIGHT" }
+    end
+    return { file = file_path, kind = "file", side = "RIGHT" }
+end
+
+--- Line, file, or standalone PR anchor for `opts`, using the only available
+--- comment when the cursor is not on a diff line.
+local function create_comment_anchor(session, win, buf, opts)
+    if comment_request(opts) == "suggest" or has_explicit_range(opts) then
+        return create_line_anchor(session, win, buf, opts)
+    end
+    local location = describe_location(session, win, buf)
+    local request = comment_request(opts)
+    if location.is_on_diff_line == true and request == "versatile" then
+        return create_line_anchor(session, win, buf, opts)
+    end
+    local kind, error_message = require("jpr.comments.target").resolve_comment_kind(location, request)
+    if kind == "file" or kind == "pr" then
+        return create_static_anchor(kind, location.file_path)
+    end
+    if kind == "line" then
+        return create_line_anchor(session, win, buf, opts)
+    end
+    return nil, error_message
+end
+
 --- Attaches thread, comment, conversation, suggest, and submit commands onto `session_mod`.
 function M.attach(session_mod)
     --- `:Jpr expand`: toggles inline thread expansion across diff and stream buffers.
@@ -108,8 +213,8 @@ function M.attach(session_mod)
         require("jpr.comments.popup").open(session, threads)
     end
 
-    --- Opens the comment compose buffer anchored to the current diff line,
-    --- visual range, base buffer line, stream row, or file (`opts.file`).
+    --- Opens the comment compose buffer for the current line, visual range,
+    --- file (`opts.file`), or the only comment the current view can take.
     function session_mod.comment_current(opts)
         local session = session_mod.current()
         if not session then
@@ -118,16 +223,20 @@ function M.attach(session_mod)
         local comment_opts = opts or {}
         local win = vim.api.nvim_get_current_win()
         local buf = vim.api.nvim_win_get_buf(win)
-        local anchor, error_message
-        if is_stream_buffer(session, buf) then
-            anchor, error_message = create_anchor_from_stream(session, win, comment_opts)
-        else
-            anchor, error_message = create_anchor_from_diff(session, win, buf, comment_opts)
-        end
+        local anchor, error_message = create_comment_anchor(session, win, buf, comment_opts)
         if not anchor then
             return jpr().error(error_message)
         end
         require("jpr.comments.compose").open_new(session, anchor, { suggest = comment_opts.suggest == true })
+    end
+
+    --- Opens a standalone pull-request conversation comment, separate from the pending review.
+    function session_mod.pr_comment_current()
+        local session = session_mod.current()
+        if not session then
+            return jpr().error("no pull request is open in this tab")
+        end
+        require("jpr.comments.compose").open_new(session, { kind = "pr", side = "RIGHT" })
     end
 
     --- `:Jpr summary`: opens the unified Diff summary + PR conversation buffer

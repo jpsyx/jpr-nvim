@@ -242,6 +242,9 @@ local function bind_action_keymaps(session, buf)
     if type(keys.full_diff) == "string" and keys.full_diff ~= "" then
         vim.keymap.set("n", keys.full_diff, "<Plug>(jpr-full-diff)", { buffer = buf, remap = true, silent = true, nowait = true, desc = "Switch to the full branch diff view" })
     end
+    if type(keys.file_comment) == "string" and keys.file_comment ~= "" then
+        vim.keymap.set("n", keys.file_comment, "<Plug>(jpr-file-comment)", { buffer = buf, remap = true, silent = true, nowait = true, desc = "New file-level comment on the file under the cursor" })
+    end
     if type(keys.toggle_viewed) == "string" and keys.toggle_viewed ~= "" and keys.toggle_viewed ~= "v" then
         vim.keymap.set("n", keys.toggle_viewed, "<Plug>(jpr-toggle-viewed)", { buffer = buf, remap = true, silent = true, nowait = true, desc = "Toggle viewed for the file or directory under the cursor" })
     end

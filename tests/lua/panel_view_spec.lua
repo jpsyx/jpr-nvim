@@ -252,7 +252,7 @@ run_panel_key("h")
 assert(vim.api.nvim_win_get_cursor(panel_win)[1] == 8, "h on child file jumps to parent src/ dir")
 run_panel_key("h")
 assert(review.panel.collapsed_dirs["src"] == true, "h on expanded dir collapses it")
-assert(vim.api.nvim_buf_get_lines(review.panel.buf, 7, 8, false)[1] == "▸ src/ (2)", "collapsed src/ renders count")
+assert(vim.api.nvim_buf_get_lines(review.panel.buf, 7, 8, false)[1] == "▸ src/ (0/2)", "collapsed src/ shows viewed files out of all descendant files")
 assert(vim.api.nvim_win_get_cursor(panel_win)[1] == 8, "cursor stays on collapsed dir")
 
 -- o expands a collapsed dir, does nothing on an already-expanded dir.
@@ -451,6 +451,77 @@ end)
 vim.fn.getmousepos = original_getmousepos
 mouse_mod.passthrough = original_passthrough
 assert(is_mouse_ok, tostring(mouse_error))
+
+-- gc and gf comment the sidebar file. gc on Diff summary posts a PR comment.
+-- A directory has no comment. gp posts a PR comment from anywhere in the sidebar.
+dofile(root .. "/plugin/jpr.lua")
+local helpers = dofile(root .. "/tests/lua/support/helpers.lua")
+review.panel.collapsed_dirs = {}
+panel_view.render(review, tree_view)
+local panel_lines = vim.api.nvim_buf_get_lines(review.panel.buf, 0, -1, false)
+assert(panel_lines[6]:find("Diff summary", 1, true) ~= nil, panel_lines[6])
+assert(panel_lines[8]:find("src/", 1, true) ~= nil, panel_lines[8])
+assert(panel_lines[9]:find("a.rs", 1, true) ~= nil, panel_lines[9])
+
+local function press_panel(lhs, line)
+    review.panel.collapsed_dirs = {}
+    panel_view.render(review, tree_view)
+    vim.api.nvim_set_current_win(review.panel.win)
+    vim.api.nvim_win_set_cursor(review.panel.win, { line, 0 })
+    helpers.press_key(lhs)
+end
+
+local function submit_comment(body)
+    local compose_win = helpers.find_floating_win("GitHub")
+    assert(compose_win ~= nil, "compose window opened")
+    vim.api.nvim_set_current_win(compose_win)
+    vim.api.nvim_buf_set_lines(vim.api.nvim_win_get_buf(compose_win), 0, -1, false, { body })
+    helpers.press_key("<C-s>")
+    return compose_win
+end
+
+local comments_before = #helpers.read_requests(log, "comment")
+press_panel("gc", 9)
+submit_comment("file from gc")
+assert(vim.wait(3000, function()
+    return #helpers.read_requests(log, "comment") == comments_before + 1
+end), "sidebar gc file comment sent")
+local gc_file = helpers.read_requests(log, "comment")[comments_before + 1].params
+assert(vim.deep_equal(gc_file.anchor, { file = "src/a.rs", kind = "file", side = "RIGHT" }), vim.inspect(gc_file))
+
+press_panel("gf", 9)
+submit_comment("file from gf")
+assert(vim.wait(3000, function()
+    return #helpers.read_requests(log, "comment") == comments_before + 2
+end), "sidebar gf file comment sent")
+local gf_file = helpers.read_requests(log, "comment")[comments_before + 2].params
+assert(vim.deep_equal(gf_file.anchor, { file = "src/a.rs", kind = "file", side = "RIGHT" }), vim.inspect(gf_file))
+
+press_panel("gc", 6)
+submit_comment("pr from summary")
+assert(vim.wait(3000, function()
+    return #helpers.read_requests(log, "comment") == comments_before + 3
+end), "sidebar gc on Diff summary sent a PR comment")
+local summary_comment = helpers.read_requests(log, "comment")[comments_before + 3].params
+assert(vim.deep_equal(summary_comment.anchor, { kind = "pr", side = "RIGHT" }), vim.inspect(summary_comment))
+
+local comment_errors = {}
+local report_error = jpr.error
+jpr.error = function(message)
+    comment_errors[#comment_errors + 1] = message
+end
+press_panel("gc", 8)
+assert(#comment_errors == 1, "gc on a directory reports an error: " .. vim.inspect(comment_errors))
+assert(helpers.find_floating_win("GitHub") == nil, "gc on a directory opens no compose window")
+jpr.error = report_error
+
+press_panel("gp", 8)
+submit_comment("pr from gp")
+assert(vim.wait(3000, function()
+    return #helpers.read_requests(log, "comment") == comments_before + 4
+end), "gp sends a PR comment from a directory row")
+local gp_comment = helpers.read_requests(log, "comment")[comments_before + 4].params
+assert(vim.deep_equal(gp_comment.anchor, { kind = "pr", side = "RIGHT" }), vim.inspect(gp_comment))
 
 os.remove(stream_payload)
 os.remove(set_viewed_payload)

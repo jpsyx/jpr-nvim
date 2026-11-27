@@ -51,6 +51,7 @@ With [lazy.nvim](https://github.com/folke/lazy.nvim):
     --   comment = "gc",
     --   suggest_comment = "gC",
     --   file_comment = "gf",
+    --   pr_comment = "gp",
     --   full_diff = "gF",
     --   toggle_viewed = "gv",
     --   thread_popup = "gt",
@@ -59,7 +60,7 @@ With [lazy.nvim](https://github.com/folke/lazy.nvim):
     --   send_agent = "gS",
     --   submit_review = "gs",
     --   toggle_agent = "ga",
-    --   toggle_panel = "gp",
+    --   toggle_panel = "gP",
     -- },
   },
 }
@@ -89,7 +90,8 @@ binary manually.
 | `:Jpr sync` | Sync with GitHub now (it also syncs every minute in PR mode; in an unlinked local session, probes GitHub for an open PR on the branch and upgrades the live session in-place, pushing locally viewed files to GitHub) |
 | `:Jpr push` | Push committed `HEAD` to the pull request's remote branch and resync (never auto-commits dirty files) |
 | `:Jpr toggle [unified \| split]` | Flip every diff between unified and split, or jump directly to `unified` or `split`; the choice is remembered |
-| `:Jpr panel` (default key: `gp`) | Toggle or reopen the left diff sidebar panel in the current review tab (preserving collapsed directories; sidebar, editor, and vertical AI panel widths automatically reconcile on window opens and closes) |
+| `:Jpr panel` (default key: `gP`) | Toggle or reopen the left diff sidebar panel in the current review tab (preserving collapsed directories; sidebar, editor, and vertical AI panel widths automatically reconcile on window opens and closes) |
+| `:Jpr pr-comment` (default key: `gp`) | Post a standalone pull request conversation comment, separate from the pending review. Works from the sidebar, diff summary, conversation, stream, and file buffers |
 | `:Jpr stream` (alias: `:Jpr full`, default key: `gF`) | Return to the full branch diff view showing all changed files in a continuous scroll (shown in the Command Palette as `"Full Branch Diff"` whenever not already visible) |
 | `:[range]Jpr comment [line \| file \| suggest]` | Open the compose float for a draft or local comment on the cursor line or visual range, or pass `line`, `file`, or `suggest` directly |
 | `:Jpr suggest` | Turn an uncommitted edit around the cursor into a GitHub draft suggestion and revert just that hunk |
@@ -155,9 +157,9 @@ In both changed diff buffers (and their base split buffers) and the stream:
 
 | Key | `<Plug>` mapping | What it does |
 | --- | --- | --- |
-| `gc` (normal/visual) | `<Plug>(jpr-comment)` | New draft or local comment on the cursor line or visual range |
+| `gc` (normal/visual) | `<Plug>(jpr-comment)` | New draft or local comment on the cursor line or visual range. When the view can take only one comment, `gc` opens that comment: a file comment on a sidebar file or a non-diff stream row, and a standalone PR comment in Diff summary, Conversation, or on those sidebar rows |
 | `gC` (normal/visual) | `<Plug>(jpr-suggest-comment)` | New draft comment pre-filled with a `suggestion` block |
-| `gf` | `<Plug>(jpr-file-comment)` | New file-level draft or local comment |
+| `gf` | `<Plug>(jpr-file-comment)` | New file-level draft or local comment, including the file under the cursor in the sidebar |
 | `gF` | `<Plug>(jpr-full-diff)` | Return to the full branch diff view |
 | `gv` | `<Plug>(jpr-toggle-viewed)` | Toggle viewed for the current file (advancing to the next unviewed file when marking viewed) |
 | `gt` | `<Plug>(jpr-thread-popup)` | Open the floating thread popup at the cursor |
@@ -167,6 +169,8 @@ Across all review buffers (diffs, base splits, stream, PR sidebar panel, and PR 
 
 | Key | `<Plug>` mapping | What it does |
 | --- | --- | --- |
+| `gp` | `<Plug>(jpr-pr-comment)` | New standalone PR conversation comment, separate from the pending review |
+| `gP` | `<Plug>(jpr-toggle-panel)` | Toggle or reopen the diff sidebar panel |
 | `gS` | `<Plug>(jpr-send-agent)` | Confirm count and auto-submit unsent local threads to the coding agent (keeps focus in review buffer) |
 | `gs` | `<Plug>(jpr-submit-review)` | Open the GitHub review submission modal (confirms action and draft count before publishing) |
 | `ga` | `<Plug>(jpr-toggle-agent)` | Toggle the coding-agent terminal window without stopping the running agent |

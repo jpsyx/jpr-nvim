@@ -11,7 +11,7 @@ return function(context)
         local specs = commands_schema.create_command_specs()
         local is_valid, validation_error = tui_schema.validate_command_specs(specs)
         assert(is_valid == true, "command specs valid: " .. tostring(validation_error))
-        assert(#specs == 18, "expected 18 command specs, got " .. tostring(#specs))
+        assert(#specs == 19, "expected 19 command specs, got " .. tostring(#specs))
         assert(vim.deep_equal(commands_schema.list_command_ids(), jpr.subcommands), "list_command_ids matches jpr.subcommands")
         local aliases_ok, aliases_error = commands_schema.validate_command_aliases()
         assert(aliases_ok == true, "command aliases are valid: " .. tostring(aliases_error))
@@ -44,7 +44,7 @@ return function(context)
     local function extract_visible_command_ids(text)
         local ids = {}
         for line in (text or ""):gmatch("[^\n]+") do
-            local id = line:match("%s+%[([%a_]+)%]%s*$")
+            local id = line:match("%s+%[([%a_%-]+)%]%s*$")
             if id then
                 ids[#ids + 1] = id
             end

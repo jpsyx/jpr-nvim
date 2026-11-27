@@ -59,7 +59,8 @@ local function test_default_shortcuts_bound_and_dispatch_across_all_review_buffe
         gS = "<Plug>(jpr-send-agent)",
         gs = "<Plug>(jpr-submit-review)",
         ga = "<Plug>(jpr-toggle-agent)",
-        gp = "<Plug>(jpr-toggle-panel)",
+        gp = "<Plug>(jpr-pr-comment)",
+        gP = "<Plug>(jpr-toggle-panel)",
     }
 
     -- 1. PR Sidebar panel and stream buffers.

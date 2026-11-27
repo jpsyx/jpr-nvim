@@ -185,6 +185,19 @@ end), "PR comment RPC sent")
 local sent_pr_comment = helpers.read_requests(log, "comment")[comments_before + 1].params
 assert(vim.deep_equal(sent_pr_comment.anchor, { kind = "pr", side = "RIGHT" }) and sent_pr_comment.body == "Ship it!", vim.inspect(sent_pr_comment))
 
+-- gc in the diff summary / conversation buffer is the same standalone PR comment.
+vim.api.nvim_set_current_win(main_window.find(review))
+helpers.press_key("gc")
+local gc_compose_win = helpers.find_floating_win("PR Conversation")
+assert(gc_compose_win ~= nil and vim.api.nvim_win_is_valid(gc_compose_win), "gc opens a PR comment from the conversation buffer")
+vim.api.nvim_buf_set_lines(vim.api.nvim_win_get_buf(gc_compose_win), 0, -1, false, { "From gc" })
+helpers.press_key("<C-s>")
+assert(vim.wait(3000, function()
+    return #helpers.read_requests(log, "comment") == comments_before + 2
+end), "gc PR comment RPC sent")
+local sent_gc_comment = helpers.read_requests(log, "comment")[comments_before + 2].params
+assert(vim.deep_equal(sent_gc_comment.anchor, { kind = "pr", side = "RIGHT" }) and sent_gc_comment.body == "From gc", vim.inspect(sent_gc_comment))
+
 -- 3b. Pressing c, flipping destination to [Local -> agent] with <C-g>, and saving with <C-s> sends origin = "local".
 review.compose_destination = nil
 vim.api.nvim_set_current_win(main_window.find(review))
@@ -196,9 +209,9 @@ assert(helpers.win_title(pr_toggle_win):find("[Local → agent] PR Conversation"
 vim.api.nvim_buf_set_lines(vim.api.nvim_win_get_buf(pr_toggle_win), 0, -1, false, { "Local PR thought" })
 helpers.press_key("<C-s>")
 assert(vim.wait(3000, function()
-    return #helpers.read_requests(log, "comment") == comments_before + 2
+    return #helpers.read_requests(log, "comment") == comments_before + 3
 end), "local PR comment RPC sent")
-local sent_local_pr_comment = helpers.read_requests(log, "comment")[comments_before + 2].params
+local sent_local_pr_comment = helpers.read_requests(log, "comment")[comments_before + 3].params
 assert(
     vim.deep_equal(sent_local_pr_comment.anchor, { kind = "pr", side = "RIGHT" })
         and sent_local_pr_comment.body == "Local PR thought"

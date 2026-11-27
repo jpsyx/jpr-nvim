@@ -9,7 +9,7 @@ return function(context)
     local function extract_visible_command_ids(text)
         local ids = {}
         for line in (text or ""):gmatch("[^\n]+") do
-            local id = line:match("%s+%[([%a_]+)%]%s*$")
+            local id = line:match("%s+%[([%a_%-]+)%]%s*$")
             if id then
                 ids[#ids + 1] = id
             end
@@ -105,7 +105,7 @@ return function(context)
             assert(
                 vim.deep_equal(pr_panel_ids, {
                     "open", "local", "sync", "toggle", "panel", "stream", "expand",
-                    "summary", "conversation", "submit", "push", "agent", "prepass", "close", "keys",
+                    "summary", "conversation", "pr-comment", "submit", "push", "agent", "prepass", "close", "keys",
                 }),
                 "linked PR outside diff hides comment, suggest, and send: " .. vim.inspect(pr_panel_ids)
             )

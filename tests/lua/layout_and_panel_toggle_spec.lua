@@ -1,5 +1,5 @@
 -- Specs for automatic review-tab layout width reconciliation across panel,
--- editor, and vertical AI agent windows, plus `:Jpr panel` / `gp` toggle.
+-- editor, and vertical AI agent windows, plus `:Jpr panel` / `gP` toggle.
 local root = vim.fs.dirname(vim.fs.dirname(vim.fs.dirname(vim.fn.fnamemodify(debug.getinfo(1, "S").source:sub(2), ":p"))))
 package.path = root .. "/lua/?.lua;" .. root .. "/lua/?/init.lua;" .. package.path
 
@@ -185,13 +185,13 @@ local function test_live_layout_transitions_and_panel_toggle()
         return vim.api.nvim_win_get_width(agent_win) == 50 and vim.api.nvim_win_get_width(active_editor) >= 120
     end), "editor takes main width and AI stays 50 when sidebar closed")
 
-    -- 7. Reopen sidebar via `gp` -> returns on far left at 40, preserving collapsed_dirs.
+    -- 7. Reopen sidebar via `gP` -> returns on far left at 40, preserving collapsed_dirs.
     local active_editor = main_window.find(review)
     vim.api.nvim_set_current_win(active_editor)
-    helpers.press_key("gp")
+    helpers.press_key("gP")
     assert(vim.wait(1000, function()
         return panel_view.is_open(review) and vim.api.nvim_win_get_width(review.panel.win) == 40
-    end), "gp reopens sidebar at width 40")
+    end), "gP reopens sidebar at width 40")
     assert(review.panel.collapsed_dirs["src"] == true, "collapsed_dirs preserved across close/reopen")
     assert(vim.api.nvim_win_get_width(agent_win) == 50, "agent stays 50 after sidebar reopens")
 

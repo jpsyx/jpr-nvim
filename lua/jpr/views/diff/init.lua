@@ -262,6 +262,7 @@ function M.reconcile(session)
             M.apply(session, win)
         elseif vim.bo[buf].buftype == "" and vim.api.nvim_buf_get_name(buf) ~= "" then
             require("jpr").bind_tab_aware_full_diff_key(buf)
+            require("jpr").bind_tab_aware_pr_comment_key(buf)
             require("jpr").bind_tab_aware_toggle_panel_key(buf)
         end
     end
