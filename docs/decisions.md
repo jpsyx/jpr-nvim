@@ -1196,3 +1196,22 @@ newly marks a file under it for review.
 
 **Revisit when.** A second frontend draws the file tree and needs its own
 collapse set per client instead of one set per review.
+
+## The sidebar unviewed filter is session memory
+
+**Decision.** `gu` in the sidebar toggles a filter that shows changed files
+still needing review (`UNVIEWED` and `DISMISSED`) and directories that contain
+one. The flag lives on the open review session. Closing the sidebar with `gP`
+keeps it. Ending the session clears it. It is not stored in `local.json` and
+it is not a `:Jpr` command.
+
+**Why.** The filter is a lens for the rest of this pass, not review state.
+Collapse is remembered because it is how the reviewer organized the tree.
+Remembering the lens would hide reviewed files on the next launch with no
+fresh signal that the filter was still on.
+
+**Consequences.** A redraw and a sidebar toggle keep the same rows. A new
+session starts with the full tree. The counts line says `unviewed only` while
+the filter is on, and the tree says `all files viewed` when nothing remains.
+
+**Revisit when.** Reviewers want the lens remembered per pull request.

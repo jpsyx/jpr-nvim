@@ -250,6 +250,35 @@ end
 
 local DIRECTORY_CHECK = "✓"
 
+--- A changed file still needs review unless it is marked `VIEWED`.
+--- `DISMISSED` stays visible: the diff moved after the last review.
+local function file_needs_review(file)
+    return type(file) == "table" and file.viewed ~= "VIEWED"
+end
+
+--- True when any changed file under the directory at `dir_index` still needs review.
+local function directory_needs_review(tree, dir_index, dir_depth, files)
+    for index = dir_index + 1, #tree do
+        local descendant = tree[index]
+        if descendant.depth <= dir_depth then
+            break
+        end
+        local file = descendant.file ~= nil and files[descendant.file + 1] or nil
+        if file_needs_review(file) then
+            return true
+        end
+    end
+    return false
+end
+
+--- True when `hide_viewed` should omit this tree row and, for a directory, its descendants.
+local function row_is_hidden_as_viewed(row, index, tree, files)
+    if row.file ~= nil then
+        return not file_needs_review(files[row.file + 1])
+    end
+    return not directory_needs_review(tree, index, row.depth, files)
+end
+
 --- Counts changed files nested under the directory at `dir_index`, including
 --- files inside child directories. `viewed_count` includes only `VIEWED`.
 local function count_descendant_viewed_files(tree, dir_index, dir_depth, files)
@@ -332,7 +361,7 @@ local function add_directory_line(content, row, dir_path, parent_dir, is_collaps
     content.selectable_lines[#content.selectable_lines + 1] = line_1based
 end
 
-local function render_tree_rows(content, view, collapsed_dirs, is_unlinked_local)
+local function render_tree_rows(content, view, collapsed_dirs, is_unlinked_local, hide_viewed)
     local files = view.files or {}
     local tree = view.tree or M.create_flat_tree_from_files(files)
     local dir_stack = {}
@@ -346,6 +375,12 @@ local function render_tree_rows(content, view, collapsed_dirs, is_unlinked_local
         end
         while #dir_stack > 0 and dir_stack[#dir_stack].depth >= row.depth do
             dir_stack[#dir_stack] = nil
+        end
+        if hide_viewed and row_is_hidden_as_viewed(row, index, tree, files) then
+            if row.file == nil then
+                skip_depth = row.depth
+            end
+            goto continue
         end
         local parent_dir = #dir_stack > 0 and dir_stack[#dir_stack].path or nil
         local file = row.file and files[row.file + 1]
@@ -435,6 +470,26 @@ function M.append_progress_bar_highlights(highlights, line, col_offset, progress
     }
 end
 
+local function every_file_is_viewed(files)
+    if type(files) ~= "table" or #files == 0 then
+        return false
+    end
+    for _, file in ipairs(files) do
+        if file_needs_review(file) then
+            return false
+        end
+    end
+    return true
+end
+
+local function build_visible_counts_text(view, hide_viewed)
+    local text = M.build_counts_text(view)
+    if hide_viewed then
+        return text .. " · unviewed only"
+    end
+    return text
+end
+
 local function add_progress_bar_line(content, view)
     local files = view.files or {}
     local progress_bar = M.create_progress_bar_from_counts(view.viewedCount or 0, #files)
@@ -444,13 +499,15 @@ end
 
 --- The panel's contents for `view` at time `now` (Unix seconds): its lines,
 --- their highlights, row metadata, selectable lines, and which file each line
---- shows, for the panel window to draw and navigate.
+--- shows, for the panel window to draw and navigate. `opts.hide_viewed`
+--- omits `VIEWED` files and directories whose files are all `VIEWED`.
 --- @return table { lines: string[], highlights: table[], paths: table<integer, string>, rows: table<integer, table>, selectable_lines: integer[], summary_line: integer, conversation_line: integer }
 --- `line` is 0-based and columns are byte offsets; `paths` and `rows` are keyed by 1-based line number.
 function M.build(view, now, opts)
     local collapsed_dirs = type(opts) == "table" and type(opts.collapsed_dirs) == "table" and opts.collapsed_dirs or {}
     local width = type(opts) == "table" and tonumber(opts.width) or nil
     local checkout_branch = type(opts) == "table" and opts.checkout_branch or nil
+    local hide_viewed = type(opts) == "table" and opts.hide_viewed == true
     local content = { lines = {}, highlights = {}, paths = {}, rows = {}, selectable_lines = {} }
     function content.add_line(text, group)
         content.lines[#content.lines + 1] = text
@@ -472,7 +529,7 @@ function M.build(view, now, opts)
         add_fitted_line(content, branch_line, "JprMuted", width)
     end
     add_progress_bar_line(content, view)
-    content.add_line(M.build_counts_text(view), "JprMuted")
+    content.add_line(build_visible_counts_text(view, hide_viewed), "JprMuted")
     if is_unlinked_local then
         content.add_line("local only · :Jpr sync to link PR", "JprMuted")
     else
@@ -490,7 +547,10 @@ function M.build(view, now, opts)
     local conversation_line = #content.lines
     content.rows[conversation_line] = { kind = "conversation" }
     content.selectable_lines[#content.selectable_lines + 1] = conversation_line
-    render_tree_rows(content, view, collapsed_dirs, is_unlinked_local)
+    render_tree_rows(content, view, collapsed_dirs, is_unlinked_local, hide_viewed)
+    if hide_viewed and every_file_is_viewed(view.files) then
+        content.add_line("  all files viewed", "JprMuted")
+    end
     return {
         lines = content.lines,
         highlights = content.highlights,

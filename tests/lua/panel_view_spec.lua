@@ -691,6 +691,42 @@ end)
 assert(count_editor_windows() == 0, "marking a directory viewed leaves the editor closed")
 assert(vim.api.nvim_get_current_win() == panel_win, "marking a directory viewed keeps the sidebar focused")
 
+-- gu shows only files that still need review, and the choice survives closing the sidebar.
+local filtered_view = vim.deepcopy(tree_view)
+filtered_view.files[1].viewed = "VIEWED"
+filtered_view.files[2].viewed = "DISMISSED"
+filtered_view.files[3].viewed = "VIEWED"
+filtered_view.viewedCount = 2
+review.view = filtered_view
+panel_view.render(review, filtered_view)
+local gu_map = vim.fn.maparg("gu", "n", false, true)
+assert(type(gu_map) == "table" and type(gu_map.callback) == "function", "gu is mapped on the panel")
+press("gu", find_panel_line("file", "README.md"))
+local filtered_text = table.concat(vim.api.nvim_buf_get_lines(review.panel.buf, 0, -1, false), "\n")
+assert(filtered_text:find("unviewed only", 1, true) ~= nil, filtered_text)
+assert(filtered_text:find("README.md", 1, true) == nil, filtered_text)
+assert(filtered_text:find("b.rs", 1, true) == nil, filtered_text)
+assert(filtered_text:find("a.rs", 1, true) ~= nil, filtered_text)
+assert(filtered_text:find("src/", 1, true) ~= nil, filtered_text)
+assert(vim.api.nvim_get_current_win() == review.panel.win, "gu keeps the sidebar focused")
+local cursor_after_filter = vim.api.nvim_win_get_cursor(review.panel.win)[1]
+assert(review.panel.rows[cursor_after_filter] ~= nil, "cursor lands on a visible row after hiding the previous file")
+
+press("gu", cursor_after_filter)
+local restored_text = table.concat(vim.api.nvim_buf_get_lines(review.panel.buf, 0, -1, false), "\n")
+assert(restored_text:find("unviewed only", 1, true) == nil, restored_text)
+assert(restored_text:find("README.md", 1, true) ~= nil, restored_text)
+assert(restored_text:find("b.rs", 1, true) ~= nil, restored_text)
+
+press("gu", find_panel_line("file", "README.md"))
+assert(panel_view.toggle(review) == true, "sidebar closes while the agent window is open")
+assert(review.panel_hide_viewed == true, "closing the sidebar keeps the unviewed filter")
+assert(panel_view.toggle(review) == true, "sidebar reopens")
+local reopened_text = table.concat(vim.api.nvim_buf_get_lines(review.panel.buf, 0, -1, false), "\n")
+assert(reopened_text:find("unviewed only", 1, true) ~= nil, reopened_text)
+assert(reopened_text:find("README.md", 1, true) == nil, reopened_text)
+assert(reopened_text:find("a.rs", 1, true) ~= nil, reopened_text)
+
 os.remove(stream_payload)
 os.remove(set_viewed_payload)
 os.remove(collapsed_payload)

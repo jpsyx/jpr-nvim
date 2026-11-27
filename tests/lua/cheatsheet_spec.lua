@@ -79,6 +79,7 @@ local EXPECTED_DEFAULT_ITEMS = {
     "Rename or move file / directory",
     "Create file or directory",
     "Toggle file or directory viewed",
+    "Show only files and directories that still need review",
     "Show keyboard shortcuts",
     "Diff & Stream Views",
     "gc",

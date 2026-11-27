@@ -1,5 +1,6 @@
 -- The PR panel window: draws render.panel output as a vertical-only collapsible
--- menu, opens files/conversation, toggles directories, and toggles viewed on v.
+-- menu, opens files/conversation, toggles directories, toggles viewed on v,
+-- and filters to files that still need review on gu.
 local mouse = require("jpr.mouse")
 local panel_cursor = require("jpr.views.panel_cursor")
 local render = require("jpr.render.panel")
@@ -317,6 +318,10 @@ local function bind_action_keymaps(session, buf)
     vim.keymap.set("n", "v", function()
         M.toggle_viewed_under_cursor(session)
     end, { buffer = buf, nowait = true, silent = true, desc = "Toggle viewed for the file or directory under the cursor" })
+    vim.keymap.set("n", "gu", function()
+        session.panel_hide_viewed = not session.panel_hide_viewed
+        M.render(session, session.view or {})
+    end, { buffer = buf, nowait = true, silent = true, desc = "Show only files and directories that still need review" })
     vim.keymap.set("n", "r", function()
         require("jpr.views.panel_input").start_rename(session)
     end, { buffer = buf, nowait = true, silent = true, desc = "Rename or move file or directory under cursor" })
@@ -485,6 +490,7 @@ function M.render(session, view)
         collapsed_dirs = collapsed_dirs,
         width = width,
         checkout_branch = cached_checkout_branch(session),
+        hide_viewed = session.panel_hide_viewed == true,
     })
     panel.paths = built.paths
     panel.rows = built.rows

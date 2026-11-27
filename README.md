@@ -116,6 +116,7 @@ The left sidebar panel acts as a vertical-only collapsible menu:
 | `r` | Rename or move the file or directory under the cursor (inline input + automatic LSP import updates) |
 | `a` | Create a new file or directory (inline input; trailing `/` creates a directory + LSP `willCreateFiles`/`didCreateFiles`) |
 | `v` | Toggle viewed for the file or directory (recursively across subdirectories) under the cursor |
+| `gu` | Show only files and directories that still need review (`UNVIEWED` or `DISMISSED`). Press again to show the full tree. The filter stays on while the sidebar is closed with `gP` and resets when the review session ends |
 | `?` | Show the keyboard shortcuts cheatsheet |
 
 `j` and `k` highlight the row without a cursor block. The row background is

@@ -469,4 +469,79 @@ local unwrapped = panel.build({
 }, 0)
 assert(unwrapped.lines[1] == "#7 " .. long_title, "callers without a width keep one title line")
 
+-- hide_viewed keeps files that still need review and drops files already VIEWED.
+local unviewed_only = panel.build(view, 112, { hide_viewed = true })
+assert(vim.deep_equal(unviewed_only.lines, {
+    "#7 Fix the widget",
+    "█████░░░░░░░░░░░  1/3 (33%)",
+    "viewed 1/3 · threads 2 · drafts 1 · unviewed only",
+    "synced 12s ago",
+    "",
+    "  📄 Diff summary",
+    "  💬 Conversation [2]",
+    "▾ docs/",
+    "    x.md  +4 -4",
+    "▾ src/",
+    "  ● b.rs  +1 -0",
+}), vim.inspect(unviewed_only.lines))
+assert(unviewed_only.paths[9] == "docs/x.md" and unviewed_only.paths[11] == "src/b.rs", vim.inspect(unviewed_only.paths))
+assert(unviewed_only.paths[10] == nil, "the src directory opens nothing")
+local unviewed_paths = {}
+for _, path in pairs(unviewed_only.paths) do
+    unviewed_paths[#unviewed_paths + 1] = path
+end
+table.sort(unviewed_paths)
+assert(vim.deep_equal(unviewed_paths, { "docs/x.md", "src/b.rs" }), vim.inspect(unviewed_paths))
+
+-- A fully reviewed tree says so instead of drawing an empty file list.
+local all_viewed = vim.deepcopy(view)
+for _, file in ipairs(all_viewed.files) do
+    file.viewed = "VIEWED"
+end
+all_viewed.viewedCount = #all_viewed.files
+local reviewed = panel.build(all_viewed, 112, { hide_viewed = true })
+assert(reviewed.lines[#reviewed.lines] == "  all files viewed", vim.inspect(reviewed.lines))
+local reviewed_paths = {}
+for _, path in pairs(reviewed.paths) do
+    reviewed_paths[#reviewed_paths + 1] = path
+end
+assert(#reviewed_paths == 0, vim.inspect(reviewed_paths))
+assert(reviewed.summary_line ~= nil and reviewed.conversation_line ~= nil, "summary and conversation stay")
+
+-- A directory stays only when some descendant still needs review.
+local nested = {
+    pr = { number = 7, title = "Fix the widget" },
+    files = {
+        { path = "lib/done.rs", additions = 1, deletions = 0, viewed = "VIEWED", threads = 0 },
+        { path = "src/core/a.rs", additions = 2, deletions = 0, viewed = "UNVIEWED", threads = 0 },
+        { path = "src/old/b.rs", additions = 1, deletions = 0, viewed = "VIEWED", threads = 0 },
+    },
+    tree = {
+        { depth = 0, name = "lib" },
+        { depth = 1, name = "done.rs", file = 0 },
+        { depth = 0, name = "src" },
+        { depth = 1, name = "core" },
+        { depth = 2, name = "a.rs", file = 1 },
+        { depth = 1, name = "old" },
+        { depth = 2, name = "b.rs", file = 2 },
+    },
+    viewedCount = 2,
+    threadCount = 0,
+    sync = { state = "synced", at = 112 },
+}
+local nested_built = panel.build(nested, 112, { hide_viewed = true })
+local nested_text = table.concat(nested_built.lines, "\n")
+assert(nested_text:find("lib/", 1, true) == nil, nested_text)
+assert(nested_text:find("done.rs", 1, true) == nil, nested_text)
+assert(nested_text:find("old/", 1, true) == nil, nested_text)
+assert(nested_text:find("b.rs", 1, true) == nil, nested_text)
+assert(nested_text:find("▾ src/", 1, true) ~= nil, nested_text)
+assert(nested_text:find("▾ core/", 1, true) ~= nil, nested_text)
+assert(nested_text:find("a.rs", 1, true) ~= nil, nested_text)
+
+local collapsed_unviewed = panel.build(view, 112, { hide_viewed = true, collapsed_dirs = { src = true, docs = true } })
+assert(collapsed_unviewed.lines[8] == "▸ docs/ (0/1)", vim.inspect(collapsed_unviewed.lines))
+assert(collapsed_unviewed.lines[9] == "▸ src/ (1/2)", vim.inspect(collapsed_unviewed.lines))
+assert(collapsed_unviewed.lines[10] == nil, "collapsed filter hides the files under those directories")
+
 print("panel_render_spec: ok")
