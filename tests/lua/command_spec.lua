@@ -172,9 +172,9 @@ vim.api.nvim_buf_delete(key_buf, { force = true })
 jpr.setup({})
 
 local messages = {}
-vim.notify = function(message, level)
-    messages[#messages + 1] = { text = message, level = level }
-end
+require("jpr.notify").set_listener(function(_, message, level)
+    messages[#messages + 1] = { text = "jpr: " .. message, level = level }
+end)
 jpr.command({ "frobnicate" })
 assert(messages[1].level == vim.log.levels.ERROR, "an unknown subcommand is an error")
 assert(messages[1].text:find("unknown subcommand", 1, true), messages[1].text)

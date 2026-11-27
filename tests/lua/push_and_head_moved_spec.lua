@@ -45,9 +45,9 @@ local function setup_test_context()
     create_fake_agent_script(fake_agent, capture_file)
 
     local notifications = {}
-    vim.notify = function(message, level)
-        notifications[#notifications + 1] = { message = message, level = level }
-    end
+    require("jpr.notify").set_listener(function(_, message, level)
+        notifications[#notifications + 1] = { message = "jpr: " .. message, level = level }
+    end)
 
     vim.env.FAKE_ENGINE_LOG = engine_log
     vim.env.FAKE_ENGINE_DIFF_FILE = diff_override_file

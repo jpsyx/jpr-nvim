@@ -87,6 +87,7 @@ return function(context)
     for _, mode in ipairs({ "unified", "split", "unified" }) do
         session.toggle_view()
         wait_for_mode(review, mode)
+        require("jpr.notify").clear()
         local expected = mode == "split" and 2 or 1
         assert(#find_stream_buffers(7) == expected, mode .. ": " .. vim.inspect(find_stream_buffers(7)))
         assert(#vim.api.nvim_tabpage_list_wins(review.tab) == expected + 1, mode .. ": the panel and the halves only")
@@ -374,6 +375,7 @@ return function(context)
         local left = review.stream.left_win
         return left ~= nil and vim.api.nvim_win_is_valid(left)
     end), "a new left half opens")
+    require("jpr.notify").clear()
     assert(#vim.api.nvim_tabpage_list_wins(review.tab) == 3, "the panel and the halves only")
 
     -- A window where the reviewer opened their own buffer is theirs.

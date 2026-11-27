@@ -194,6 +194,7 @@ assert(vim.wait(3000, function()
 end), "the stream is split")
 local left_win = review.stream.left_win
 local stream_win = vim.fn.win_findbuf(review.stream.buffers.main)[1]
+require("jpr.notify").clear()
 assert(#vim.api.nvim_tabpage_list_wins(review.tab) == 3, "the panel and the halves")
 press("<CR>", 9)
 assert(vim.api.nvim_get_current_win() == stream_win, "README.md opens in the main window")

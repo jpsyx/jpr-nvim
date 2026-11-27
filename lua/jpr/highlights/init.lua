@@ -24,6 +24,16 @@ local SEMANTIC_LINKS = {
     JprThreadResolved = "Comment",
     JprReactionActive = "DiagnosticOk",
     JprAuthor = "Identifier",
+    JprNotifyErrorBorder = "DiagnosticError",
+    JprNotifyErrorTitle = "DiagnosticError",
+    JprNotifySuccessBorder = "DiagnosticOk",
+    JprNotifySuccessTitle = "DiagnosticOk",
+    JprNotifyInfoBorder = "DiagnosticInfo",
+    JprNotifyInfoTitle = "DiagnosticInfo",
+    JprNotifyWarnBorder = "DiagnosticWarn",
+    JprNotifyWarnTitle = "DiagnosticWarn",
+    JprNotifyProgressBorder = "DiagnosticInfo",
+    JprNotifyProgressTitle = "DiagnosticInfo",
 }
 
 local DARK_TINTS = {

@@ -112,9 +112,9 @@ assert(review.view.localUnsentCount == 0, "agentRound updates session.view")
 local review_tab = vim.api.nvim_get_current_tabpage()
 jpr.setup({ binary = worktree .. "/missing-engine" })
 local notified = {}
-vim.notify = function(message)
-    notified[#notified + 1] = message
-end
+require("jpr.notify").set_listener(function(_, message)
+    notified[#notified + 1] = "jpr: " .. message
+end)
 vim.cmd("tabfirst")
 local first_tab = vim.api.nvim_get_current_tabpage()
 session.open(7, "octo/gadgets")

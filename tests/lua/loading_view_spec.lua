@@ -150,11 +150,12 @@ local function assert_loading_buffer_and_timer_lifecycle()
 end
 
 local function stub_system_and_notify()
-    local original_system, original_notify = vim.system, vim.notify
+    local original_system = vim.system
+    local jpr_notify = require("jpr.notify")
     local calls, notifications = {}, {}
-    vim.notify = function(message, level)
-        notifications[#notifications + 1] = { message = message, level = level }
-    end
+    jpr_notify.set_listener(function(_, message, level)
+        notifications[#notifications + 1] = { message = "jpr: " .. message, level = level }
+    end)
     vim.system = function(cmd, opts, on_exit)
         local entry = { cmd = cmd, opts = opts, on_exit = on_exit }
         calls[#calls + 1] = entry
@@ -164,7 +165,7 @@ local function stub_system_and_notify()
     end
     local function restore()
         vim.system = original_system
-        vim.notify = original_notify
+        jpr_notify.set_listener(nil)
     end
     return calls, notifications, restore
 end
@@ -277,11 +278,12 @@ end
 
 local function assert_spawn_failure_cleans_up_loading_tab_and_allows_retry()
     jpr.setup({ binary = fake_engine })
-    local original_system, original_notify = vim.system, vim.notify
+    local original_system = vim.system
+    local jpr_notify = require("jpr.notify")
     local notifications, spawn_attempts = {}, 0
-    vim.notify = function(message, level)
-        notifications[#notifications + 1] = { message = message, level = level }
-    end
+    jpr_notify.set_listener(function(_, message, level)
+        notifications[#notifications + 1] = { message = "jpr: " .. message, level = level }
+    end)
     vim.system = function()
         spawn_attempts = spawn_attempts + 1
         if spawn_attempts == 1 then
@@ -301,7 +303,8 @@ local function assert_spawn_failure_cleans_up_loading_tab_and_allows_retry()
     session.open(88)
     assert(spawn_attempts == 2, "pending state cleared so retry launches a new checkout")
     session.close_current()
-    vim.system, vim.notify = original_system, original_notify
+    vim.system = original_system
+    require("jpr.notify").set_listener(nil)
 end
 
 local function assert_manual_tabclose_kills_pending_checkout_process()
@@ -327,7 +330,8 @@ local function assert_manual_tabclose_kills_pending_checkout_process()
     session.open(89)
     assert(spawn_count == 2, "manual :tabclose cleared pending state so reopen launches checkout")
     session.close_current()
-    vim.system, vim.notify = original_system, original_notify
+    vim.system = original_system
+    require("jpr.notify").set_listener(nil)
 end
 
 local function assert_tcd_failure_cleans_up_loading_tab()

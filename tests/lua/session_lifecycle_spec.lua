@@ -8,13 +8,15 @@ local crashing_engine = root .. "/tests/lua/fixtures/crashing_engine.sh"
 
 local messages = {}
 local notifications = {}
-vim.notify = function(message, level)
-    messages[#messages + 1] = message
-    notifications[#notifications + 1] = { message = message, level = level }
-end
+require("jpr.notify").set_listener(function(_, message, level)
+    local formatted = "jpr: " .. message
+    messages[#messages + 1] = formatted
+    notifications[#notifications + 1] = { message = formatted, level = level }
+end)
 local function clear_notifications()
     messages = {}
     notifications = {}
+    require("jpr.notify").clear()
 end
 local function wait_for_message(text)
     return vim.wait(3000, function()
@@ -94,6 +96,7 @@ local buffers_before = #vim.api.nvim_list_bufs()
 start_pr(11)
 assert(sessions_for(11) == 0, "a failed panel registers nothing")
 assert(wait_for_message("E95"), "the panel failure is reported")
+require("jpr.notify").clear()
 assert(tab_count() == tabs_before and #vim.api.nvim_list_bufs() == buffers_before, "a failed panel leaves no stray tab or buffer")
 
 -- An engine that cannot be spawned forgets its session.
