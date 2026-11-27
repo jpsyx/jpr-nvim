@@ -209,6 +209,10 @@ impl ReviewSession {
         self.publish(&Event::ThreadsChanged {
             view: Box::new(view.clone()),
         });
+        self.publish(&Event::AgentPrepassWritten {
+            count: created.len(),
+            view: Box::new(view.clone()),
+        });
         Ok((created, view))
     }
 

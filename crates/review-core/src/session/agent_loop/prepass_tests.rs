@@ -17,6 +17,7 @@ fn prepass_write_creates_answered_local_threads_with_snapshots() {
     assert_eq!(prepass.thread_ids, Vec::<String>::new());
     assert!(prepass.prompt.contains("prepass-write"));
 
+    let events = session.subscribe();
     let (created, view) = session
         .prepass_write(vec![
             PrepassFinding {
@@ -36,6 +37,14 @@ fn prepass_write_creates_answered_local_threads_with_snapshots() {
             },
         ])
         .unwrap();
+    assert!(matches!(
+        events.try_recv().expect("expected ThreadsChanged"),
+        review_model::Event::ThreadsChanged { .. }
+    ));
+    assert!(matches!(
+        events.try_recv().expect("expected AgentPrepassWritten"),
+        review_model::Event::AgentPrepassWritten { count: 2, .. }
+    ));
     assert_eq!(created.len(), 2);
     assert_eq!(created[0].origin, Origin::Local);
     assert_eq!(created[0].messages[0].author, "agent");

@@ -108,12 +108,48 @@ fn synced_event_uses_camel_case_view_fields() {
 fn sync_delta_is_empty_only_when_all_fields_are_zero_or_false() {
     let empty = SyncDelta::default();
     assert!(empty.is_empty());
-    assert!(!SyncDelta { files_changed: 1, ..empty }.is_empty());
-    assert!(!SyncDelta { new_comments: 1, ..empty }.is_empty());
-    assert!(!SyncDelta { updated_comments: 1, ..empty }.is_empty());
-    assert!(!SyncDelta { resolved_threads: 1, ..empty }.is_empty());
-    assert!(!SyncDelta { reopened_threads: 1, ..empty }.is_empty());
-    assert!(!SyncDelta { head_moved: true, ..empty }.is_empty());
+    assert!(
+        !SyncDelta {
+            files_changed: 1,
+            ..empty
+        }
+        .is_empty()
+    );
+    assert!(
+        !SyncDelta {
+            new_comments: 1,
+            ..empty
+        }
+        .is_empty()
+    );
+    assert!(
+        !SyncDelta {
+            updated_comments: 1,
+            ..empty
+        }
+        .is_empty()
+    );
+    assert!(
+        !SyncDelta {
+            resolved_threads: 1,
+            ..empty
+        }
+        .is_empty()
+    );
+    assert!(
+        !SyncDelta {
+            reopened_threads: 1,
+            ..empty
+        }
+        .is_empty()
+    );
+    assert!(
+        !SyncDelta {
+            head_moved: true,
+            ..empty
+        }
+        .is_empty()
+    );
 }
 
 #[test]

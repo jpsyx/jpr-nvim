@@ -10,6 +10,7 @@ use crate::collapsed::viewed_states_from_files;
 use crate::comments::{merge_unflushed_threads, reconcile_concurrent_edits, record_agreed_bodies};
 use crate::ports::{FastForwardOutcome, ForgeSnapshot};
 use crate::reanchor::{collect_changed_digest_paths, hash_bounded_file_bytes};
+use crate::sync_delta::{SyncComparisonSnapshot, compute_sync_delta};
 use crate::viewed::{apply_queued, drop_stale_marks};
 
 struct HeadMoveSummary {
@@ -122,7 +123,7 @@ impl ReviewSession {
         let (has_landed, _) = self.send_queued();
         let result = self
             .pull()
-            .and_then(|(pr, snapshot)| self.apply_pull(pr, snapshot, now));
+            .and_then(|(pr, snapshot)| self.apply_pull(pr, snapshot, now, is_background));
         if let Err(error) = &result {
             self.fail_sync(error, now, has_landed, is_background);
         }
@@ -172,7 +173,9 @@ impl ReviewSession {
         pr: PullRequest,
         snapshot: ForgeSnapshot,
         now: u64,
+        is_background: bool,
     ) -> Result<SessionView> {
+        let before_snapshot = self.create_sync_comparison_snapshot();
         let previous_head_sha = self
             .saved
             .session
@@ -180,6 +183,10 @@ impl ReviewSession {
             .as_ref()
             .map(|existing_pr| existing_pr.head_sha.clone());
         let pr_head_sha = pr.head_sha.clone();
+        let was_own_push = self
+            .pushed_head
+            .as_ref()
+            .is_some_and(|pushed| pushed.pushed_sha == pr_head_sha);
         let prior_head_sha = self.get_prior_head_sha_for_sync(previous_head_sha, &pr_head_sha);
         self.has_checked_reopen_head = true;
         if let Some(prior_sha) = prior_head_sha
@@ -191,6 +198,13 @@ impl ReviewSession {
             self.pending_head_move_from = None;
         }
         self.reconcile_pulled_state(pr, snapshot, now)?;
+        let after_snapshot = self.create_sync_comparison_snapshot();
+        let delta = compute_sync_delta(
+            &before_snapshot,
+            &after_snapshot,
+            &self.saved.registry.id_map,
+            was_own_push,
+        );
         let view =
             if let Some(prior_sha) = prior_head_sha.filter(|prior_sha| prior_sha != &pr_head_sha) {
                 self.handle_head_moved(&prior_sha, &pr_head_sha)?
@@ -200,10 +214,24 @@ impl ReviewSession {
             };
         self.publish(&Event::Synced {
             view: Box::new(view.clone()),
-            is_background: false,
-            delta: None,
+            is_background,
+            delta,
         });
         Ok(view)
+    }
+
+    fn create_sync_comparison_snapshot(&self) -> SyncComparisonSnapshot {
+        SyncComparisonSnapshot {
+            had_pr: self.saved.session.pr.is_some(),
+            head_sha: self
+                .saved
+                .session
+                .pr
+                .as_ref()
+                .map(|existing_pr| existing_pr.head_sha.clone()),
+            files: self.saved.files.clone(),
+            threads: self.threads.clone(),
+        }
     }
 
     fn get_prior_head_sha_for_sync(

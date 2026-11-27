@@ -7,17 +7,17 @@ use review_model::{ChangedFile, Origin, SyncDelta, Thread, ThreadState, ViewedSt
 
 /// Minimal pre- or post-sync state required to compute an external [`SyncDelta`].
 #[derive(Debug, Clone)]
-pub(crate) struct SyncComparisonSnapshot {
-    pub(crate) had_pr: bool,
-    pub(crate) head_sha: Option<String>,
-    pub(crate) files: Vec<ChangedFile>,
-    pub(crate) threads: Vec<Thread>,
+pub struct SyncComparisonSnapshot {
+    pub had_pr: bool,
+    pub head_sha: Option<String>,
+    pub files: Vec<ChangedFile>,
+    pub threads: Vec<Thread>,
 }
 
 /// Computes external remote changes between `before` and `after`, excluding
 /// locally originated actions (own comments mapped via `id_map`, own viewed
 /// marks, and own pushes).
-pub(crate) fn compute_sync_delta(
+pub fn compute_sync_delta(
     before: &SyncComparisonSnapshot,
     after: &SyncComparisonSnapshot,
     id_map: &BTreeMap<String, String>,
