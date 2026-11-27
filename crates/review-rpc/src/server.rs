@@ -79,6 +79,16 @@ pub fn handle(
                 lock(session)?.set_viewed_paths(&paths, viewed),
             )?)
         }
+        "setCollapsed" => {
+            let path = get_string_from_params(params, "path")?;
+            let collapsed = get_bool_from_params(params, "collapsed")?;
+            if let Err(error) = review_core::reanchor::validate_safe_relative_path(path) {
+                return Err(RpcError::new(RpcError::INVALID_PARAMS, error.to_string()));
+            }
+            to_value(&engine_result_to_rpc(
+                lock(session)?.set_collapsed(path, collapsed),
+            )?)
+        }
         "refreshWorktree" => {
             let renames = get_renames_from_params(params)?;
             to_value(&engine_result_to_rpc(

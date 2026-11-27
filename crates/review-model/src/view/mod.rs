@@ -1,6 +1,8 @@
 //! The read models a frontend draws, and the events that announce changes.
 //! Their JSON shape is the wire format in docs/protocol.md.
 
+use std::collections::BTreeSet;
+
 use serde::{Deserialize, Serialize};
 
 use crate::{PullRequest, ViewedState};
@@ -149,6 +151,9 @@ pub struct SessionView {
     /// Dirty and ahead/behind state of the local checkout relative to the PR head.
     #[serde(default)]
     pub worktree_status: WorktreeStatus,
+    /// Joined sidebar directory paths the reviewer has collapsed. Omitted when empty.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub collapsed_dirs: BTreeSet<String>,
 }
 
 /// Outcome returned by `:Jpr push` after pushing `HEAD` to the pull request head branch.

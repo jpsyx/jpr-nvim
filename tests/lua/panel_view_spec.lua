@@ -13,9 +13,11 @@ view_mode.path = vim.fn.tempname()
 local log = vim.fn.tempname()
 local set_viewed_payload = vim.fn.tempname()
 local stream_payload = vim.fn.tempname()
+local collapsed_payload = vim.fn.tempname()
 vim.env.FAKE_ENGINE_LOG = log
 vim.env.FAKE_ENGINE_SET_VIEWED_FILE = set_viewed_payload
 vim.env.FAKE_ENGINE_STREAM_FILE = stream_payload
+vim.env.FAKE_ENGINE_SET_COLLAPSED_FILE = collapsed_payload
 jpr.setup({ binary = root .. "/tests/lua/fixtures/fake_engine.sh" })
 local worktree = vim.fn.tempname()
 vim.fn.mkdir(worktree, "p")
@@ -115,6 +117,12 @@ panel_view.render(review, review.view)
 local function find_sent_requests(needle)
     return vim.tbl_filter(function(line)
         return line:find('"method":"setViewed"', 1, true) ~= nil and line:find(needle, 1, true) ~= nil
+    end, vim.fn.readfile(log))
+end
+
+local function find_log_lines(needle)
+    return vim.tbl_filter(function(line)
+        return line:find(needle, 1, true) ~= nil
     end, vim.fn.readfile(log))
 end
 press("v", 9)
@@ -246,37 +254,75 @@ assert(vim.api.nvim_win_get_cursor(panel_win)[1] == 11, "k moves up to src/b.rs"
 run_panel_key("gg")
 assert(vim.api.nvim_win_get_cursor(panel_win)[1] == 7, "gg jumps to Diff summary")
 
+local function stage_collapsed(paths, base)
+    local next_view = vim.deepcopy(base or tree_view)
+    next_view.collapsedDirs = paths
+    vim.fn.writefile({ vim.json.encode(next_view) }, collapsed_payload)
+end
+
+local function wait_src_collapsed(label, is_collapsed)
+    assert(vim.wait(3000, function()
+        return (review.panel.collapsed_dirs["src"] == true) == is_collapsed
+    end), label)
+end
+
+-- A snapshot collapsedDirs list collapses the directory before any keypress.
+tree_view.collapsedDirs = { "src" }
+panel_view.render(review, tree_view)
+assert(review.panel.collapsed_dirs["src"] == true, "view.collapsedDirs collapses src/ before a keypress")
+assert(vim.api.nvim_buf_get_lines(review.panel.buf, 8, 9, false)[1]:find("▸ src/", 1, true) ~= nil, "collapsed src/ renders from the view")
+tree_view.collapsedDirs = nil
+panel_view.render(review, tree_view)
+assert(review.panel.collapsed_dirs["src"] == nil, "render without collapsedDirs expands src/")
+review.panel.collapsed_dirs["src"] = true
+panel_view.render(review, tree_view)
+assert(review.panel.collapsed_dirs["src"] == nil, "a local collapsed_dirs assignment does not survive render")
+
 -- h on child file jumps to parent_dir; h on expanded dir collapses it.
 vim.api.nvim_win_set_cursor(panel_win, { 11, 0 })
+local collapse_requests_before_file_h = #find_log_lines('"method":"setCollapsed"')
 run_panel_key("h")
 assert(vim.api.nvim_win_get_cursor(panel_win)[1] == 9, "h on child file jumps to parent src/ dir")
+assert(#find_log_lines('"method":"setCollapsed"') == collapse_requests_before_file_h, "h on a file sends no setCollapsed")
+stage_collapsed({ "src" })
 run_panel_key("h")
-assert(review.panel.collapsed_dirs["src"] == true, "h on expanded dir collapses it")
+wait_src_collapsed("h on expanded dir collapses it", true)
 assert(vim.api.nvim_buf_get_lines(review.panel.buf, 8, 9, false)[1] == "▸ src/ (0/2)", "collapsed src/ shows viewed files out of all descendant files")
 assert(vim.api.nvim_win_get_cursor(panel_win)[1] == 9, "cursor stays on collapsed dir")
+local collapse_request = find_log_lines('"method":"setCollapsed"')[#find_log_lines('"method":"setCollapsed"')]
+assert(collapse_request:find('"path":"src"', 1, true) and collapse_request:find('"collapsed":true', 1, true), collapse_request)
 
 -- o expands a collapsed dir, does nothing on an already-expanded dir.
+stage_collapsed({})
 run_panel_key("o")
-assert(review.panel.collapsed_dirs["src"] == nil, "o expands collapsed dir")
+wait_src_collapsed("o expands collapsed dir", false)
 assert(vim.api.nvim_win_get_cursor(panel_win)[1] == 9, "cursor stays on expanded dir after o")
+local requests_before_noop_o = #find_log_lines('"method":"setCollapsed"')
 run_panel_key("o")
-assert(review.panel.collapsed_dirs["src"] == nil, "o on already-expanded dir does nothing")
+assert(#find_log_lines('"method":"setCollapsed"') == requests_before_noop_o, "o on already-expanded dir does nothing")
+assert(review.panel.collapsed_dirs["src"] == nil, "o on already-expanded dir stays expanded")
 assert(vim.api.nvim_win_get_cursor(panel_win)[1] == 9, "o on already-expanded dir does not move cursor")
 
 -- <CR> toggles directories.
+stage_collapsed({ "src" })
 run_panel_key("<CR>")
-assert(review.panel.collapsed_dirs["src"] == true, "<CR> collapses expanded dir")
+wait_src_collapsed("<CR> collapses expanded dir", true)
+stage_collapsed({})
 run_panel_key("<CR>")
-assert(review.panel.collapsed_dirs["src"] == nil, "<CR> expands collapsed dir")
+wait_src_collapsed("<CR> expands collapsed dir", false)
 
 -- l / <Right> expands a collapsed dir and steps into first child on an expanded dir,
 -- but never opens a file, Diff summary, or Conversation row (avoiding accidental opens).
+stage_collapsed({ "src" })
 run_panel_key("h")
-assert(review.panel.collapsed_dirs["src"] == true, "re-collapsed src/")
+wait_src_collapsed("re-collapsed src/", true)
+stage_collapsed({})
 run_panel_key("l")
-assert(review.panel.collapsed_dirs["src"] == nil, "l expands collapsed dir")
+wait_src_collapsed("l expands collapsed dir", false)
 assert(vim.api.nvim_win_get_cursor(panel_win)[1] == 9, "l expanding dir keeps cursor on dir")
+local requests_before_step_l = #find_log_lines('"method":"setCollapsed"')
 run_panel_key("l")
+assert(#find_log_lines('"method":"setCollapsed"') == requests_before_step_l, "l on an expanded dir sends no setCollapsed")
 assert(vim.api.nvim_win_get_cursor(panel_win)[1] == 10, "l on expanded dir steps into first child")
 local main_buf_before_l = vim.api.nvim_win_get_buf(stream_win)
 run_panel_key("l")
@@ -334,8 +380,9 @@ end), "main window advances to next unviewed file README.md after src/ is marked
 assert(vim.api.nvim_get_current_win() == panel_win, "sidebar keeps cursor focus when advancing main window")
 
 -- Collapsing src/ and pressing v when all descendants are VIEWED unmarks all descendants.
+stage_collapsed({ "src" }, all_src_viewed)
 run_panel_key("h")
-assert(review.panel.collapsed_dirs["src"] == true, "collapsed src/")
+wait_src_collapsed("collapsed src/", true)
 vim.fn.writefile({ vim.json.encode(tree_view) }, set_viewed_payload)
 press("v", 9)
 assert(vim.wait(3000, function()
@@ -399,14 +446,20 @@ local is_mouse_ok, mouse_error = pcall(function()
     assert(type(left_mouse_map) == "table" and type(left_mouse_map.callback) == "function", "<LeftMouse> mapped on panel")
 
     -- Single-click on collapsed src/ directory expands it, then clicking again collapses and re-expands it.
-    assert(review.panel.collapsed_dirs["src"] == true, "src/ starts collapsed from prior test")
+    local collapsed_for_mouse = vim.deepcopy(tree_view)
+    collapsed_for_mouse.collapsedDirs = { "src" }
+    require("jpr.session").show(review, collapsed_for_mouse)
+    assert(review.panel.collapsed_dirs["src"] == true, "src/ starts collapsed for the click test")
     vim.fn.getmousepos = function() return { winid = panel_win, line = 9, column = 3 } end
+    stage_collapsed({})
     left_mouse_map.callback()
-    assert(review.panel.collapsed_dirs["src"] == nil, "single-click on collapsed dir expands it")
+    wait_src_collapsed("single-click on collapsed dir expands it", false)
+    stage_collapsed({ "src" })
     left_mouse_map.callback()
-    assert(review.panel.collapsed_dirs["src"] == true, "single-click on expanded dir collapses it")
+    wait_src_collapsed("single-click on expanded dir collapses it", true)
+    stage_collapsed({})
     left_mouse_map.callback()
-    assert(review.panel.collapsed_dirs["src"] == nil, "single-click re-expands src/ so src/a.rs is visible")
+    wait_src_collapsed("single-click re-expands src/ so src/a.rs is visible", false)
 
     -- Single-click on a file row opens that file in the main window.
     vim.fn.getmousepos = function() return { winid = panel_win, line = 10, column = 5 } end
@@ -523,6 +576,29 @@ end), "gp sends a PR comment from a directory row")
 local gp_comment = helpers.read_requests(log, "comment")[comments_before + 4].params
 assert(vim.deep_equal(gp_comment.anchor, { kind = "pr", side = "RIGHT" }), vim.inspect(gp_comment))
 
+local lines_before_bad_collapse = vim.api.nvim_buf_get_lines(review.panel.buf, 0, -1, false)
+local applied_bad_collapse = false
+session.request(review, "setCollapsed", { path = "../x", collapsed = true }, function()
+    applied_bad_collapse = true
+end)
+assert(vim.wait(3000, function()
+    return #find_log_lines('"path":"../x"') >= 1
+end), "unsafe setCollapsed is sent")
+assert(applied_bad_collapse == false, "a failed setCollapsed does not apply")
+assert(vim.deep_equal(vim.api.nvim_buf_get_lines(review.panel.buf, 0, -1, false), lines_before_bad_collapse), "a failed setCollapsed leaves the panel lines")
+
+local expanded_view = vim.deepcopy(tree_view)
+expanded_view.collapsedDirs = nil
+stage_collapsed({ "src" })
+require("jpr.session").show(review, (function()
+    local collapsed_view = vim.deepcopy(tree_view)
+    collapsed_view.collapsedDirs = { "src" }
+    return collapsed_view
+end)())
+assert(review.panel.collapsed_dirs["src"] == true, "show collapses src from the view")
+require("jpr.session").show(review, expanded_view)
+assert(review.panel.collapsed_dirs["src"] == nil, "a synced view drops a collapsed parent")
+
 -- Marking a file or directory viewed must not reopen a closed editor.
 -- The agent split is a side window, so the tab can be sidebar + agent only.
 local layout = require("jpr.views.layout")
@@ -610,8 +686,10 @@ assert(vim.api.nvim_get_current_win() == panel_win, "marking a directory viewed 
 
 os.remove(stream_payload)
 os.remove(set_viewed_payload)
+os.remove(collapsed_payload)
 vim.env.FAKE_ENGINE_STREAM_FILE = nil
 vim.env.FAKE_ENGINE_SET_VIEWED_FILE = nil
+vim.env.FAKE_ENGINE_SET_COLLAPSED_FILE = nil
 
 session.close_current()
 print("panel_view_spec: ok")

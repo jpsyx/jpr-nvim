@@ -1175,3 +1175,24 @@ visible full diff view once.
 **Revisit when.** GitHub introduces a native multi-path `markFilesAsViewed`
 GraphQL mutation, or a second frontend needs server-driven directory prefix
 expansion directly over RPC.
+
+## Collapsed sidebar directories are local review state
+
+**Decision.** The set of collapsed sidebar directories lives in `local.json`
+(`collapsedDirs`) and on every `SessionView`. A successful GitHub pull removes
+a collapsed path only when a file inside it changes to `UNVIEWED` or
+`DISMISSED` in both the forge snapshot and the reconciled state, and that
+differs from the saved viewed state. `setViewed`, a queued mark that
+disagrees with GitHub, and a failed pull do not expand anything.
+
+**Why.** Viewed files and local threads already survive a restart. Collapse
+was process memory, so every directory opened again. Reopening on any
+unviewed file would throw away a collapse the reviewer just made.
+
+**Consequences.** `PROTOCOL_VERSION` advances to `11`. `setCollapsed` is
+stdio-only. Renames rewrite the paths. Linking a local review unions the
+two sets, and the pull that follows can still expand a path when GitHub
+newly marks a file under it for review.
+
+**Revisit when.** A second frontend draws the file tree and needs its own
+collapse set per client instead of one set per review.

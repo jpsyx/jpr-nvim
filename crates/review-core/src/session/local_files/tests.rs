@@ -1,5 +1,7 @@
 //! Tests for local worktree file merging, viewed lifecycle, origin-split comments, and rename migration.
 
+use std::collections::BTreeSet;
+
 use review_model::{
     Anchor, Event, FileRow, Origin, PrepassFinding, SessionView, StreamRow, ViewMode, ViewedState,
 };
@@ -276,5 +278,34 @@ fn refresh_worktree_dismisses_in_place_edited_local_viewed_without_dismissing_re
     assert_eq!(
         fakes.store.saved().local.local_viewed.get("src/moved.rs"),
         Some(&ViewedState::Viewed)
+    );
+}
+
+#[test]
+fn refresh_worktree_rewrites_collapsed_directory_prefixes() {
+    let fakes = Fakes::new(100);
+    fakes
+        .workspace
+        .put_disk("src/api/nested/keep.rs", "fn keep() {}\n");
+    fakes
+        .workspace
+        .put_disk("src/api-extra/x.rs", "fn x() {}\n");
+    let mut session = fakes.open_synced();
+    session.set_collapsed("src/api", true).unwrap();
+    session.set_collapsed("src/api/nested", true).unwrap();
+    session.set_collapsed("src/api-extra", true).unwrap();
+    session
+        .refresh_worktree(&[PathRename {
+            old_path: "src/api".into(),
+            new_path: "src/v2/api".into(),
+        }])
+        .unwrap();
+    assert_eq!(
+        fakes.store.saved().local.collapsed_dirs,
+        BTreeSet::from([
+            "src/api-extra".to_owned(),
+            "src/v2/api".to_owned(),
+            "src/v2/api/nested".to_owned(),
+        ])
     );
 }

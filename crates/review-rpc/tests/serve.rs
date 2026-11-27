@@ -20,7 +20,7 @@ use support::{
 fn initialize_reports_the_protocol_and_server_versions() {
     let written = run(&request(1, "initialize"), &forge());
     let result = &response(&written, 1)["result"];
-    assert_eq!(result["protocolVersion"], 10);
+    assert_eq!(result["protocolVersion"], 11);
     assert_eq!(result["version"], "9.9.9");
 }
 
@@ -152,7 +152,7 @@ fn missing_or_mistyped_params_are_errors_and_serving_goes_on() {
             "{error}"
         );
     }
-    assert_eq!(response(&written, 5)["result"]["protocolVersion"], 10);
+    assert_eq!(response(&written, 5)["result"]["protocolVersion"], 11);
 }
 
 #[test]
@@ -351,6 +351,47 @@ fn shutdown_waits_for_every_event_to_be_written() {
             "attempt {attempt}: {written:?}"
         );
     }
+}
+
+#[test]
+fn set_collapsed_returns_the_view_without_an_event() {
+    let input = request(1, "sync")
+        + &build_request_with_params(2, "setCollapsed", r#"{"path":"src","collapsed":true}"#);
+    let written = run(&input, &forge());
+    let sync_answer = written
+        .iter()
+        .position(|message| message["id"] == 1)
+        .unwrap();
+    let collapse_answer = written
+        .iter()
+        .position(|message| message["id"] == 2)
+        .unwrap();
+    assert!(
+        written[sync_answer + 1..collapse_answer]
+            .iter()
+            .all(|message| message["method"] != "event"),
+        "setCollapsed announces no event: {written:?}"
+    );
+    assert_eq!(
+        response(&written, 2)["result"]["collapsedDirs"],
+        serde_json::json!(["src"])
+    );
+}
+
+#[test]
+fn set_collapsed_rejects_an_unsafe_path() {
+    let input =
+        build_request_with_params(1, "setCollapsed", r#"{"path":"../src","collapsed":true}"#)
+            + &build_request_with_params(2, "setCollapsed", r#"{"collapsed":true}"#)
+            + &request(3, "snapshot");
+    let written = run(&input, &forge());
+    assert_eq!(response(&written, 1)["error"]["code"], -32602);
+    assert_eq!(response(&written, 2)["error"]["code"], -32602);
+    assert!(
+        response(&written, 3)["result"]
+            .get("collapsedDirs")
+            .is_none()
+    );
 }
 
 #[test]
