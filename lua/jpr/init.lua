@@ -19,6 +19,12 @@ M.defaults = {
     agent = "claude",
     -- Executable name, command string with flags, or argv list for Claude Code.
     claude_cmd = "claude",
+    -- Claude Code model passed as `--model` when `claude_cmd` does not set one.
+    -- nil omits the flag.
+    claude_model = nil,
+    -- Claude Code reasoning effort passed as `--effort` when `claude_cmd` does
+    -- not set one. nil omits the flag.
+    claude_effort = nil,
     -- Executable name, command string with flags, or argv list for Codex.
     codex_cmd = "codex",
     -- Layout direction for the coding agent terminal: "vertical", "horizontal",

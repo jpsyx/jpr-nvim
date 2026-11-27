@@ -54,6 +54,8 @@ assert(lines[8] == "  README.md  +2 -1 [1]", vim.inspect(lines))
 
 assert(jpr.defaults.agent == "claude", "default agent")
 assert(jpr.defaults.claude_cmd == "claude", "default claude_cmd")
+assert(jpr.defaults.claude_model == nil, "default claude_model omits --model")
+assert(jpr.defaults.claude_effort == nil, "default claude_effort omits --effort")
 assert(jpr.defaults.codex_cmd == "codex", "default codex_cmd")
 assert(jpr.defaults.agent_direction == "vertical", "default agent_direction")
 assert(jpr.defaults.agent_width == nil, "default agent_width is proportional nil")

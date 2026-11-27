@@ -103,6 +103,42 @@ local function append_list(target, extra)
     return target
 end
 
+local function argv_contains_flag(argv, flag)
+    local equals_prefix = flag .. "="
+    for _, token in ipairs(argv) do
+        if token == flag or token:sub(1, #equals_prefix) == equals_prefix then
+            return true
+        end
+    end
+    return false
+end
+
+local function trimmed_config_string(config, key)
+    local value = config[key]
+    if type(value) ~= "string" then
+        return nil
+    end
+    local trimmed = vim.trim(value)
+    if trimmed == "" then
+        return nil
+    end
+    return trimmed
+end
+
+--- Appends configured Claude `--model` and `--effort` when `argv` does not
+--- already set that flag. Explicit tokens in `claude_cmd` win.
+local function append_configured_claude_flags(argv, config)
+    local model = trimmed_config_string(config, "claude_model")
+    if model and not argv_contains_flag(argv, "--model") then
+        append_list(argv, { "--model", model })
+    end
+    local effort = trimmed_config_string(config, "claude_effort")
+    if effort and not argv_contains_flag(argv, "--effort") then
+        append_list(argv, { "--effort", effort })
+    end
+    return argv
+end
+
 --- Creates the terminal argv for launching or resuming the configured agent CLI
 --- from `config`, `worktree`, `launch_plan`, and optional `initial_prompt`.
 function M.create_launch_argv_from_plan(config, worktree, launch_plan, home_directory, initial_prompt)
@@ -119,6 +155,7 @@ function M.create_launch_argv_from_plan(config, worktree, launch_plan, home_dire
         return argv
     end
     local argv = M.parse_command_argv(active_config.claude_cmd, "claude")
+    append_configured_claude_flags(argv, active_config)
     if has_session_id then
         if is_resume and M.has_claude_transcript(worktree, plan.sessionId, home_directory) then
             append_list(argv, { "--resume", plan.sessionId })

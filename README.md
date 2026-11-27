@@ -41,6 +41,8 @@ With [lazy.nvim](https://github.com/folke/lazy.nvim):
     -- "claude" (the default) or "codex".
     -- agent = "claude",
     -- claude_cmd = "claude", -- executable, command string with flags, or argv list
+    -- claude_model = nil, -- passed as --model when claude_cmd does not already set one
+    -- claude_effort = nil, -- reasoning effort passed as --effort when claude_cmd does not already set one
     -- codex_cmd = "codex",
     -- agent_direction = "vertical", -- "vertical" | "horizontal" | "float" | "tab"
     -- agent_width = nil, -- nil computes ~40% of columns; set a number to pin width

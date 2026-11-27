@@ -115,6 +115,72 @@ local function test_launch_argv_and_cold_start_prompt()
     end
 end
 
+local function test_claude_model_and_effort_flags()
+    local home_dir = vim.fn.tempname()
+    local worktree = "/tmp/my_repo.work/pr-7"
+    local session_id = "00000000-0000-4000-8000-000000000002"
+    local prompt = "fix the widget"
+
+    local configured = command.create_launch_argv_from_plan(
+        { claude_cmd = "cl", claude_model = "opus", claude_effort = " medium " },
+        worktree,
+        { kind = "claude", sessionId = session_id, isResume = false },
+        home_dir,
+        prompt
+    )
+    assert(
+        vim.deep_equal(configured, {
+            "cl",
+            "--model",
+            "opus",
+            "--effort",
+            "medium",
+            "--session-id",
+            session_id,
+            "--",
+            prompt,
+        }),
+        "configured model and effort are passed before the session and prompt: " .. vim.inspect(configured)
+    )
+
+    local explicit = command.create_launch_argv_from_plan(
+        {
+            claude_cmd = { "cl", "--model=sonnet", "--effort", "high" },
+            claude_model = "opus",
+            claude_effort = "medium",
+        },
+        worktree,
+        { kind = "claude", sessionId = session_id, isResume = false },
+        home_dir,
+        prompt
+    )
+    assert(
+        vim.deep_equal(explicit, { "cl", "--model=sonnet", "--effort", "high", "--session-id", session_id, "--", prompt }),
+        "command flags keep their model and effort: " .. vim.inspect(explicit)
+    )
+
+    local blank = command.create_launch_argv_from_plan(
+        { claude_cmd = "cl", claude_model = "  ", claude_effort = "" },
+        worktree,
+        { kind = "claude" },
+        home_dir,
+        nil
+    )
+    assert(vim.deep_equal(blank, { "cl" }), "blank model and effort add no flags: " .. vim.inspect(blank))
+
+    local codex = command.create_launch_argv_from_plan(
+        { agent = "codex", codex_cmd = "codex", claude_model = "opus", claude_effort = "medium" },
+        worktree,
+        { kind = "codex", sessionId = session_id, isResume = true },
+        home_dir,
+        prompt
+    )
+    assert(
+        vim.deep_equal(codex, { "codex", "resume", session_id }),
+        "codex ignores claude model and effort: " .. vim.inspect(codex)
+    )
+end
+
 local function test_claude_vim_mode_detection()
     local home_dir = vim.fn.tempname()
     assert(command.is_claude_vim_mode_enabled(home_dir, "") == false, "missing settings file is false")
@@ -165,6 +231,7 @@ end
 
 test_parse_command_argv()
 test_launch_argv_and_cold_start_prompt()
+test_claude_model_and_effort_flags()
 test_claude_vim_mode_detection()
 test_extract_prompt_preview_items()
 
