@@ -132,18 +132,109 @@ local function handle_sync_failed(session, params)
     end
 end
 
+local function pluralize(count, singular, plural)
+    return ("%d %s"):format(count, count == 1 and singular or plural)
+end
+
+--- Builds a concise human-readable summary for a non-empty `SyncDelta`, or nil.
+function M.build_sync_delta_message(session, delta)
+    if type(delta) ~= "table" then
+        return nil
+    end
+    local parts = {}
+    local files_changed = tonumber(delta.filesChanged) or 0
+    local new_comments = tonumber(delta.newComments) or 0
+    local updated_comments = tonumber(delta.updatedComments) or 0
+    local resolved_threads = tonumber(delta.resolvedThreads) or 0
+    local reopened_threads = tonumber(delta.reopenedThreads) or 0
+    if files_changed > 0 then
+        parts[#parts + 1] = pluralize(files_changed, "file changed", "files changed")
+    end
+    if new_comments > 0 then
+        parts[#parts + 1] = pluralize(new_comments, "new comment", "new comments")
+    end
+    if updated_comments > 0 then
+        parts[#parts + 1] = pluralize(updated_comments, "comment edited", "comments edited")
+    end
+    if resolved_threads > 0 then
+        parts[#parts + 1] = pluralize(resolved_threads, "thread resolved", "threads resolved")
+    end
+    if reopened_threads > 0 then
+        parts[#parts + 1] = pluralize(reopened_threads, "thread reopened", "threads reopened")
+    end
+    if #parts == 0 then
+        return nil
+    end
+    local prefix = crash.build_session_label(session)
+    return ("%s updated: %s"):format(prefix, table.concat(parts, ", "))
+end
+
+--- Builds a concise notification message for an `agentReplied` event payload.
+function M.build_agent_reply_message(params)
+    local author = crash.build_clean_text_from_raw(params and params.author)
+    if author == "" then
+        author = "agent"
+    end
+    local file = crash.build_clean_text_from_raw(params and params.file)
+    local line = type(params) == "table" and tonumber(params.line) or nil
+    if file ~= "" and line ~= nil then
+        return ("%s replied on %s:%d"):format(author, file, line)
+    end
+    if file ~= "" then
+        return ("%s replied on %s"):format(author, file)
+    end
+    return ("%s replied on PR conversation"):format(author)
+end
+
+local function refresh_open_thread_views(session, target_thread_id)
+    local conversation = package.loaded["jpr.views.conversation"]
+    if conversation and conversation.refresh then
+        conversation.refresh(session)
+    end
+    local popup = package.loaded["jpr.comments.popup"]
+    if popup and popup.refresh_open then
+        popup.refresh_open(session, target_thread_id)
+    end
+end
+
+local function handle_synced_notification(session, params, show_session)
+    show_session(session, params.view)
+    local delta = type(params.delta) == "table" and params.delta or nil
+    if not delta then
+        return
+    end
+    local has_file_changes = (tonumber(delta.filesChanged) or 0) > 0 or delta.headMoved == true
+    local has_comment_changes = (tonumber(delta.newComments) or 0) > 0
+        or (tonumber(delta.updatedComments) or 0) > 0
+        or (tonumber(delta.resolvedThreads) or 0) > 0
+        or (tonumber(delta.reopenedThreads) or 0) > 0
+    if has_file_changes then
+        require("jpr.views.diff").redraw_all(session)
+    end
+    if has_comment_changes then
+        require("jpr.views.diff").redraw_threads(session)
+        refresh_open_thread_views(session, nil)
+    end
+    if has_file_changes or has_comment_changes then
+        require("jpr.views.stream").refresh(session, true)
+    end
+    local summary = M.build_sync_delta_message(session, delta)
+    if summary then
+        jpr().info(summary)
+    end
+end
+
 local function handle_event_notification(session, params, show_session)
-    if params.type == "synced" or params.type == "viewedChanged" then
+    if params.type == "synced" then
+        handle_synced_notification(session, params, show_session)
+    elseif params.type == "viewedChanged" then
         show_session(session, params.view)
     elseif params.type == "threadsChanged" then
         apply_session_view(session, params.view)
         panel.render(session, session.view)
         require("jpr.views.diff").redraw_threads(session)
         require("jpr.views.stream").refresh(session, true)
-        local conversation = package.loaded["jpr.views.conversation"]
-        if conversation and conversation.refresh then
-            conversation.refresh(session)
-        end
+        refresh_open_thread_views(session, nil)
     elseif params.type == "filesChanged" then
         apply_session_view(session, params.view)
         -- Guarded with pcall: Ex checktime errors inside the command-line window (`q:`).
@@ -156,6 +247,18 @@ local function handle_event_notification(session, params, show_session)
         panel.render(session, session.view)
         require("jpr.views.diff").redraw_threads(session)
         require("jpr.views.stream").refresh(session, true)
+    elseif params.type == "agentReplied" then
+        apply_session_view(session, params.view)
+        panel.render(session, session.view)
+        refresh_open_thread_views(session, params.threadId)
+        jpr().info(M.build_agent_reply_message(params))
+    elseif params.type == "agentPrepassWritten" then
+        apply_session_view(session, params.view)
+        panel.render(session, session.view)
+        local count = tonumber(params.count) or 0
+        if count > 0 then
+            jpr().info("Agent added " .. pluralize(count, "pre-pass finding", "pre-pass findings"))
+        end
     elseif params.type == "worktreeStatusChanged" then
         apply_session_view(session, params.view)
         panel.render(session, session.view)

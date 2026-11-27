@@ -337,6 +337,34 @@ function M.refresh_from_thread(session, updated_thread)
     end
 end
 
+--- Silently reloads the open thread popup when it displays `target_thread_id`
+--- (or any thread when `target_thread_id` is nil).
+function M.refresh_open(session, target_thread_id)
+    local popup = session and session.popup
+    if not popup or not popup.win or not vim.api.nvim_win_is_valid(popup.win) or not session.client then
+        return
+    end
+    local watched_ids = {}
+    for _, item in ipairs(popup.threads or {}) do
+        if type(item.threadId) == "string" then
+            watched_ids[item.threadId] = true
+        end
+    end
+    if target_thread_id ~= nil and not watched_ids[target_thread_id] then
+        return
+    end
+    require("jpr.session").request(session, "threads", nil, function(result)
+        if session.closing or session.popup ~= popup then
+            return
+        end
+        for _, thread in ipairs(type(result) == "table" and result.threads or {}) do
+            if watched_ids[thread.id] then
+                M.refresh_from_thread(session, thread)
+            end
+        end
+    end, nil, { silent = true })
+end
+
 --- Scrolls floating thread window `win` to the bottom of `layout` while
 --- ensuring the first line of the last message stays visible at or below the
 --- viewport top, placing the cursor at that message's start.
