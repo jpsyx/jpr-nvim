@@ -118,6 +118,13 @@ The left sidebar panel acts as a vertical-only collapsible menu:
 | `v` | Toggle viewed for the file or directory (recursively across subdirectories) under the cursor |
 | `?` | Show the keyboard shortcuts cheatsheet |
 
+`j` and `k` highlight the row without a cursor block. The row background is
+10% brighter, and each colored piece of the line keeps its hue while gaining
+10% contrast against that background. A file or directory name that does not
+fit stays on one line: the selected row continues past the sidebar, or a small
+borderless tooltip shows the full path when the screen cannot fit it. Moving
+off the row restores the original colors and closes the tooltip.
+
 Inline rename (`r`) and create (`a`) follow three path rules with live
 destination hints: a plain name without `/` targets a sibling (or child of a
 selected directory), a path containing `/` resolves relative to the project

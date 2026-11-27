@@ -163,4 +163,79 @@ function M.adjust_fg_for_diff_bg(fg_rgb, normal_bg_rgb, diff_bg_rgb, is_dark)
     return adjusted_rgb
 end
 
+--- Moves `rgb` toward white by `amount` of the remaining OKLab lightness.
+--- `amount` 0.10 brightens by 10%. Hue stays locked. Zero or a non-number
+--- returns `rgb` unchanged.
+function M.brighten_background(rgb, amount)
+    if type(rgb) ~= "number" then
+        return rgb
+    end
+    local fraction = tonumber(amount) or 0
+    if fraction <= 0 then
+        return rgb
+    end
+    local lightness, chroma, hue = M.rgb_to_oklch(rgb)
+    local brightened = math.min(1, lightness + fraction * (1 - lightness))
+    return select(1, M.oklch_to_rgb_clamped(brightened, chroma, hue))
+end
+
+--- Searches OKLab lightness from `lightness` toward white or black until the
+--- contrast against `background_rgb` reaches `target_ratio`.
+local function contrast_along_lightness(lightness, chroma, hue, background_rgb, target_ratio, move_lighter)
+    local near = lightness
+    local extreme_lightness = move_lighter and 1 or 0
+    local far = extreme_lightness
+    local best_rgb = select(1, M.oklch_to_rgb_clamped(lightness, chroma, hue))
+    local best_ratio = M.contrast_ratio(best_rgb, background_rgb)
+    for _ = 1, 18 do
+        local mid = (near + far) * 0.5
+        local candidate = select(1, M.oklch_to_rgb_clamped(mid, chroma, hue))
+        local ratio = M.contrast_ratio(candidate, background_rgb)
+        if ratio >= target_ratio - 1e-4 then
+            best_rgb, best_ratio, far = candidate, ratio, mid
+        else
+            near = mid
+        end
+    end
+    local extreme = select(1, M.oklch_to_rgb_clamped(extreme_lightness, chroma, hue))
+    local extreme_ratio = M.contrast_ratio(extreme, background_rgb)
+    if extreme_ratio > best_ratio and best_ratio < target_ratio - 1e-3 then
+        return extreme, extreme_ratio
+    end
+    return best_rgb, best_ratio
+end
+
+--- Raises the WCAG contrast of `foreground_rgb` against `background_rgb` by
+--- `boost` (0.10 means 10%) by moving OKLab lightness away from the background
+--- and locking hue. A color that cannot gain that much contrast moves as far
+--- as the gamut allows. Zero or a non-number returns `foreground_rgb`.
+function M.increase_contrast(foreground_rgb, background_rgb, boost)
+    if type(foreground_rgb) ~= "number" or type(background_rgb) ~= "number" then
+        return foreground_rgb
+    end
+    local fraction = tonumber(boost) or 0
+    if fraction <= 0 then
+        return foreground_rgb
+    end
+    local original_ratio = M.contrast_ratio(foreground_rgb, background_rgb)
+    local target_ratio = math.min(21, original_ratio * (1 + fraction))
+    if target_ratio <= original_ratio + 1e-4 then
+        return foreground_rgb
+    end
+    local lightness, chroma, hue = M.rgb_to_oklch(foreground_rgb)
+    local background_lightness = select(1, M.rgb_to_oklch(background_rgb))
+    local prefer_lighter = lightness >= background_lightness
+    local primary_rgb, primary_ratio =
+        contrast_along_lightness(lightness, chroma, hue, background_rgb, target_ratio, prefer_lighter)
+    if primary_ratio >= target_ratio - 1e-3 then
+        return primary_rgb
+    end
+    local other_rgb, other_ratio =
+        contrast_along_lightness(lightness, chroma, hue, background_rgb, target_ratio, not prefer_lighter)
+    if other_ratio > primary_ratio then
+        return other_rgb
+    end
+    return primary_rgb
+end
+
 return M

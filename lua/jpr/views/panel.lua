@@ -1,6 +1,7 @@
 -- The PR panel window: draws render.panel output as a vertical-only collapsible
 -- menu, opens files/conversation, toggles directories, and toggles viewed on v.
 local mouse = require("jpr.mouse")
+local panel_cursor = require("jpr.views.panel_cursor")
 local render = require("jpr.render.panel")
 
 local function git_stdout(worktree, args)
@@ -238,6 +239,31 @@ local function handle_left_click(session)
     handle_enter_key(session)
 end
 
+local function bind_cursor_autocmds(session, buf)
+    vim.api.nvim_create_autocmd({ "CursorMoved", "WinEnter", "WinScrolled", "VimResized" }, {
+        buffer = buf,
+        callback = function()
+            if not session.panel or vim.api.nvim_get_current_win() ~= session.panel.win then
+                return
+            end
+            clamp_cursor(session.panel)
+            panel_cursor.sync(session.panel)
+        end,
+    })
+    vim.api.nvim_create_autocmd("WinLeave", {
+        buffer = buf,
+        callback = function()
+            panel_cursor.clear(session.panel)
+        end,
+    })
+    vim.api.nvim_create_autocmd("ColorScheme", {
+        buffer = buf,
+        callback = function()
+            panel_cursor.sync(session.panel)
+        end,
+    })
+end
+
 local function bind_navigation_keymaps(session, buf)
     local map = function(lhs, rhs, desc)
         vim.keymap.set("n", lhs, rhs, { buffer = buf, nowait = true, silent = true, desc = desc })
@@ -350,12 +376,7 @@ function M.open(session)
     style_window(win)
     session.panel_collapsed_dirs = collapsed_dirs
     session.panel = { buf = buf, win = win, paths = {}, rows = {}, selectable_lines = {}, collapsed_dirs = collapsed_dirs }
-    vim.api.nvim_create_autocmd("CursorMoved", {
-        buffer = buf,
-        callback = function()
-            clamp_cursor(session.panel)
-        end,
-    })
+    bind_cursor_autocmds(session, buf)
     bind_navigation_keymaps(session, buf)
     bind_action_keymaps(session, buf)
     M.render(session, session.view or {})
@@ -383,6 +404,9 @@ end
 --- Wipes the panel buffer, which also closes its window.
 function M.close(session)
     local panel = session.panel
+    if panel then
+        panel_cursor.clear(panel)
+    end
     if panel and panel.collapsed_dirs then
         session.panel_collapsed_dirs = panel.collapsed_dirs
     end
@@ -442,6 +466,7 @@ function M.render(session, view)
     })
     panel.paths = built.paths
     panel.rows = built.rows
+    panel.highlights = built.highlights
     panel.selectable_lines = built.selectable_lines
     panel.summary_line = built.summary_line
     panel.conversation_line = built.conversation_line
@@ -462,6 +487,7 @@ function M.render(session, view)
     if target_line then
         set_cursor_line(panel, target_line)
     end
+    panel_cursor.sync(panel)
 end
 
 --- Returns the 1-based cursor line and row metadata under the panel cursor, or nil.
