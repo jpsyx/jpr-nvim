@@ -14,6 +14,7 @@ use crate::tree::create_file_tree_from_paths;
 /// its files with viewed state and thread counts, how many viewed marks wait
 /// for the forge, and how the last sync went.
 #[must_use]
+#[allow(clippy::too_many_arguments)]
 pub fn session_view(
     pr: Option<&PullRequest>,
     local_context: Option<&LocalReviewContext>,
@@ -22,6 +23,7 @@ pub fn session_view(
     sync: &SyncState,
     queued_count: usize,
     worktree_status: &WorktreeStatus,
+    collapsed_dirs: &BTreeSet<String>,
 ) -> SessionView {
     SessionView {
         pr: pr.cloned(),
@@ -49,6 +51,7 @@ pub fn session_view(
         queued_count,
         sync: sync.clone(),
         worktree_status: worktree_status.clone(),
+        collapsed_dirs: collapsed_dirs.clone(),
     }
 }
 
@@ -157,6 +160,7 @@ mod tests {
             &SyncState::Synced { at: 5 },
             0,
             &WorktreeStatus::default(),
+            &BTreeSet::new(),
         );
         let counts: Vec<(&str, usize)> = view
             .files
@@ -189,6 +193,7 @@ mod tests {
             &SyncState::Never,
             0,
             &WorktreeStatus::default(),
+            &BTreeSet::new(),
         );
         let paths: Vec<&str> = view.files.iter().map(|row| row.path.as_str()).collect();
         assert_eq!(paths, ["z.rs", "a.rs"]);
@@ -223,6 +228,7 @@ mod tests {
             &SyncState::Synced { at: 5 },
             0,
             &status,
+            &BTreeSet::new(),
         );
         assert_eq!(view.worktree_status, status);
         assert!(!view.files[0].is_modified);
@@ -249,8 +255,25 @@ mod tests {
             &SyncState::Never,
             0,
             &WorktreeStatus::default(),
+            &BTreeSet::new(),
         );
         assert!(view.pr.is_none());
         assert_eq!(view.local_context, Some(context));
+    }
+
+    #[test]
+    fn session_view_copies_collapsed_dirs() {
+        let collapsed = BTreeSet::from(["src".to_owned()]);
+        let view = session_view(
+            None,
+            None,
+            &[],
+            &[],
+            &SyncState::Never,
+            0,
+            &WorktreeStatus::default(),
+            &collapsed,
+        );
+        assert_eq!(view.collapsed_dirs, collapsed);
     }
 }

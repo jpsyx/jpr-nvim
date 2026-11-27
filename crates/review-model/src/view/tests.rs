@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use super::*;
 
 #[test]
@@ -43,7 +45,21 @@ fn create_sample_view() -> SessionView {
         queued_count: 2,
         sync: SyncState::Never,
         worktree_status: WorktreeStatus::default(),
+        collapsed_dirs: BTreeSet::new(),
     }
+}
+
+#[test]
+fn session_view_omits_empty_collapsed_dirs_and_serializes_a_sorted_set() {
+    let mut view = create_sample_view();
+    let empty = serde_json::to_value(&view).unwrap();
+    assert!(empty.get("collapsedDirs").is_none());
+    let decoded: SessionView = serde_json::from_value(empty).unwrap();
+    assert!(decoded.collapsed_dirs.is_empty());
+
+    view.collapsed_dirs = BTreeSet::from(["src".to_owned(), "docs/x".to_owned()]);
+    let json = serde_json::to_value(&view).unwrap();
+    assert_eq!(json["collapsedDirs"], serde_json::json!(["docs/x", "src"]));
 }
 
 #[test]

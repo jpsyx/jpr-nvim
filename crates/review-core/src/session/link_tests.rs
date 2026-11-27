@@ -1,6 +1,6 @@
 //! Unit tests for mid-session local-to-PR upgrade and authoritative viewed promotion.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use review_model::{
     AgentKind, AgentThreadState, Anchor, Event, LocalReviewContext, Message, Origin, SyncState,
@@ -233,4 +233,30 @@ fn sync_in_local_mode_merges_preexisting_pr_snapshot_renumbering_colliding_local
         Some(launch.session_id.as_str())
     );
     assert!(fakes.store.saved().session.socket.is_none());
+}
+
+#[test]
+fn linking_unions_collapsed_directories_that_still_contain_viewed_files() {
+    let fakes = Fakes::new(200);
+    let mut snapshot = unviewed_pr_snapshot();
+    snapshot.files = vec![
+        changed_file("src/kept.rs", ViewedState::Viewed),
+        changed_file("lib/kept.rs", ViewedState::Viewed),
+    ];
+    fakes.forge.set_snapshot(snapshot);
+    fakes.workspace.put_base("src/kept.rs", "old\n");
+    fakes.workspace.put_disk("src/kept.rs", "new\n");
+    fakes.workspace.put_base("lib/kept.rs", "old\n");
+    fakes.workspace.put_disk("lib/kept.rs", "new\n");
+    let mut prior = StoreSnapshot::default();
+    prior.local.collapsed_dirs = BTreeSet::from(["lib".to_owned()]);
+    fakes.store.set_retarget_snapshot(Some(prior));
+
+    let mut session = open_local(&fakes);
+    session.set_collapsed("src", true).unwrap();
+    let view = session.sync().unwrap();
+    assert_eq!(
+        view.collapsed_dirs,
+        BTreeSet::from(["lib".to_owned(), "src".to_owned()])
+    );
 }

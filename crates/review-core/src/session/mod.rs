@@ -3,6 +3,7 @@
 //! share.
 
 mod agent_loop;
+mod collapsed;
 mod comments;
 mod diffs;
 mod link;
@@ -219,6 +220,7 @@ impl ReviewSession {
             &self.sync,
             self.saved.registry.queued_viewed.len() + self.saved.registry.queued_ops.len(),
             worktree_status,
+            &self.saved.local.collapsed_dirs,
         )
     }
 

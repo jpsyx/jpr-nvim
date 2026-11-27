@@ -63,6 +63,10 @@ impl ReviewSession {
         for (path, state) in prior.local.local_viewed {
             self.saved.local.local_viewed.entry(path).or_insert(state);
         }
+        self.saved
+            .local
+            .collapsed_dirs
+            .extend(prior.local.collapsed_dirs);
         self.threads.extend(self.saved.registry.threads.clone());
         let merged_prior_local = self.renumber_colliding_local_threads(prior.local.threads);
         self.threads.extend(merged_prior_local);

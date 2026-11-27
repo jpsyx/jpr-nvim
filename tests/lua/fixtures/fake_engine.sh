@@ -58,7 +58,7 @@ while IFS= read -r line; do
   if [ -n "$FAKE_ENGINE_LOG" ]; then printf '%s\n' "$line" >> "$FAKE_ENGINE_LOG"; fi
   id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
   case "$line" in
-    *'"method":"initialize"'*) reply '{"protocolVersion":'"${FAKE_ENGINE_PROTOCOL:-10}"',"version":"'"${FAKE_ENGINE_VERSION-test}"'"}' ;;
+    *'"method":"initialize"'*) reply '{"protocolVersion":'"${FAKE_ENGINE_PROTOCOL:-11}"',"version":"'"${FAKE_ENGINE_VERSION-test}"'"}' ;;
     *'"method":"snapshot"'*) reply "$view_empty" ;;
     *'"method":"sync"'*) announce synced "$view_synced"; reply "$view_synced" ;;
     *'"method":"push"'*)
@@ -139,6 +139,14 @@ while IFS= read -r line; do
       reply '{"thread":'"$thread_code"',"view":'"$view_synced"'}' ;;
     *'"method":"updateLocalAnchors"'*) reply "$view_synced" ;;
     *'"method":"refreshWorktree"'*) reply "$view_synced" ;;
+    *'"method":"setCollapsed"'*'"path":"../x"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32602,"message":"invalid repository-relative path"}}\n' "$id" ;;
+    *'"method":"setCollapsed"'*)
+      if [ -n "$FAKE_ENGINE_SET_COLLAPSED_FILE" ] && [ -f "$FAKE_ENGINE_SET_COLLAPSED_FILE" ]; then
+        reply "$(cat "$FAKE_ENGINE_SET_COLLAPSED_FILE")"
+      else
+        printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32602,"message":"setCollapsed fixture missing"}}\n' "$id"
+      fi ;;
     *'"method":"shutdown"'*) reply null; exit 0 ;;
     *) printf '{"jsonrpc":"2.0","id":%s,"error":{"code":-32601,"message":"method not found"}}\n' "$id" ;;
   esac

@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use review_model::{Event, HeadMoveOutcome, SessionView, SyncState, ViewedState};
 
 use super::super::test_support::{Fakes, create_snapshot};
@@ -242,4 +244,35 @@ fn sync_emits_ahead_and_failed_outcomes_without_failing_the_pull() {
     let (_, _, outcome, _, message, _) = take_head_moved_and_synced(&events);
     assert_eq!(outcome, HeadMoveOutcome::Failed);
     assert!(message.unwrap().contains("fetch timed out"));
+}
+
+#[test]
+fn sync_expands_a_collapsed_parent_when_github_dismisses_a_viewed_file() {
+    let fakes = Fakes::new(100);
+    let mut session = fakes.open_synced();
+    session.set_collapsed("src", true).unwrap();
+    session.set_collapsed("lib", true).unwrap();
+    let mut snapshot = create_snapshot();
+    snapshot.files[0].viewed = ViewedState::Dismissed;
+    snapshot
+        .files
+        .push(crate::fakes::changed_file("lib/c.rs", ViewedState::Viewed));
+    fakes.forge.set_snapshot(snapshot);
+    let view = session.sync().unwrap();
+    let expected = BTreeSet::from(["lib".to_owned()]);
+    assert_eq!(view.collapsed_dirs, expected);
+    assert_eq!(fakes.store.saved().local.collapsed_dirs, expected);
+}
+
+#[test]
+fn a_failed_sync_keeps_collapsed_directories() {
+    let fakes = Fakes::new(100);
+    let mut session = fakes.open_synced();
+    session.set_collapsed("src", true).unwrap();
+    fakes.forge.fail_with(Some("gh timed out after 30s"));
+    assert!(session.sync().is_err());
+    assert_eq!(
+        session.view().collapsed_dirs,
+        BTreeSet::from(["src".to_owned()])
+    );
 }

@@ -51,7 +51,7 @@ fn serve_handles_refresh_worktree_and_reports_protocol_7() {
     serve(Cursor::new(input), &output, &shared, &options(None)).unwrap();
     let written = messages(&output);
 
-    assert_eq!(response(&written, 1)["result"]["protocolVersion"], 10);
+    assert_eq!(response(&written, 1)["result"]["protocolVersion"], 11);
     let refreshed = &response(&written, 2)["result"];
     let renamed_row = refreshed["files"]
         .as_array()

@@ -34,7 +34,7 @@ spawns the interactive agent terminal, it exports that path as `JPR_SOCKET`.
   `threads`, `agentReply`, and `prepassWrite`.
 - Any other method (including `shutdown`, `initialize`, `sync`, `push`,
   `submitReview`, `promoteThread`, `confirmSend`,
-  `prepareConflictResolution`, and `refreshWorktree`) is refused over the
+  `prepareConflictResolution`, `refreshWorktree`, and `setCollapsed`) is refused over the
   socket with `-32600` (`INVALID_REQUEST`).
 - After a socket request runs, any events it produced (such as
   `threadsChanged`) are flushed immediately to the stdio client before the
@@ -51,13 +51,14 @@ with `:Lazy build jpr-nvim`.
 
 | Method | Params | Result |
 | --- | --- | --- |
-| `initialize` | `{ "protocolVersion": 10, "client": "..." }` (the server reads neither) | `{ "protocolVersion": 10, "version": "0.8.0" }` |
+| `initialize` | `{ "protocolVersion": 11, "client": "..." }` (the server reads neither) | `{ "protocolVersion": 11, "version": "0.8.0" }` |
 | `snapshot` | none | `SessionView` (carries `localContext` when unlinked, `pr` when linked) |
 | `sync` | none | `SessionView`; in PR mode, error `-32001` (`AUTH_REQUIRED`) when `gh` is unauthenticated or `-32000` when GitHub fails otherwise, after a `syncFailed` event (announces `headMoved` before `synced` when `pr.headSha` changes); in local mode, probes `gh pr view` and upgrades the live session in-place if an open PR exists (promoting locally `VIEWED` files to GitHub), returns `-32001` when `gh` is unauthenticated, or returns an informational `-32000` error without `syncFailed` when no open PR exists yet |
 | `push` | none | `PushResult`; pushes `HEAD` to `refs/heads/<headRef>` (stdio-only; refused over `JPR_SOCKET` with `-32600`); error `-32000` before the first sync, when local `HEAD` is behind or already at the remote head, when a cross-repository (`pr.isCrossRepository`) pull request lacks explicit fork tracking or targets the base repository, or when `git push` fails |
 | `fileDiff` | `{ "path": "src/a.rs" }` | `FileDiffView`; error `-32000` for a file the pull request does not change, a side over 4 MiB, or before the first sync |
 | `stream` | `{ "mode": "unified" \| "split" }` | `StreamView` (emits `streamProgress` notifications per file while running); error `-32000` before the first sync |
 | `setViewed` | `{ "path": "src/a.rs", "viewed": true }` or `{ "paths": ["src/a.rs", "src/b.rs"], "viewed": true }` (provide exactly one of `path` or non-empty `paths`) | `SessionView`, after one `viewedChanged` event |
+| `setCollapsed` | `{ "path": "src/core", "collapsed": true }` | `SessionView`, with no event. `path` must be a safe relative path. Stdio only |
 | `threads` | none | `{ "threads": Thread[] }` |
 | `mentions` | none | `{ "candidates": MentionCandidate[] }` |
 | `comment` | `{ "anchor": Anchor, "body": "...", "origin"?: "github" \| "local" }` (`origin` optional, defaults to `"github"`) | `{ "thread": Thread, "view": SessionView }`, after a `threadsChanged` event |
@@ -85,9 +86,9 @@ with `:Lazy build jpr-nvim`.
 
 The server also exits when stdin closes. Methods without params ignore them,
 so `null`, `{}` or a missing `params` all work. `push`,
-`prepareConflictResolution`, `confirmSend`, and `refreshWorktree` are
-stdio-only and rejected over the Unix domain socket (`JPR_SOCKET`) with
-`-32600`. `setViewed` succeeds even when GitHub refuses the mark: the mark
+`prepareConflictResolution`, `confirmSend`, `refreshWorktree`, and
+`setCollapsed` are stdio-only and rejected over the Unix domain socket
+(`JPR_SOCKET`) with `-32600`. `setViewed` succeeds even when GitHub refuses the mark: the mark
 stands, is counted in `queuedCount`, and is sent again by later retries and
 syncs. For local-only worktree files (`isLocalOnly: true`), `setViewed` updates
 `local.json` (`localViewed`) without calling GitHub.
@@ -218,6 +219,9 @@ event is written before the `shutdown` response.
   files, each sorted by name. A directory holding only one directory is joined
   to it (`"name": "docs/x"`). A file row's `file` is its index in `files`; a
   directory's is `null`.
+- `collapsedDirs` is the sorted list of joined directory paths the reviewer
+  has collapsed (`src`, `src/core`, `docs/x`). It is omitted when empty.
+  Clients treat a missing value as no collapsed directories.
 - `threadCount` counts code-anchored review threads (excluding `pr` conversation
   threads).
 - `draftCount` counts messages with `sync: "draft"` across all threads.
@@ -569,3 +573,5 @@ result or an event changes shape, and update this document in the same commit.
 - **Version 10** extended `setViewed` to accept either `{ "path": string, "viewed": bool }`
   or `{ "paths": string[], "viewed": bool }` (batched into parameterized aliased
   GraphQL mutations on GitHub, one atomic save, and one `viewedChanged` event).
+- **Version 11** added `setCollapsed` (`{ "path", "collapsed" }`, returning
+  `SessionView` with no event) and `collapsedDirs` on `SessionView`.
