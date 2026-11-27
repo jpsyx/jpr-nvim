@@ -1,6 +1,6 @@
 -- The PR panel window: draws render.panel output as a vertical-only collapsible
 -- menu, opens files/conversation, toggles directories, toggles viewed on v,
--- and filters to files that still need review on gu.
+-- and filters to files that still need review on u or by clicking the filter pill.
 local mouse = require("jpr.mouse")
 local panel_cursor = require("jpr.views.panel_cursor")
 local render = require("jpr.render.panel")
@@ -243,6 +243,11 @@ local function handle_enter_key(session)
     M.open_file_under_cursor(session)
 end
 
+local function toggle_unviewed_filter(session)
+    session.panel_hide_viewed = not session.panel_hide_viewed
+    M.render(session, session.view or {})
+end
+
 local function handle_left_click(session)
     local panel = session.panel
     local click = mouse.get_click()
@@ -251,6 +256,9 @@ local function handle_left_click(session)
     end
     if not mouse.is_click_in_window(click, panel.win) then
         return mouse.passthrough("<LeftMouse>")
+    end
+    if click.line == panel.filter_line then
+        return toggle_unviewed_filter(session)
     end
     if panel.rows[click.line] == nil then
         return
@@ -318,9 +326,8 @@ local function bind_action_keymaps(session, buf)
     vim.keymap.set("n", "v", function()
         M.toggle_viewed_under_cursor(session)
     end, { buffer = buf, nowait = true, silent = true, desc = "Toggle viewed for the file or directory under the cursor" })
-    vim.keymap.set("n", "gu", function()
-        session.panel_hide_viewed = not session.panel_hide_viewed
-        M.render(session, session.view or {})
+    vim.keymap.set("n", "u", function()
+        toggle_unviewed_filter(session)
     end, { buffer = buf, nowait = true, silent = true, desc = "Show only files and directories that still need review" })
     vim.keymap.set("n", "r", function()
         require("jpr.views.panel_input").start_rename(session)
@@ -496,6 +503,7 @@ function M.render(session, view)
     panel.rows = built.rows
     panel.highlights = built.highlights
     panel.selectable_lines = built.selectable_lines
+    panel.filter_line = built.filter_line
     panel.summary_line = built.summary_line
     panel.conversation_line = built.conversation_line
     vim.bo[panel.buf].modifiable = true

@@ -1199,19 +1199,26 @@ collapse set per client instead of one set per review.
 
 ## The sidebar unviewed filter is session memory
 
-**Decision.** `gu` in the sidebar toggles a filter that shows changed files
-still needing review (`UNVIEWED` and `DISMISSED`) and directories that contain
-one. The flag lives on the open review session. Closing the sidebar with `gP`
-keeps it. Ending the session clears it. It is not stored in `local.json` and
-it is not a `:Jpr` command.
+**Decision.** `u` in the sidebar (or clicking the `filter: [u] all files` /
+`filter: [u] unviewed only` pill in the sidebar header) toggles a filter that
+shows changed files still needing review (`UNVIEWED` and `DISMISSED`) and
+directories that contain one. The flag lives on the open review session.
+Closing the sidebar with `gP` keeps it. Ending the session clears it. It is not
+stored in `local.json` and it is not a `:Jpr` command.
 
 **Why.** The filter is a lens for the rest of this pass, not review state.
 Collapse is remembered because it is how the reviewer organized the tree.
 Remembering the lens would hide reviewed files on the next launch with no
-fresh signal that the filter was still on.
+fresh signal that the filter was still on. Using `u` instead of `gu` avoids
+Neovim's built-in `gu` lowercase operator (`E21` on a `nomodifiable` buffer)
+and matches the sidebar's other single-key actions (`v`, `o`, `r`, `a`, `?`).
+A dedicated header pill keeps the toggle discoverable and visible even in
+narrow sidebars.
 
 **Consequences.** A redraw and a sidebar toggle keep the same rows. A new
-session starts with the full tree. The counts line says `unviewed only` while
-the filter is on, and the tree says `all files viewed` when nothing remains.
+session starts with the full tree. The header filter line says
+`filter: [u] all files` when off and `filter: [u] unviewed only` (highlighted
+with `JprHunk`) while on, and the tree says `all files viewed` when nothing
+remains.
 
 **Revisit when.** Reviewers want the lens remembered per pull request.

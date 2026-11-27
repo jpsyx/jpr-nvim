@@ -116,7 +116,7 @@ local function create_sections_from_config(config)
                 create_key_entry_from_binding(current_config.keys and current_config.keys.comment, "Comment on the file, Diff summary, or Conversation under the cursor"),
                 create_key_entry_from_binding(current_config.keys and current_config.keys.file_comment, "New file-level comment on the file under the cursor"),
                 { key = "v", desc = "Toggle file or directory viewed" },
-                { key = "gu", desc = "Show only files and directories that still need review" },
+                { key = "u", desc = "Show only files and directories that still need review (or click filter pill)" },
                 { key = "?", desc = "Show keyboard shortcuts" },
             },
         },

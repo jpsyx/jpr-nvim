@@ -482,12 +482,37 @@ local function every_file_is_viewed(files)
     return true
 end
 
-local function build_visible_counts_text(view, hide_viewed)
-    local text = M.build_counts_text(view)
+local FILTER_PREFIX = "filter: "
+local FILTER_ALL_PILL = "[u] all files"
+local FILTER_UNVIEWED_PILL = "[u] unviewed only"
+
+local function add_filter_pill_line(content, hide_viewed)
+    local pill = hide_viewed and FILTER_UNVIEWED_PILL or FILTER_ALL_PILL
+    local text = FILTER_PREFIX .. pill
+    content.add_line(text)
+    local line_index = #content.lines - 1
     if hide_viewed then
-        return text .. " · unviewed only"
+        content.highlights[#content.highlights + 1] = {
+            line = line_index,
+            col_start = 0,
+            col_end = #FILTER_PREFIX,
+            group = "JprMuted",
+        }
+        content.highlights[#content.highlights + 1] = {
+            line = line_index,
+            col_start = #FILTER_PREFIX,
+            col_end = #text,
+            group = "JprHunk",
+        }
+    else
+        content.highlights[#content.highlights + 1] = {
+            line = line_index,
+            col_start = 0,
+            col_end = #text,
+            group = "JprMuted",
+        }
     end
-    return text
+    return #content.lines
 end
 
 local function add_progress_bar_line(content, view)
@@ -501,7 +526,7 @@ end
 --- their highlights, row metadata, selectable lines, and which file each line
 --- shows, for the panel window to draw and navigate. `opts.hide_viewed`
 --- omits `VIEWED` files and directories whose files are all `VIEWED`.
---- @return table { lines: string[], highlights: table[], paths: table<integer, string>, rows: table<integer, table>, selectable_lines: integer[], summary_line: integer, conversation_line: integer }
+--- @return table { lines: string[], highlights: table[], paths: table<integer, string>, rows: table<integer, table>, selectable_lines: integer[], filter_line: integer, summary_line: integer, conversation_line: integer }
 --- `line` is 0-based and columns are byte offsets; `paths` and `rows` are keyed by 1-based line number.
 function M.build(view, now, opts)
     local collapsed_dirs = type(opts) == "table" and type(opts.collapsed_dirs) == "table" and opts.collapsed_dirs or {}
@@ -529,12 +554,13 @@ function M.build(view, now, opts)
         add_fitted_line(content, branch_line, "JprMuted", width)
     end
     add_progress_bar_line(content, view)
-    content.add_line(build_visible_counts_text(view, hide_viewed), "JprMuted")
+    content.add_line(M.build_counts_text(view), "JprMuted")
     if is_unlinked_local then
         content.add_line("local only · :Jpr sync to link PR", "JprMuted")
     else
         content.add_line(M.sync_text(view.sync, now))
     end
+    local filter_line = add_filter_pill_line(content, hide_viewed)
     content.add_line("")
     content.add_line("  📄 Diff summary", "JprTitle")
     local summary_line = #content.lines
@@ -557,6 +583,7 @@ function M.build(view, now, opts)
         paths = content.paths,
         rows = content.rows,
         selectable_lines = content.selectable_lines,
+        filter_line = filter_line,
         summary_line = summary_line,
         conversation_line = conversation_line,
     }
