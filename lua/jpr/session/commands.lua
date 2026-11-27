@@ -17,6 +17,39 @@ local function run_with_current(session_mod, action)
     return action(session)
 end
 
+local function handle_sync_error(session_mod, session, progress_handle, sync_error)
+    if session.loading then
+        require("jpr.views.loading").close(session)
+    end
+    local auth = require("jpr.auth")
+    if auth.is_rpc_auth_error(sync_error) then
+        if progress_handle then
+            progress_handle:cancel()
+        end
+        return auth.prompt_and_resume({
+            key = "sync:" .. tostring(session.tab),
+            is_background = false,
+            on_authenticated = function()
+                if not session.closing and session.client then
+                    session_mod.sync(session)
+                end
+            end,
+        })
+    end
+    local clean_message = crash.build_clean_text_from_raw(sync_error.message)
+    if session.mode == "local" and clean_message:find("no open pull request found", 1, true) ~= nil then
+        if progress_handle then
+            progress_handle:cancel()
+        end
+        return jpr().info(clean_message)
+    end
+    local failure_message = "sync failed: " .. clean_message
+    if progress_handle then
+        return progress_handle:fail(failure_message)
+    end
+    return jpr().error(failure_message)
+end
+
 local function sync_session(session_mod, session)
     if session.is_read_only then
         return session_mod.report_read_only(session)
@@ -36,36 +69,7 @@ local function sync_session(session_mod, session)
             return
         end
         if sync_error then
-            if session.loading then
-                require("jpr.views.loading").close(session)
-            end
-            local auth = require("jpr.auth")
-            if auth.is_rpc_auth_error(sync_error) then
-                if progress_handle then
-                    progress_handle:cancel()
-                end
-                return auth.prompt_and_resume({
-                    key = "sync:" .. tostring(session.tab),
-                    is_background = false,
-                    on_authenticated = function()
-                        if not session.closing and session.client then
-                            session_mod.sync(session)
-                        end
-                    end,
-                })
-            end
-            local clean_message = crash.build_clean_text_from_raw(sync_error.message)
-            if session.mode == "local" and clean_message:find("no open pull request found", 1, true) ~= nil then
-                if progress_handle then
-                    progress_handle:cancel()
-                end
-                return jpr().info(clean_message)
-            end
-            local failure_message = "sync failed: " .. clean_message
-            if progress_handle then
-                return progress_handle:fail(failure_message)
-            end
-            return jpr().error(failure_message)
+            return handle_sync_error(session_mod, session, progress_handle, sync_error)
         end
         if progress_handle then
             progress_handle:cancel()
