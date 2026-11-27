@@ -70,6 +70,18 @@ impl ReviewSession {
         thread.agent = Some(AgentThreadState::Answered);
         let updated = thread.clone();
         let view = self.save_and_announce_threads()?;
+        let line = updated
+            .anchor
+            .start
+            .or(updated.anchor.end)
+            .and_then(|value| u32::try_from(value).ok());
+        self.publish(&review_model::Event::AgentReplied {
+            thread_id: updated.id.clone(),
+            author: reply_author.to_owned(),
+            file: updated.anchor.file.clone(),
+            line,
+            view: Box::new(view.clone()),
+        });
         Ok((updated, view))
     }
 

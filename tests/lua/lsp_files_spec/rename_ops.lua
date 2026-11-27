@@ -165,11 +165,11 @@ return function(ctx)
 
         local did_count = 0
         local warnings = {}
-        vim.notify = function(msg, level)
-            if level == vim.log.levels.WARN then
-                warnings[#warnings + 1] = msg
+        require("jpr.notify").set_listener(function(kind, msg)
+            if kind == "warn" then
+                warnings[#warnings + 1] = "jpr: " .. msg
             end
-        end
+        end)
 
         local client_ok = {
             id = 201,

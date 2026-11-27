@@ -87,6 +87,7 @@ return function(context)
     for _, mode in ipairs({ "unified", "split", "unified" }) do
         session.toggle_view()
         wait_for_mode(review, mode)
+        require("jpr.notify").clear()
         local expected = mode == "split" and 2 or 1
         assert(#find_stream_buffers(7) == expected, mode .. ": " .. vim.inspect(find_stream_buffers(7)))
         assert(#vim.api.nvim_tabpage_list_wins(review.tab) == expected + 1, mode .. ": the panel and the halves only")
@@ -288,16 +289,19 @@ return function(context)
 
     -- A `v` the engine refuses leaves nothing pending either.
     errors = {}
-    jpr.error = function(message)
-        errors[#errors + 1] = message
-    end
+    local jpr_notify = require("jpr.notify")
+    jpr_notify.set_listener(function(kind, message)
+        if kind == "error" then
+            errors[#errors + 1] = message
+        end
+    end)
     draw_and_focus({ mode = "unified", rows = { create_file_row("BROKEN.md", false), create_added_row("BROKEN.md", 1, "x"), create_file_row("c.md", false) } })
     vim.api.nvim_win_set_cursor(0, { 1, 0 })
     stream_view.toggle_viewed(review)
     assert(vim.wait(3000, function()
         return #errors > 0
     end), "the refusal is reported")
-    jpr.error = report_error
+    jpr_notify.set_listener(nil)
     assert(errors[1]:find("GitHub refused BROKEN.md", 1, true), vim.inspect(errors))
     assert(review.stream.after_draw == nil, "nothing is pending after a refusal")
     vim.api.nvim_win_set_cursor(0, { 2, 0 })
@@ -374,6 +378,7 @@ return function(context)
         local left = review.stream.left_win
         return left ~= nil and vim.api.nvim_win_is_valid(left)
     end), "a new left half opens")
+    require("jpr.notify").clear()
     assert(#vim.api.nvim_tabpage_list_wins(review.tab) == 3, "the panel and the halves only")
 
     -- A window where the reviewer opened their own buffer is theirs.

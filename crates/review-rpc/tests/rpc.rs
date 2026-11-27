@@ -95,6 +95,10 @@ fn assert_socket_allowed_calls(stream: &mut UnixStream, server: &LiveServer) {
     assert_eq!(pushed["method"], "event");
     assert_eq!(pushed["params"]["type"], "threadsChanged");
     assert_eq!(pushed["params"]["view"]["localUnsentCount"], 0);
+    let agent_replied = server.recv_json();
+    assert_eq!(agent_replied["method"], "event");
+    assert_eq!(agent_replied["params"]["type"], "agentReplied");
+    assert_eq!(agent_replied["params"]["threadId"], "loc-1");
 
     let prepass_body = r#"{"findings":[{"anchor":{"file":"src/a.rs","kind":"line","side":"RIGHT","start":1,"end":1},"body":"[low] nit"}]}"#;
     let prepass_reply = socket_call(
@@ -103,6 +107,9 @@ fn assert_socket_allowed_calls(stream: &mut UnixStream, server: &LiveServer) {
     );
     assert_eq!(prepass_reply["result"]["threads"][0]["id"], "loc-3");
     assert_eq!(server.recv_json()["params"]["type"], "threadsChanged");
+    let prepass_event = server.recv_json();
+    assert_eq!(prepass_event["params"]["type"], "agentPrepassWritten");
+    assert_eq!(prepass_event["params"]["count"], 1);
 }
 
 #[test]

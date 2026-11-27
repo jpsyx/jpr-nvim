@@ -48,6 +48,7 @@ local context = {
         vim.lsp.get_clients = orig_get_clients
         vim.ui.select = orig_ui_select
         vim.notify = orig_notify
+        require("jpr.notify").set_listener(nil)
     end,
 }
 

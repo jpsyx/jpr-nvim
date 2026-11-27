@@ -8,9 +8,9 @@ local session = require("jpr.session")
 local wizard = require("jpr.tui.wizard")
 
 local notifications = {}
-vim.notify = function(message, level)
-    notifications[#notifications + 1] = { text = message, level = level }
-end
+require("jpr.notify").set_listener(function(_, message, level)
+    notifications[#notifications + 1] = { text = "jpr: " .. message, level = level }
+end)
 
 local function has_notification(needle, level)
     for _, entry in ipairs(notifications) do

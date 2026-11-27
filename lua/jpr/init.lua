@@ -250,19 +250,29 @@ function M.complete(arglead, cmdline)
     return {}
 end
 
---- Tells the user something failed, as a `jpr:` error notification.
+--- Tells the user something failed, as a red top-right `jpr` toast.
 function M.error(message)
-    vim.notify("jpr: " .. message, vim.log.levels.ERROR)
+    return require("jpr.notify").error(message)
 end
 
---- Warns the user about a non-fatal condition, as a `jpr:` warning notification.
+--- Warns the user about a non-fatal condition, as an amber top-right `jpr` toast.
 function M.warn(message)
-    vim.notify("jpr: " .. message, vim.log.levels.WARN)
+    return require("jpr.notify").warn(message)
 end
 
---- Tells the user what the plugin is doing, as a `jpr:` notification.
+--- Confirms a user-initiated action succeeded, as a green top-right `jpr` toast.
+function M.success(message)
+    return require("jpr.notify").success(message)
+end
+
+--- Tells the user about an automatic update or status change, as a blue top-right `jpr` toast.
 function M.info(message)
-    vim.notify("jpr: " .. message, vim.log.levels.INFO)
+    return require("jpr.notify").info(message)
+end
+
+--- Starts an animated top-right progress toast and returns its lifecycle handle.
+function M.progress(message, opts)
+    return require("jpr.notify").progress(message, opts)
 end
 
 --- Short statusline summary for the current tab's review session, or `""`.

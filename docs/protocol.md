@@ -1,4 +1,4 @@
-# Engine protocol (version 10)
+# Engine protocol (version 12)
 
 `jpr-review serve` speaks JSON-RPC 2.0, one JSON message per line, UTF-8.
 Requests from the primary frontend arrive on stdin. Responses and notifications
@@ -51,7 +51,7 @@ with `:Lazy build jpr-nvim`.
 
 | Method | Params | Result |
 | --- | --- | --- |
-| `initialize` | `{ "protocolVersion": 11, "client": "..." }` (the server reads neither) | `{ "protocolVersion": 11, "version": "0.8.0" }` |
+| `initialize` | `{ "protocolVersion": 12, "client": "..." }` (the server reads neither) | `{ "protocolVersion": 12, "version": "0.8.0" }` |
 | `snapshot` | none | `SessionView` (carries `localContext` when unlinked, `pr` when linked) |
 | `sync` | none | `SessionView`; in PR mode, error `-32001` (`AUTH_REQUIRED`) when `gh` is unauthenticated or `-32000` when GitHub fails otherwise, after a `syncFailed` event (announces `headMoved` before `synced` when `pr.headSha` changes); in local mode, probes `gh pr view` and upgrades the live session in-place if an open PR exists (promoting locally `VIEWED` files to GitHub), returns `-32001` when `gh` is unauthenticated, or returns an informational `-32000` error without `syncFailed` when no open PR exists yet |
 | `push` | none | `PushResult`; pushes `HEAD` to `refs/heads/<headRef>` (stdio-only; refused over `JPR_SOCKET` with `-32600`); error `-32000` before the first sync, when local `HEAD` is behind or already at the remote head, when a cross-repository (`pr.isCrossRepository`) pull request lacks explicit fork tracking or targets the base repository, or when `git push` fails |
@@ -129,12 +129,14 @@ Comment mutations behave consistently offline and on errors:
 `event`, with one of:
 
 ```json
-{ "type": "synced", "view": SessionView }
+{ "type": "synced", "view": SessionView, "isBackground": false, "delta": SyncDelta }
 { "type": "syncFailed", "message": "gh timed out after 30s", "authRequired": false, "isBackground": false }
 { "type": "viewedChanged", "view": SessionView }
 { "type": "threadsChanged", "view": SessionView }
 { "type": "filesChanged", "paths": ["src/a.rs"], "view": SessionView }
 { "type": "agentRound", "round": AgentRound, "view": SessionView }
+{ "type": "agentReplied", "threadId": "loc-1", "author": "claude", "file": "src/a.rs", "line": 42, "view": SessionView }
+{ "type": "agentPrepassWritten", "count": 3, "view": SessionView }
 { "type": "worktreeStatusChanged", "view": SessionView }
 { "type": "headMoved", "previousSha": "abc123", "headSha": "def456", "outcome": HeadMoveOutcome, "conflictedPaths": [], "message": "...", "view": SessionView }
 ```
@@ -575,3 +577,7 @@ result or an event changes shape, and update this document in the same commit.
   GraphQL mutations on GitHub, one atomic save, and one `viewedChanged` event).
 - **Version 11** added `setCollapsed` (`{ "path", "collapsed" }`, returning
   `SessionView` with no event) and `collapsedDirs` on `SessionView`.
+- **Version 12** added `isBackground` and optional `delta` (`SyncDelta`:
+  `filesChanged`, `newComments`, `updatedComments`, `resolvedThreads`,
+  `reopenedThreads`, `headMoved`, excluding locally originated actions) to
+  `synced`, plus the `agentReplied` and `agentPrepassWritten` notifications.

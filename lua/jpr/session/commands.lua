@@ -1,6 +1,7 @@
 -- User-facing `:Jpr` session actions (`sync`, `push`, `close`, `toggle`,
 -- `stream`, `agent`, `send`, `prepass`) attached onto `jpr.session`.
 local crash = require("jpr.session.crash")
+local progress = require("jpr.session.progress")
 
 local M = {}
 
@@ -16,6 +17,39 @@ local function run_with_current(session_mod, action)
     return action(session)
 end
 
+local function handle_sync_error(session_mod, session, progress_handle, sync_error)
+    if session.loading then
+        require("jpr.views.loading").close(session)
+    end
+    local auth = require("jpr.auth")
+    if auth.is_rpc_auth_error(sync_error) then
+        if progress_handle then
+            progress_handle:cancel()
+        end
+        return auth.prompt_and_resume({
+            key = "sync:" .. tostring(session.tab),
+            is_background = false,
+            on_authenticated = function()
+                if not session.closing and session.client then
+                    session_mod.sync(session)
+                end
+            end,
+        })
+    end
+    local clean_message = crash.build_clean_text_from_raw(sync_error.message)
+    if session.mode == "local" and clean_message:find("no open pull request found", 1, true) ~= nil then
+        if progress_handle then
+            progress_handle:cancel()
+        end
+        return jpr().info(clean_message)
+    end
+    local failure_message = "sync failed: " .. clean_message
+    if progress_handle then
+        return progress_handle:fail(failure_message)
+    end
+    return jpr().error(failure_message)
+end
+
 local function sync_session(session_mod, session)
     if session.is_read_only then
         return session_mod.report_read_only(session)
@@ -26,31 +60,19 @@ local function sync_session(session_mod, session)
             ("the review engine for %s is not running; run %s"):format(crash.build_session_label(session), reopen_hint)
         )
     end
+    local progress_handle = not session.loading and progress.start(session, "sync", nil) or nil
     session.client:request("sync", nil, function(sync_error, view)
         if session.closing then
+            if progress_handle then
+                progress_handle:cancel()
+            end
             return
         end
         if sync_error then
-            if session.loading then
-                require("jpr.views.loading").close(session)
-            end
-            local auth = require("jpr.auth")
-            if auth.is_rpc_auth_error(sync_error) then
-                return auth.prompt_and_resume({
-                    key = "sync:" .. tostring(session.tab),
-                    is_background = false,
-                    on_authenticated = function()
-                        if not session.closing and session.client then
-                            session_mod.sync(session)
-                        end
-                    end,
-                })
-            end
-            local clean_message = crash.build_clean_text_from_raw(sync_error.message)
-            if session.mode == "local" and clean_message:find("no open pull request found", 1, true) ~= nil then
-                return jpr().info(clean_message)
-            end
-            return jpr().error("sync failed: " .. clean_message)
+            return handle_sync_error(session_mod, session, progress_handle, sync_error)
+        end
+        if progress_handle then
+            progress_handle:cancel()
         end
         session_mod.show(session, view)
     end)
@@ -61,13 +83,16 @@ local function push_session(session_mod, session)
         if type(result) == "table" and type(result.view) == "table" then
             session_mod.show(session, result.view)
         end
-        local short_sha = crash.build_clean_text_from_raw(type(result) == "table" and result.headSha or ""):sub(1, 7)
-        jpr().info(("pushed %s"):format(short_sha))
         local sync_error = type(result) == "table" and crash.build_clean_text_from_raw(result.syncError) or ""
         if sync_error ~= "" then
             jpr().warn("pushed, but GitHub resync failed: " .. sync_error)
         end
-    end)
+    end, nil, {
+        success_message = function(result)
+            local short_sha = crash.build_clean_text_from_raw(type(result) == "table" and result.headSha or ""):sub(1, 7)
+            return ("pushed %s"):format(short_sha)
+        end,
+    })
 end
 
 local function refresh_worktree_session(session_mod, session, renames, on_done)
@@ -93,7 +118,7 @@ local function redraw_all_session_views(session_mod, mode)
             require("jpr.views.stream").refresh(session, true)
         end
     end
-    jpr().info(("%s view"):format(mode))
+    jpr().success(("%s view"):format(mode))
 end
 
 local function find_agent_session(session_mod)

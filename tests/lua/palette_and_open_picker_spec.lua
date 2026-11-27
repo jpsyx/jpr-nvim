@@ -15,9 +15,9 @@ local commands_schema = require("jpr.commands.schema")
 local notifications = {}
 local temp_files = {}
 
-vim.notify = function(message, level)
-    notifications[#notifications + 1] = { text = message, level = level }
-end
+require("jpr.notify").set_listener(function(_, message, level)
+    notifications[#notifications + 1] = { text = "jpr: " .. message, level = level }
+end)
 
 local function clear_notifications()
     for index = #notifications, 1, -1 do

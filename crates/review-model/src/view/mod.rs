@@ -171,6 +171,38 @@ pub struct PushResult {
     pub view: SessionView,
 }
 
+/// External remote changes detected during a GitHub sync, excluding actions
+/// originated locally by the reviewer.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SyncDelta {
+    /// Files added, removed, edited, or dismissed remotely on GitHub.
+    pub files_changed: usize,
+    /// New GitHub comments or replies not previously present locally.
+    pub new_comments: usize,
+    /// Existing GitHub comments whose body changed remotely.
+    pub updated_comments: usize,
+    /// Existing GitHub threads resolved remotely.
+    pub resolved_threads: usize,
+    /// Existing GitHub threads reopened remotely.
+    pub reopened_threads: usize,
+    /// Whether the pull request's remote `headSha` moved externally.
+    pub head_moved: bool,
+}
+
+impl SyncDelta {
+    /// Returns `true` when no external remote changes were detected.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.files_changed == 0
+            && self.new_comments == 0
+            && self.updated_comments == 0
+            && self.resolved_threads == 0
+            && self.reopened_threads == 0
+            && !self.head_moved
+    }
+}
+
 /// A change the session announces to its subscribers. The RPC server forwards
 /// each one to its client as an `event` notification, so a frontend redraws
 /// without asking.
@@ -186,6 +218,14 @@ pub enum Event {
         /// The new state.
         // Boxed: it dwarfs the other variants (clippy::large_enum_variant).
         view: Box<SessionView>,
+        /// Whether this sync came from the background poller rather than an
+        /// explicit client `sync` request.
+        #[serde(default)]
+        is_background: bool,
+        /// External remote changes detected by this sync, omitted when empty
+        /// or on the initial sync.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        delta: Option<SyncDelta>,
     },
     /// A sync failed; the previous view still stands.
     SyncFailed {
@@ -221,6 +261,28 @@ pub enum Event {
     AgentRound {
         /// The recorded round details.
         round: crate::AgentRound,
+        /// The updated view with refreshed counts.
+        view: Box<SessionView>,
+    },
+    /// A local coding agent posted a reply on a local review thread.
+    AgentReplied {
+        /// Identifier of the local thread that received the reply.
+        thread_id: String,
+        /// Author label reported for the agent reply.
+        author: String,
+        /// Repository-relative file path when anchored to a file or line.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        file: Option<String>,
+        /// 1-based anchor line when anchored to a line or range.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        line: Option<u32>,
+        /// The updated view with refreshed counts.
+        view: Box<SessionView>,
+    },
+    /// A local coding agent wrote one or more pre-pass review findings.
+    AgentPrepassWritten {
+        /// Number of local finding threads created.
+        count: usize,
         /// The updated view with refreshed counts.
         view: Box<SessionView>,
     },

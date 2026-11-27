@@ -214,14 +214,14 @@ local function test_live_layout_transitions_and_panel_toggle()
     end
     review.agent = nil
     local errors = {}
-    local orig_notify = vim.notify
-    vim.notify = function(msg, level)
-        if level == vim.log.levels.ERROR then
+    local jpr_notify = require("jpr.notify")
+    jpr_notify.set_listener(function(kind, msg)
+        if kind == "error" then
             errors[#errors + 1] = msg
         end
-    end
+    end)
     session.panel_current()
-    vim.notify = orig_notify
+    jpr_notify.set_listener(nil)
     assert(panel_view.is_open(review), "panel stays open when it is the last window")
     assert(#errors >= 1, "closing last window reports an error")
 

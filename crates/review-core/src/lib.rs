@@ -11,6 +11,7 @@ pub mod ports;
 mod presenter;
 pub mod reanchor;
 mod session;
+mod sync_delta;
 mod tree;
 mod viewed;
 

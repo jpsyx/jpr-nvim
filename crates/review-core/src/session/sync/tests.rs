@@ -42,7 +42,7 @@ pub(super) fn take_head_moved_and_synced(
         other => panic!("expected HeadMoved, got {other:?}"),
     };
     match events.try_recv().expect("expected Synced event") {
-        Event::Synced { view } => assert_eq!(*view, head_moved.5),
+        Event::Synced { view, .. } => assert_eq!(*view, head_moved.5),
         other => panic!("expected Synced, got {other:?}"),
     }
     head_moved
@@ -65,7 +65,9 @@ fn sync_pulls_saves_and_announces() {
     assert_eq!(
         events.try_recv().expect("an event was sent"),
         Event::Synced {
-            view: Box::new(view)
+            view: Box::new(view),
+            is_background: false,
+            delta: None,
         }
     );
 }
@@ -336,4 +338,127 @@ fn sync_expands_only_ancestors_of_dismissed_file_preserving_collapsed_siblings()
         view.collapsed_dirs,
         BTreeSet::from(["apps/cli/sub".to_owned(), "apps/other".to_owned()])
     );
+}
+
+#[test]
+fn background_sync_emits_delta_for_remote_changes_excluding_own_comments() {
+    let fakes = Fakes::new(100);
+    let mut session = fakes.open_synced();
+    let (_, _) = session
+        .comment_with_origin(
+            review_model::Anchor::line("src/a.rs", 2),
+            "my own draft",
+            review_model::Origin::Github,
+        )
+        .unwrap();
+    let events = session.subscribe();
+
+    let mut snapshot = create_snapshot();
+    snapshot.files.push(crate::fakes::changed_file(
+        "src/new.rs",
+        ViewedState::Unviewed,
+    ));
+    // Include both the reviewer's own thread (already in session.threads) and a new external thread.
+    let mut external_thread = crate::fakes::github_thread("PRRT_EXT", "src/a.rs");
+    external_thread.messages[0].id = "PRRC_EXT".into();
+    external_thread.messages[0].body = "external feedback".into();
+    external_thread.messages[0].viewer_did_author = false;
+    snapshot.threads.push(external_thread);
+    for existing in session.threads() {
+        if existing.origin == review_model::Origin::Github
+            && !snapshot.threads.iter().any(|t| t.id == existing.id)
+        {
+            snapshot.threads.push(existing.clone());
+        }
+    }
+    fakes.forge.set_snapshot(snapshot);
+
+    session.sync_background().unwrap();
+    match events.try_recv().expect("expected Synced event") {
+        Event::Synced {
+            is_background,
+            delta,
+            ..
+        } => {
+            assert!(is_background);
+            let delta = delta.expect("expected non-empty delta");
+            assert_eq!(delta.files_changed, 1);
+            assert_eq!(delta.new_comments, 1);
+            assert!(!delta.head_moved);
+        }
+        other => panic!("expected Synced, got {other:?}"),
+    }
+}
+
+#[test]
+fn sync_after_own_push_omits_file_and_head_delta() {
+    let fakes = Fakes::new(100);
+    let mut session = fakes.open_synced();
+    fakes.workspace.set_head_commit("newsha123");
+    fakes
+        .workspace
+        .set_worktree_status(Some(review_model::WorktreeStatus {
+            is_dirty: false,
+            ahead: 1,
+            behind: 0,
+            modified_paths: Vec::new(),
+        }));
+    let mut updated_pr = crate::fakes::sample_pr();
+    updated_pr.head_sha = "newsha123".into();
+    fakes.forge.set_pr(updated_pr);
+    let mut updated_snapshot = create_snapshot();
+    updated_snapshot.head_sha = "newsha123".into();
+    updated_snapshot.files.push(crate::fakes::changed_file(
+        "src/pushed.rs",
+        ViewedState::Unviewed,
+    ));
+    fakes.forge.set_snapshot(updated_snapshot);
+
+    let events = session.subscribe();
+    session.push().unwrap();
+    let mut synced_delta = None;
+    while let Ok(event) = events.try_recv() {
+        if let Event::Synced { delta, .. } = event {
+            synced_delta = delta;
+        }
+    }
+    assert_eq!(synced_delta, None);
+}
+
+#[test]
+fn agent_reply_emits_agent_replied_event_with_location() {
+    let fakes = Fakes::new(100);
+    let mut session = fakes.open_synced();
+    let (thread, _) = session
+        .comment_with_origin(
+            review_model::Anchor::line("src/a.rs", 2),
+            "please check this",
+            review_model::Origin::Local,
+        )
+        .unwrap();
+    let events = session.subscribe();
+
+    session
+        .agent_reply(&thread.id, "checked and fixed", Some("claude"))
+        .unwrap();
+
+    assert!(matches!(
+        events.try_recv().expect("expected ThreadsChanged"),
+        Event::ThreadsChanged { .. }
+    ));
+    match events.try_recv().expect("expected AgentReplied") {
+        Event::AgentReplied {
+            thread_id,
+            author,
+            file,
+            line,
+            ..
+        } => {
+            assert_eq!(thread_id, thread.id);
+            assert_eq!(author, "claude");
+            assert_eq!(file.as_deref(), Some("src/a.rs"));
+            assert_eq!(line, Some(2));
+        }
+        other => panic!("expected AgentReplied, got {other:?}"),
+    }
 }

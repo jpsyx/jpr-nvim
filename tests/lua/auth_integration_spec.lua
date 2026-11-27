@@ -9,9 +9,9 @@ local jpr = require("jpr")
 local session = require("jpr.session")
 
 local notifications = {}
-vim.notify = function(message, level)
-    notifications[#notifications + 1] = { text = message, level = level }
-end
+require("jpr.notify").set_listener(function(_, message, level)
+    notifications[#notifications + 1] = { text = "jpr: " .. message, level = level }
+end)
 
 local function with_auth_stub(behavior, callback)
     local original_prompt = auth.prompt_and_resume
