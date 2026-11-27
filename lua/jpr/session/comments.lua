@@ -130,14 +130,24 @@ function M.attach(session_mod)
         require("jpr.comments.compose").open_new(session, anchor, { suggest = comment_opts.suggest == true })
     end
 
-    --- `:Jpr conversation`: opens the pull request's top-level conversation
-    --- buffer in the main window beside the panel.
+    --- `:Jpr summary`: opens the unified Diff summary + PR conversation buffer
+    --- in the main window scrolled to the top of the diff summary.
+    function session_mod.summary_current()
+        local session = session_mod.current()
+        if not session then
+            return jpr().error("no pull request is open in this tab")
+        end
+        require("jpr.views.conversation").show(session, { target = "summary" })
+    end
+
+    --- `:Jpr conversation`: opens the unified Diff summary + PR conversation
+    --- buffer in the main window scrolled to the top of the conversation.
     function session_mod.conversation_current()
         local session = session_mod.current()
         if not session then
             return jpr().error("no pull request is open in this tab")
         end
-        require("jpr.views.conversation").show(session)
+        require("jpr.views.conversation").show(session, { target = "conversation" })
     end
 
     --- `:Jpr suggest`: turns the local edit at the cursor line into a GitHub

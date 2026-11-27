@@ -39,7 +39,10 @@ local function find_tab_win_by_buf_name(tab, substring)
     return nil
 end
 
--- 1. Without an active session, conversation_current errors cleanly.
+-- 1. Without an active session, summary_current and conversation_current error cleanly.
+session.summary_current()
+assert(#errors == 1 and errors[1]:find("no pull request", 1, true), vim.inspect(errors))
+errors = {}
 session.conversation_current()
 assert(#errors == 1 and errors[1]:find("no pull request", 1, true), vim.inspect(errors))
 errors = {}
@@ -74,9 +77,88 @@ assert(vim.wait(3000, function()
     return text:find("Overall looks clean!", 1, true) ~= nil
 end), "conversation loads PR comment")
 
-local conversation_text = table.concat(vim.api.nvim_buf_get_lines(conversation_buf, 0, -1, false), "\n")
+local conversation_lines = vim.api.nvim_buf_get_lines(conversation_buf, 0, -1, false)
+local conversation_text = table.concat(conversation_lines, "\n")
+assert(conversation_text:find("#7 Fix the widget", 1, true) ~= nil, "summary title rendered: " .. conversation_text)
+assert(conversation_text:find("@alice · fix/widget -> main", 1, true) ~= nil, "summary metadata rendered: " .. conversation_text)
+assert(conversation_text:find("1 file changed · +2 -1 · 0/1 viewed", 1, true) ~= nil, "summary diffstat rendered: " .. conversation_text)
+assert(conversation_text:find("Fixes widget crash.", 1, true) ~= nil, "PR body paragraph 1 rendered: " .. conversation_text)
+assert(conversation_text:find("Includes regression test.", 1, true) ~= nil, "PR body paragraph 2 rendered: " .. conversation_text)
+assert(conversation_text:find("\r", 1, true) == nil, "CRLF normalized out of PR body")
 assert(conversation_text:find("@alice", 1, true) ~= nil, "author header rendered: " .. conversation_text)
 assert(conversation_text:find("nit: rename this", 1, true) == nil, "code threads excluded: " .. conversation_text)
+
+local conversation_start = review.conversation.layout.conversation_start_line
+assert(type(conversation_start) == "number" and conversation_start > 1, "conversation_start_line is below summary: " .. tostring(conversation_start))
+assert(conversation_lines[conversation_start]:find("Conversation (1 comments)", 1, true) ~= nil, tostring(conversation_lines[conversation_start]))
+assert(vim.api.nvim_win_get_cursor(win)[1] == conversation_start, "conversation_current scrolls cursor to conversation_start_line")
+local conv_topline = vim.api.nvim_win_call(win, function() return vim.fn.winsaveview().topline end)
+assert(conv_topline <= conversation_start and conv_topline >= 1, "conversation_current sets valid topline")
+
+-- 2b. :Jpr summary opens the same buffer scrolled to line 1; switching back jumps to conversation_start_line.
+session.summary_current()
+assert(vim.api.nvim_win_get_buf(win) == conversation_buf, "summary_current reuses the same buffer")
+assert(vim.wait(3000, function()
+    return vim.api.nvim_win_get_cursor(win)[1] == 1
+end), "summary_current moves cursor to line 1")
+local summary_topline = vim.api.nvim_win_call(win, function() return vim.fn.winsaveview().topline end)
+assert(summary_topline == 1, "summary_current scrolls topline to 1: " .. tostring(summary_topline))
+
+-- Pressing comment actions on a Diff summary line safely no-ops without errors.
+local errors_before_summary_keys = #errors
+helpers.press_key("e")
+helpers.press_key("d")
+helpers.press_key("r")
+helpers.press_key("p")
+helpers.press_key("s")
+helpers.press_key("+")
+assert(#errors == errors_before_summary_keys, "message actions on summary line do not error: " .. vim.inspect(errors))
+
+-- Cached read-only mode still switches scroll target cleanly between conversation and summary.
+review.is_read_only = true
+session.conversation_current()
+assert(vim.api.nvim_win_get_cursor(win)[1] == conversation_start, "read-only cached conversation_current jumps to conversation_start_line")
+session.summary_current()
+assert(vim.api.nvim_win_get_cursor(win)[1] == 1, "read-only cached summary_current jumps to line 1")
+review.is_read_only = false
+
+-- Background refresh preserves cursor position instead of resetting to line 1 or conversation_start_line.
+vim.api.nvim_win_set_cursor(win, { 3, 0 })
+conversation.refresh(review)
+assert(vim.wait(3000, function()
+    return vim.api.nvim_win_get_cursor(win)[1] == 3
+end), "refresh preserves cursor line")
+
+-- Blank PR body falls back to `(no PR description)`, and unlinked local mode shows local summary.
+local saved_pr = review.view.pr
+review.view.pr = vim.tbl_extend("force", vim.deepcopy(saved_pr), { body = "   \r\n  " })
+conversation.refresh(review)
+assert(vim.wait(3000, function()
+    local text = table.concat(vim.api.nvim_buf_get_lines(conversation_buf, 0, -1, false), "\n")
+    return text:find("(no PR description)", 1, true) ~= nil
+end), "blank PR body renders fallback hint")
+
+review.mode = "local"
+review.branch = "feat/local-x"
+review.view.pr = nil
+review.view.localContext = { branch = "feat/local-x", baseRef = "main" }
+conversation.refresh(review)
+assert(vim.wait(3000, function()
+    local text = table.concat(vim.api.nvim_buf_get_lines(conversation_buf, 0, -1, false), "\n")
+    return text:find("LOCAL feat/local-x vs main", 1, true) ~= nil
+        and text:find("run :Jpr sync once a PR is open", 1, true) ~= nil
+        and text:find("Local Notes", 1, true) ~= nil
+end), "unlinked local mode renders local diff summary and Local Notes")
+
+review.mode = "pr"
+review.branch = nil
+review.view.pr = saved_pr
+review.view.localContext = nil
+conversation.refresh(review)
+assert(vim.wait(3000, function()
+    local text = table.concat(vim.api.nvim_buf_get_lines(conversation_buf, 0, -1, false), "\n")
+    return text:find("Fixes widget crash.", 1, true) ~= nil
+end), "restored PR summary")
 
 -- Opening conversation while split stream is active also closes stream's left window.
 require("jpr.views.stream").show(review, { focus = true })

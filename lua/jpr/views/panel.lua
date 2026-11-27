@@ -348,7 +348,10 @@ local function find_preserved_cursor_line(built, prev_row, prev_line)
         return nil
     end
     if not prev_row then
-        return built.conversation_line or built.selectable_lines[1]
+        return built.summary_line or built.conversation_line or built.selectable_lines[1]
+    end
+    if prev_row.kind == "summary" then
+        return built.summary_line or built.selectable_lines[1]
     end
     if prev_row.kind == "conversation" then
         return built.conversation_line or built.selectable_lines[1]
@@ -387,6 +390,7 @@ function M.render(session, view)
     panel.paths = built.paths
     panel.rows = built.rows
     panel.selectable_lines = built.selectable_lines
+    panel.summary_line = built.summary_line
     panel.conversation_line = built.conversation_line
     vim.bo[panel.buf].modifiable = true
     vim.api.nvim_buf_set_lines(panel.buf, 0, -1, false, built.lines)
@@ -421,10 +425,13 @@ function M.get_row_under_cursor(session)
     return { line = cursor_line, row = row }
 end
 
---- Opens the conversation or file on the cursor line in the main window beside the panel.
+--- Opens the diff summary, conversation, or file on the cursor line in the main window beside the panel.
 function M.open_file_under_cursor(session)
     local panel = session.panel
     local cursor_line = vim.api.nvim_win_get_cursor(panel.win)[1]
+    if cursor_line == panel.summary_line then
+        return require("jpr.session").summary_current()
+    end
     if cursor_line == panel.conversation_line then
         return require("jpr.session").conversation_current()
     end

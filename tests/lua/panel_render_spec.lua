@@ -33,6 +33,7 @@ assert(vim.deep_equal(built.lines, {
     "viewed 1/3 · threads 2 · drafts 1",
     "synced 12s ago",
     "",
+    "  📄 Diff summary",
     "  💬 Conversation [2]",
     "▾ docs/",
     "    x.md  +4 -4",
@@ -40,18 +41,20 @@ assert(vim.deep_equal(built.lines, {
     "  ✓ a.rs  +12 -3 [2]",
     "  ● b.rs  +1 -0",
 }), vim.inspect(built.lines))
-assert(built.conversation_line == 6, tostring(built.conversation_line))
-assert(built.paths[8] == "docs/x.md" and built.paths[10] == "src/a.rs" and built.paths[11] == "src/b.rs", vim.inspect(built.paths))
-assert(built.paths[6] == nil and built.paths[7] == nil and built.paths[9] == nil, "conversation and directories open nothing")
-assert(vim.deep_equal(built.selectable_lines, { 6, 7, 8, 9, 10, 11 }), vim.inspect(built.selectable_lines))
-assert(vim.deep_equal(built.rows[6], { kind = "conversation" }), vim.inspect(built.rows[6]))
+assert(built.summary_line == 6, tostring(built.summary_line))
+assert(built.conversation_line == 7, tostring(built.conversation_line))
+assert(built.paths[9] == "docs/x.md" and built.paths[11] == "src/a.rs" and built.paths[12] == "src/b.rs", vim.inspect(built.paths))
+assert(built.paths[6] == nil and built.paths[7] == nil and built.paths[8] == nil and built.paths[10] == nil, "summary, conversation and directories open nothing")
+assert(vim.deep_equal(built.selectable_lines, { 6, 7, 8, 9, 10, 11, 12 }), vim.inspect(built.selectable_lines))
+assert(vim.deep_equal(built.rows[6], { kind = "summary" }), vim.inspect(built.rows[6]))
+assert(vim.deep_equal(built.rows[7], { kind = "conversation" }), vim.inspect(built.rows[7]))
 assert(
-    vim.deep_equal(built.rows[9], { kind = "dir", path = "src", depth = 0, parent_dir = nil, is_collapsed = false }),
-    vim.inspect(built.rows[9])
+    vim.deep_equal(built.rows[10], { kind = "dir", path = "src", depth = 0, parent_dir = nil, is_collapsed = false }),
+    vim.inspect(built.rows[10])
 )
 assert(
-    vim.deep_equal(built.rows[10], { kind = "file", path = "src/a.rs", depth = 1, parent_dir = "src" }),
-    vim.inspect(built.rows[10])
+    vim.deep_equal(built.rows[11], { kind = "file", path = "src/a.rs", depth = 1, parent_dir = "src" }),
+    vim.inspect(built.rows[11])
 )
 
 local function highlighted(result, group)
@@ -68,7 +71,7 @@ assert(vim.deep_equal(highlighted(built, "JprRemoved"), { "-4", "-3", "-0" }), v
 assert(vim.deep_equal(highlighted(built, "JprViewed"), { "█████", "✓" }), vim.inspect(highlighted(built, "JprViewed")))
 assert(vim.deep_equal(highlighted(built, "JprDismissed"), { "●" }), "dismissed mark")
 assert(
-    vim.deep_equal(highlighted(built, "JprTitle"), { "#7 Fix the widget", "1/3 (33%)", "  💬 Conversation [2]" }),
+    vim.deep_equal(highlighted(built, "JprTitle"), { "#7 Fix the widget", "1/3 (33%)", "  📄 Diff summary", "  💬 Conversation [2]" }),
     vim.inspect(highlighted(built, "JprTitle"))
 )
 assert(
@@ -128,8 +131,10 @@ assert(queued.lines[3] == "viewed 0/0 · threads 0 · 2 waiting for GitHub", que
 local zero_counts = panel.build({ files = {}, draftCount = 0, conversationCount = 0 }, 0)
 assert(zero_counts.lines[2] == "░░░░░░░░░░░░░░░░  0/0 (0%)", zero_counts.lines[2])
 assert(zero_counts.lines[3] == "viewed 0/0 · threads 0", zero_counts.lines[3])
-assert(zero_counts.lines[6] == "  💬 Conversation", zero_counts.lines[6])
-assert(zero_counts.conversation_line == 6, tostring(zero_counts.conversation_line))
+assert(zero_counts.lines[6] == "  📄 Diff summary", zero_counts.lines[6])
+assert(zero_counts.summary_line == 6, tostring(zero_counts.summary_line))
+assert(zero_counts.lines[7] == "  💬 Conversation", zero_counts.lines[7])
+assert(zero_counts.conversation_line == 7, tostring(zero_counts.conversation_line))
 assert(
     panel.build_counts_text({
         viewedCount = 1,
@@ -178,11 +183,11 @@ local multi_line = panel.build({
 }, 2)
 assert(multi_line.lines[1] == "#7 Two lines", multi_line.lines[1])
 assert(multi_line.lines[4] == "sync failed: error connecting check your connection", multi_line.lines[4])
-assert(multi_line.lines[7] == "  new line.md  +3 -1", multi_line.lines[7])
-assert(multi_line.paths[7] == "new\nline.md", "the path keeps its real name for opening")
+assert(multi_line.lines[8] == "  new line.md  +3 -1", multi_line.lines[8])
+assert(multi_line.paths[8] == "new\nline.md", "the path keeps its real name for opening")
 assert(vim.deep_equal(highlighted(multi_line, "JprAdded"), { "+3" }), vim.inspect(highlighted(multi_line, "JprAdded")))
 
--- Clean worktreeStatus keeps line 3 and conversation_line unchanged.
+-- Clean worktreeStatus keeps line 3 and summary/conversation lines unchanged.
 local clean_status_view = vim.tbl_deep_extend("force", vim.deepcopy(view), {
     worktreeStatus = { isDirty = false, ahead = 0, behind = 0 },
 })
@@ -190,15 +195,15 @@ local clean_built = panel.build(clean_status_view, 112)
 assert(panel.build_worktree_badge_from_view(view) == nil, "nil worktreeStatus produces nil badge")
 assert(panel.build_worktree_badge_from_view(clean_status_view) == nil, "clean worktreeStatus produces nil badge")
 assert(clean_built.lines[3] == "viewed 1/3 · threads 2 · drafts 1", clean_built.lines[3])
-assert(clean_built.conversation_line == 6, tostring(clean_built.conversation_line))
+assert(clean_built.summary_line == 6 and clean_built.conversation_line == 7, tostring(clean_built.conversation_line))
 
--- Dirty, ahead/behind, and read-only badges prepend cleanly to line 3 without shifting conversation_line.
+-- Dirty, ahead/behind, and read-only badges prepend cleanly to line 3 without shifting summary/conversation lines.
 local dirty_view = vim.tbl_deep_extend("force", vim.deepcopy(view), {
     worktreeStatus = { isDirty = true, ahead = 2, behind = 0 },
 })
 local dirty_built = panel.build(dirty_view, 112)
 assert(dirty_built.lines[3] == "dirty · ↑2 ↓0 · viewed 1/3 · threads 2 · drafts 1", dirty_built.lines[3])
-assert(dirty_built.conversation_line == 6, tostring(dirty_built.conversation_line))
+assert(dirty_built.summary_line == 6 and dirty_built.conversation_line == 7, tostring(dirty_built.conversation_line))
 
 local diverged_view = vim.tbl_deep_extend("force", vim.deepcopy(view), {
     worktreeStatus = { isDirty = false, ahead = 1, behind = 2 },
@@ -249,10 +254,10 @@ local badges_built = panel.build({
     sync = { state = "synced", at = 100 },
 }, 110)
 
-assert(badges_built.lines[8] == "  ✓ ✎ a.rs  +12 -3 [2 · 1L]", badges_built.lines[8])
-assert(badges_built.lines[9] == "    b.rs  +1 -0 [1L]", badges_built.lines[9])
-assert(badges_built.lines[10] == "    c.rs  +4 -4 [2]", badges_built.lines[10])
-assert(badges_built.lines[11] == "    d.rs  +0 -1", badges_built.lines[11])
+assert(badges_built.lines[9] == "  ✓ ✎ a.rs  +12 -3 [2 · 1L]", badges_built.lines[9])
+assert(badges_built.lines[10] == "    b.rs  +1 -0 [1L]", badges_built.lines[10])
+assert(badges_built.lines[11] == "    c.rs  +4 -4 [2]", badges_built.lines[11])
+assert(badges_built.lines[12] == "    d.rs  +0 -1", badges_built.lines[12])
 assert(vim.deep_equal(highlighted(badges_built, "JprModified"), { "✎" }), vim.inspect(highlighted(badges_built, "JprModified")))
 assert(vim.deep_equal(highlighted(badges_built, "JprAdded"), { "+12", "+1", "+4", "+0" }), vim.inspect(highlighted(badges_built, "JprAdded")))
 assert(vim.deep_equal(highlighted(badges_built, "JprRemoved"), { "-3", "-0", "-4", "-1" }), vim.inspect(highlighted(badges_built, "JprRemoved")))
@@ -266,7 +271,7 @@ end
 assert(#modified_spans == 1, "one JprModified span")
 -- "  " (2 bytes) + "✓" (3 bytes) + " " (1 byte) = col_start 6; "✎" is 3 UTF-8 bytes -> col_end 9.
 assert(
-    modified_spans[1].line == 7 and modified_spans[1].col_start == 6 and modified_spans[1].col_end == 9,
+    modified_spans[1].line == 8 and modified_spans[1].col_start == 6 and modified_spans[1].col_end == 9,
     vim.inspect(modified_spans[1])
 )
 
@@ -278,18 +283,19 @@ assert(vim.deep_equal(collapsed.lines, {
     "viewed 1/3 · threads 2 · drafts 1",
     "synced 12s ago",
     "",
+    "  📄 Diff summary",
     "  💬 Conversation [2]",
     "▾ docs/",
     "    x.md  +4 -4",
     "▸ src/ (2)",
 }), vim.inspect(collapsed.lines))
-assert(collapsed.paths[9] == nil and collapsed.paths[10] == nil and collapsed.paths[11] == nil, vim.inspect(collapsed.paths))
-assert(collapsed.rows[10] == nil and collapsed.rows[11] == nil, "collapsed descendants omitted from rows")
+assert(collapsed.paths[10] == nil and collapsed.paths[11] == nil and collapsed.paths[12] == nil, vim.inspect(collapsed.paths))
+assert(collapsed.rows[11] == nil and collapsed.rows[12] == nil, "collapsed descendants omitted from rows")
 assert(
-    vim.deep_equal(collapsed.rows[9], { kind = "dir", path = "src", depth = 0, parent_dir = nil, is_collapsed = true }),
-    vim.inspect(collapsed.rows[9])
+    vim.deep_equal(collapsed.rows[10], { kind = "dir", path = "src", depth = 0, parent_dir = nil, is_collapsed = true }),
+    vim.inspect(collapsed.rows[10])
 )
-assert(vim.deep_equal(collapsed.selectable_lines, { 6, 7, 8, 9 }), vim.inspect(collapsed.selectable_lines))
+assert(vim.deep_equal(collapsed.selectable_lines, { 6, 7, 8, 9, 10 }), vim.inspect(collapsed.selectable_lines))
 
 -- Lone-child joined directories carry canonical path and parent_dir, and isLocalOnly renders [local] in JprThreadLocal.
 local joined_and_local = panel.build({
@@ -306,21 +312,21 @@ local joined_and_local = panel.build({
     },
     sync = { state = "synced", at = 100 },
 }, 110)
-assert(joined_and_local.lines[7] == "▾ docs/x/", joined_and_local.lines[7])
-assert(joined_and_local.lines[8] == "    a.md  +2 -0 [local]", joined_and_local.lines[8])
-assert(joined_and_local.lines[9] == "  ▾ sub/", joined_and_local.lines[9])
-assert(joined_and_local.lines[10] == "      b.md  +1 -0 [1L] [local]", joined_and_local.lines[10])
+assert(joined_and_local.lines[8] == "▾ docs/x/", joined_and_local.lines[8])
+assert(joined_and_local.lines[9] == "    a.md  +2 -0 [local]", joined_and_local.lines[9])
+assert(joined_and_local.lines[10] == "  ▾ sub/", joined_and_local.lines[10])
+assert(joined_and_local.lines[11] == "      b.md  +1 -0 [1L] [local]", joined_and_local.lines[11])
 assert(
-    vim.deep_equal(joined_and_local.rows[7], { kind = "dir", path = "docs/x", depth = 0, parent_dir = nil, is_collapsed = false }),
-    vim.inspect(joined_and_local.rows[7])
+    vim.deep_equal(joined_and_local.rows[8], { kind = "dir", path = "docs/x", depth = 0, parent_dir = nil, is_collapsed = false }),
+    vim.inspect(joined_and_local.rows[8])
 )
 assert(
-    vim.deep_equal(joined_and_local.rows[9], { kind = "dir", path = "docs/x/sub", depth = 1, parent_dir = "docs/x", is_collapsed = false }),
-    vim.inspect(joined_and_local.rows[9])
-)
-assert(
-    vim.deep_equal(joined_and_local.rows[10], { kind = "file", path = "docs/x/sub/b.md", depth = 2, parent_dir = "docs/x/sub" }),
+    vim.deep_equal(joined_and_local.rows[10], { kind = "dir", path = "docs/x/sub", depth = 1, parent_dir = "docs/x", is_collapsed = false }),
     vim.inspect(joined_and_local.rows[10])
+)
+assert(
+    vim.deep_equal(joined_and_local.rows[11], { kind = "file", path = "docs/x/sub/b.md", depth = 2, parent_dir = "docs/x/sub" }),
+    vim.inspect(joined_and_local.rows[11])
 )
 assert(
     vim.deep_equal(highlighted(joined_and_local, "JprThreadLocal"), { "[local]", "[local]" }),

@@ -107,7 +107,8 @@ local local_view = {
 local built_local = panel_render.build(local_view, 1000)
 helpers.eq(built_local.lines[1], "LOCAL feat/x vs develop", "local panel header")
 helpers.eq(built_local.lines[4], "local only · :Jpr sync to link PR", "local panel sync hint")
-helpers.eq(built_local.lines[6], "  💬 Local Notes", "local notes row label")
+helpers.eq(built_local.lines[6], "  📄 Diff summary", "local diff summary row label")
+helpers.eq(built_local.lines[7], "  💬 Local Notes", "local notes row label")
 for _, line in ipairs(built_local.lines) do
     helpers.eq(line:find("[local]", 1, true), nil, "suppresses redundant [local] badge in unlinked local mode")
 end
@@ -146,7 +147,8 @@ local linked_view = {
 }
 local built_linked = panel_render.build(linked_view, 1000)
 helpers.eq(built_linked.lines[1], "#7 Ship it", "linked PR panel header")
-helpers.eq(built_linked.lines[6], "  💬 Conversation", "linked PR conversation row")
+helpers.eq(built_linked.lines[6], "  📄 Diff summary", "linked PR diff summary row")
+helpers.eq(built_linked.lines[7], "  💬 Conversation", "linked PR conversation row")
 helpers.ne(stream_render.build_key_from_view(linked_view), key_v1, "stream key changes on PR upgrade")
 
 -- 5. Mid-session upgrade in `session.show` updates session metadata and notifies user.
