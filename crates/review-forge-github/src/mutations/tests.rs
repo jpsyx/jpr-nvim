@@ -83,6 +83,7 @@ fn rest_reply_endpoint_rejects_traversal_and_non_digit_database_ids() {
         repo: "widgets".into(),
         number: 7,
         title: "Fix".into(),
+        body: String::new(),
         url: "https://github.com/octo/widgets/pull/7".into(),
         node_id: "PR_7".into(),
         author: "alice".into(),

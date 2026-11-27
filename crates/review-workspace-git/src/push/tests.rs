@@ -16,6 +16,7 @@ fn create_pr_from_head(head_ref: &str, is_cross_repository: bool) -> PullRequest
         repo: "widgets".into(),
         number: 7,
         title: "Fix the widget".into(),
+        body: String::new(),
         url: "https://github.com/octo/widgets/pull/7".into(),
         node_id: "PR_7".into(),
         author: "alice".into(),

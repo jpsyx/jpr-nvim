@@ -1,4 +1,4 @@
--- Declarative schema for all 17 `:Jpr` subcommands, driving the floating
+-- Declarative schema for all 18 `:Jpr` subcommands, driving the floating
 -- command palette, interactive steppers, and subcommand argument completion.
 -- Command aliases live in `COMMAND_ALIASES` and are not palette entries.
 local open_spec = require("jpr.commands.schema.open")
@@ -248,7 +248,7 @@ local function create_local_command_spec()
     }
 end
 
---- Builds the ordered list of declarative specs for all 17 `:Jpr` subcommands.
+--- Builds the ordered list of declarative specs for all 18 `:Jpr` subcommands.
 --- @return table[]
 function M.create_command_specs()
     return {
@@ -261,6 +261,7 @@ function M.create_command_specs()
         create_comment_command_spec(),
         create_session_action_spec("suggest", "Suggest Code Change", "Draft a review comment pre-filled with a GitHub suggestion block for the current line.", "suggest_current", predicates.is_suggest_executable),
         create_session_action_spec("expand", "Expand Inline Threads", "Toggle inline expansion of review threads across diff and stream buffers.", "expand_current"),
+        create_session_action_spec("summary", "Open Diff Summary", "View the pull request description and diff stats above the conversation in the main review window.", "summary_current", predicates.is_conversation_executable),
         create_session_action_spec("conversation", "Open PR Conversation", "Read and post top-level pull request issue comments in the main review window.", "conversation_current", predicates.is_conversation_executable),
         create_session_action_spec("submit", "Submit Review", "Preview pending draft comments and submit your review decision to GitHub.", "submit_current", predicates.is_live_linked_pr_session),
         create_session_action_spec("push", "Push Head Branch", "Push local commits on the checked-out pull request branch back to GitHub.", "push_current", predicates.is_live_linked_pr_session),
@@ -335,7 +336,7 @@ function M.validate_command_aliases()
     return true
 end
 
---- Returns the ordered list of all 17 `:Jpr` subcommand IDs.
+--- Returns the ordered list of all 18 `:Jpr` subcommand IDs.
 --- @return string[]
 function M.list_command_ids()
     local ids = {}

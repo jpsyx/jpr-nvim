@@ -5,7 +5,7 @@ use review_model::{PullRequest, PullRequestSummary};
 use serde_json::Value;
 
 /// The fields `gh pr view --json` must report.
-pub const PR_FIELDS: &str = "number,title,url,id,headRefName,headRefOid,state,baseRefName,baseRefOid,author,isCrossRepository";
+pub const PR_FIELDS: &str = "number,title,body,url,id,headRefName,headRefOid,state,baseRefName,baseRefOid,author,isCrossRepository";
 
 /// The fields `gh pr list --json` must report for open PR summaries.
 pub const PR_LIST_FIELDS: &str = "number,title,author,headRefName,isDraft,updatedAt";
@@ -45,6 +45,7 @@ pub fn parse_pr(stdout: &str) -> Result<PullRequest> {
     let is_cross_repository = value["isCrossRepository"]
         .as_bool()
         .context("gh pr view did not report /isCrossRepository")?;
+    let body = value["body"].as_str().unwrap_or_default().to_owned();
     let url = text("/url")?;
     let (owner, repo) =
         owner_repo_from_url(&url).with_context(|| format!("unexpected pull request URL {url}"))?;
@@ -53,6 +54,7 @@ pub fn parse_pr(stdout: &str) -> Result<PullRequest> {
         repo,
         number,
         title: text("/title")?,
+        body,
         url,
         node_id: text("/id")?,
         author: text("/author/login")?,
@@ -139,7 +141,7 @@ fn parse_pr_summary(value: &Value) -> Result<PullRequestSummary> {
 mod tests {
     use super::*;
 
-    const OPEN: &str = r#"{"number":7,"title":"Fix the widget","url":"https://github.com/octo/widgets/pull/7",
+    const OPEN: &str = r#"{"number":7,"title":"Fix the widget","body":"Fixes #1\n\nMore details","url":"https://github.com/octo/widgets/pull/7",
         "id":"PR_7","headRefName":"fix/widget","headRefOid":"abc123","state":"OPEN",
         "baseRefName":"main","baseRefOid":"base000","author":{"login":"alice"},"isCrossRepository":false}"#;
 
@@ -175,12 +177,22 @@ mod tests {
             ("fix/widget", "abc123", "main")
         );
         assert_eq!(pr.base_sha, "base000");
+        assert_eq!(pr.body, "Fixes #1\n\nMore details");
         assert!(!pr.is_cross_repository);
 
         let fork_pr =
             parse_pr(&OPEN.replace("\"isCrossRepository\":false", "\"isCrossRepository\":true"))
                 .unwrap();
         assert!(fork_pr.is_cross_repository);
+    }
+
+    #[test]
+    fn defaults_null_or_missing_body_to_empty_string() {
+        let null_body = OPEN.replace("\"Fixes #1\\n\\nMore details\"", "null");
+        assert_eq!(parse_pr(&null_body).unwrap().body, "");
+
+        let missing_body = OPEN.replace("\"body\":\"Fixes #1\\n\\nMore details\",", "");
+        assert_eq!(parse_pr(&missing_body).unwrap().body, "");
     }
 
     #[test]

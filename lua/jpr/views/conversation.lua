@@ -65,13 +65,92 @@ local function append_thread(layout, thread)
     end
 end
 
+local function build_diffstat_line_from_view(view)
+    local files = (type(view) == "table" and type(view.files) == "table") and view.files or {}
+    local total_additions = 0
+    local total_deletions = 0
+    for _, file in ipairs(files) do
+        total_additions = total_additions + (tonumber(file.additions) or 0)
+        total_deletions = total_deletions + (tonumber(file.deletions) or 0)
+    end
+    local file_word = #files == 1 and "file" or "files"
+    local viewed_count = (type(view) == "table" and tonumber(view.viewedCount)) or 0
+    return ("%d %s changed · +%d -%d · %d/%d viewed"):format(
+        #files,
+        file_word,
+        total_additions,
+        total_deletions,
+        viewed_count,
+        #files
+    )
+end
+
+local function build_pr_metadata_line_from_pr(pr)
+    local parts = {}
+    if type(pr.author) == "string" and pr.author ~= "" then
+        parts[#parts + 1] = "@" .. pr.author
+    end
+    local has_head = type(pr.headRef) == "string" and pr.headRef ~= ""
+    local has_base = type(pr.baseRef) == "string" and pr.baseRef ~= ""
+    if has_head and has_base then
+        parts[#parts + 1] = ("%s -> %s"):format(pr.headRef, pr.baseRef)
+    elseif has_head then
+        parts[#parts + 1] = pr.headRef
+    elseif has_base then
+        parts[#parts + 1] = pr.baseRef
+    end
+    return #parts > 0 and table.concat(parts, " · ") or nil
+end
+
+local function append_pr_body_lines(layout, body)
+    local normalized = tostring(body or ""):gsub("\r\n", "\n"):gsub("\r", "\n")
+    if vim.trim(normalized) == "" then
+        layout.add("  (no PR description)", "JprMuted")
+        return
+    end
+    for _, body_line in ipairs(vim.split(normalized, "\n", { plain = true })) do
+        layout.add(body_line)
+    end
+end
+
+local function append_diff_summary(layout, session, is_local)
+    local view = type(session.view) == "table" and session.view or {}
+    local pr = type(view.pr) == "table" and view.pr or nil
+    local local_context = type(view.localContext) == "table" and view.localContext or nil
+    if is_local then
+        local branch = tostring((local_context and local_context.branch) or session.branch or "worktree")
+        local base_ref = tostring((local_context and local_context.baseRef) or session.base_ref or "")
+        local local_title = base_ref ~= "" and ("LOCAL %s vs %s"):format(branch, base_ref) or ("LOCAL %s"):format(branch)
+        layout.add(local_title, "JprTitle")
+        layout.add(build_diffstat_line_from_view(view), "JprMuted")
+        layout.add("")
+        layout.add("  (local worktree review; run :Jpr sync once a PR is open to load its description)", "JprMuted")
+    else
+        local pr_number = (pr and pr.number) or session.number or 0
+        local pr_title = (pr and type(pr.title) == "string" and pr.title ~= "") and pr.title or "Diff summary"
+        layout.add(("#%d %s"):format(pr_number, pr_title), "JprTitle")
+        local metadata_line = pr and build_pr_metadata_line_from_pr(pr) or nil
+        if metadata_line then
+            layout.add(metadata_line, "JprMuted")
+        end
+        layout.add(build_diffstat_line_from_view(view), "JprMuted")
+        layout.add("")
+        append_pr_body_lines(layout, pr and pr.body or "")
+    end
+    layout.add("")
+    layout.add("────────────────────────────────────────", "JprMuted")
+    layout.add("")
+end
+
 local function create_layout_from_threads(session, threads)
     local pr_threads = filter_pr_threads(threads)
     local layout = render.create_message_layout()
     local is_local = session.mode == "local" and not (session.view and session.view.pr)
+    append_diff_summary(layout, session, is_local)
+    layout.conversation_start_line = #layout.lines + 1
     local title = is_local
-            and ("LOCAL %s Notes (%d comments)"):format(tostring(session.branch or "worktree"), count_messages(pr_threads))
-        or ("#%d PR Conversation (%d comments)"):format(session.number, count_messages(pr_threads))
+            and ("Local Notes (%d comments)"):format(count_messages(pr_threads))
+        or ("Conversation (%d comments)"):format(count_messages(pr_threads))
     layout.add(title, "JprTitle")
     layout.add("")
     if #pr_threads == 0 then
@@ -136,6 +215,9 @@ local function current_entry(session)
         return nil
     end
     local cursor_line = vim.api.nvim_win_get_cursor(win)[1]
+    if cursor_line < (state.layout.conversation_start_line or 1) then
+        return nil
+    end
     return render.find_message_at_line(state.layout, cursor_line), state
 end
 
@@ -341,6 +423,19 @@ local function get_or_create_state(session)
     return state
 end
 
+local function scroll_to_target(buf, layout, target)
+    if not layout or #(layout.lines or {}) == 0 or not vim.api.nvim_buf_is_valid(buf) then
+        return
+    end
+    local raw_line = target == "summary" and 1 or (layout.conversation_start_line or 1)
+    local target_line = math.max(1, math.min(raw_line, #layout.lines))
+    for _, win in ipairs(vim.fn.win_findbuf(buf)) do
+        pcall(vim.api.nvim_win_call, win, function()
+            vim.fn.winrestview({ lnum = target_line, col = 0, topline = target_line })
+        end)
+    end
+end
+
 local function fetch_and_draw(session, state)
     state.request_id = (state.request_id or 0) + 1
     local request_id = state.request_id
@@ -355,6 +450,11 @@ local function fetch_and_draw(session, state)
         local layout = create_layout_from_threads(session, (result and result.threads) or {})
         state.layout = layout
         paint_buffer(buf, layout)
+        if state.pending_target then
+            local target = state.pending_target
+            state.pending_target = nil
+            scroll_to_target(buf, layout, target)
+        end
     end)
 end
 
@@ -363,16 +463,20 @@ local function has_cached_buffer(session)
     return existing ~= nil and existing.buf ~= nil and vim.api.nvim_buf_is_valid(existing.buf)
 end
 
---- Opens or focuses the PR conversation buffer (`jpr://conversation/<number>`)
---- in `session`'s main window beside the panel.
-function M.show(session)
+--- Opens or focuses the unified Diff summary + PR conversation buffer
+--- (`jpr://conversation/<buf_key>`) in `session`'s main window beside the panel.
+--- `opts.target` selects the initial scroll position: `"summary"` opens at
+--- line 1 and `"conversation"` (default) opens at the Conversation heading.
+function M.show(session, opts)
     if not session or session.closing then
         return
     end
     if session.is_read_only and not has_cached_buffer(session) then
         return require("jpr.session").report_read_only(session)
     end
+    local target = (type(opts) == "table" and opts.target == "summary") and "summary" or "conversation"
     local state = get_or_create_state(session)
+    state.pending_target = target
     local main_win = main_window.find(session)
     diff_view.clear(session, main_win)
     stream_view.close_left_window(session)
@@ -381,8 +485,13 @@ function M.show(session)
     vim.api.nvim_set_option_value("scrollbind", false, { win = main_win, scope = "local" })
     vim.api.nvim_set_option_value("cursorbind", false, { win = main_win, scope = "local" })
     vim.api.nvim_set_current_win(main_win)
+    if state.layout then
+        scroll_to_target(state.buf, state.layout, target)
+    end
     if not session.is_read_only then
         fetch_and_draw(session, state)
+    else
+        state.pending_target = nil
     end
 end
 

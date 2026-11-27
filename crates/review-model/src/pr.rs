@@ -14,6 +14,10 @@ pub struct PullRequest {
     pub number: u64,
     /// The title, as the author wrote it.
     pub title: String,
+    /// The pull request's Markdown description body. Empty when omitted or not
+    /// present in state saved by an older build.
+    #[serde(default)]
+    pub body: String,
     /// The pull request's web page.
     pub url: String,
     /// The forge's own id for the pull request (GitHub's GraphQL node id).
@@ -106,6 +110,7 @@ mod tests {
             repo: "widgets".into(),
             number: 7,
             title: "Fix the widget".into(),
+            body: String::new(),
             url: "https://github.com/octo/widgets/pull/7".into(),
             node_id: "PR_7".into(),
             author: "alice".into(),
@@ -153,6 +158,18 @@ mod tests {
             .remove("isCrossRepository");
         let decoded: PullRequest = serde_json::from_value(without_flag).unwrap();
         assert!(!decoded.is_cross_repository);
+    }
+
+    #[test]
+    fn pull_request_serializes_body_and_defaults_when_omitted() {
+        let mut with_body = pr();
+        with_body.body = "Fixes #1\n\nAdds test coverage.".into();
+        let mut json = serde_json::to_value(&with_body).unwrap();
+        assert_eq!(json["body"], "Fixes #1\n\nAdds test coverage.");
+
+        json.as_object_mut().unwrap().remove("body");
+        let decoded: PullRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(decoded.body, "");
     }
 
     #[test]

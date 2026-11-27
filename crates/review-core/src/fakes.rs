@@ -30,6 +30,7 @@ pub fn sample_pr() -> PullRequest {
         repo: "widgets".into(),
         number: 7,
         title: "Fix the widget".into(),
+        body: "Fixes the widget crash.".into(),
         url: "https://github.com/octo/widgets/pull/7".into(),
         node_id: "PR_7".into(),
         author: "alice".into(),

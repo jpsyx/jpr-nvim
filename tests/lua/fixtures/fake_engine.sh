@@ -5,7 +5,7 @@
 # test). When FAKE_ENGINE_LOG names a file, every request line is appended to
 # it, so a spec can check what the plugin sent. A fileDiff for BROKEN.md fails,
 # and one for NULL.md answers null. A setViewed for BROKEN.md fails too.
-pr='{"number":7,"title":"Fix the widget","headSha":"head1","baseSha":"base1"}'
+pr='{"number":7,"title":"Fix the widget","author":"alice","headRef":"fix/widget","baseRef":"main","body":"Fixes widget crash.\r\n\r\nIncludes regression test.","headSha":"head1","baseSha":"base1"}'
 tree='[{"depth":0,"name":"README.md","file":0}]'
 view_synced='{"pr":'"$pr"',"files":[{"path":"README.md","additions":2,"deletions":1,"viewed":"UNVIEWED","threads":1}],"tree":'"$tree"',"viewedCount":0,"threadCount":1,"draftCount":0,"conversationCount":1,"localUnsentCount":0,"queuedCount":0,"sync":{"state":"synced","at":1}}'
 view_viewed='{"pr":'"$pr"',"files":[{"path":"README.md","additions":2,"deletions":1,"viewed":"VIEWED","threads":1}],"tree":'"$tree"',"viewedCount":1,"threadCount":1,"draftCount":0,"conversationCount":1,"localUnsentCount":0,"queuedCount":0,"sync":{"state":"synced","at":1}}'

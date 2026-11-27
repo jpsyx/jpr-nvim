@@ -115,7 +115,9 @@ local function find_line_for_path(path)
     return nil
 end
 
--- 1. Pressing r on Conversation is a no-op (does not open float).
+-- 1. Pressing r on Diff summary or Conversation is a no-op (does not open float).
+press_panel_key("r", review.panel.summary_line)
+assert(find_panel_input_window() == nil, "r on Diff summary must not open float")
 press_panel_key("r", review.panel.conversation_line)
 assert(find_panel_input_window() == nil, "r on Conversation must not open float")
 

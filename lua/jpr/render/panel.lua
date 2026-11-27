@@ -357,7 +357,7 @@ end
 --- The panel's contents for `view` at time `now` (Unix seconds): its lines,
 --- their highlights, row metadata, selectable lines, and which file each line
 --- shows, for the panel window to draw and navigate.
---- @return table { lines: string[], highlights: table[], paths: table<integer, string>, rows: table<integer, table>, selectable_lines: integer[], conversation_line: integer }
+--- @return table { lines: string[], highlights: table[], paths: table<integer, string>, rows: table<integer, table>, selectable_lines: integer[], summary_line: integer, conversation_line: integer }
 --- `line` is 0-based and columns are byte offsets; `paths` and `rows` are keyed by 1-based line number.
 function M.build(view, now, opts)
     local collapsed_dirs = type(opts) == "table" and type(opts.collapsed_dirs) == "table" and opts.collapsed_dirs or {}
@@ -386,6 +386,10 @@ function M.build(view, now, opts)
         content.add_line(M.sync_text(view.sync, now))
     end
     content.add_line("")
+    content.add_line("  📄 Diff summary", "JprTitle")
+    local summary_line = #content.lines
+    content.rows[summary_line] = { kind = "summary" }
+    content.selectable_lines[#content.selectable_lines + 1] = summary_line
     local conversation_count = view.conversationCount or 0
     local conversation_suffix = conversation_count > 0 and (" [%d]"):format(conversation_count) or ""
     local conversation_title = is_unlinked_local and "  💬 Local Notes" or "  💬 Conversation"
@@ -400,6 +404,7 @@ function M.build(view, now, opts)
         paths = content.paths,
         rows = content.rows,
         selectable_lines = content.selectable_lines,
+        summary_line = summary_line,
         conversation_line = conversation_line,
     }
 end
