@@ -46,12 +46,10 @@ function M.apply(session, win)
     local record = { buf = buf, mode = mode }
     session.diff.applied[win] = record
     require("jpr").bind_buffer_keys(buf)
-    vim.api.nvim_echo({ { ("jpr: Loading diff for %s..."):format(path), "JprMuted" } }, false, {})
     require("jpr.session").request(session, "fileDiff", { path = path }, function(diff)
         if not is_current(session, win, record) then
             return
         end
-        vim.api.nvim_echo({ { "" } }, false, {})
         if type(diff) ~= "table" then
             give_up(session, win, record, path)
             return require("jpr").error(("the engine sent no diff for %s"):format(path))
@@ -67,9 +65,6 @@ function M.apply(session, win)
             M.open_base(session, win, buf, diff)
         end
     end, function()
-        if is_current(session, win, record) then
-            vim.api.nvim_echo({ { "" } }, false, {})
-        end
         give_up(session, win, record, path)
     end)
 end

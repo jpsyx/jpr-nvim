@@ -61,9 +61,11 @@ local function append_body(layout, add, body_lines)
 end
 
 --- Builds the `:Jpr submit` modal lines, highlights, and click-target maps
---- from `preview`, `selected_event`, and `body_lines`.
+--- from `preview`, `selected_event`, `body_lines`, and optional `opts`
+--- (`{ is_submitting = boolean }`).
 --- @return table { lines: string[], highlights: table[], draft_anchors: table<integer, table>, event_lines: table<integer, string>, summary_lines: table<integer, boolean>, footer_line: integer }
-function M.build(preview, selected_event, body_lines)
+function M.build(preview, selected_event, body_lines, opts)
+    local is_submitting = type(opts) == "table" and opts.is_submitting == true
     local layout = {
         lines = {},
         highlights = {},
@@ -84,7 +86,10 @@ function M.build(preview, selected_event, body_lines)
         end
     end
     local current_preview = preview or {}
-    if current_preview.blockedReason and current_preview.blockedReason ~= "" then
+    if is_submitting then
+        add("Submitting review to GitHub...", "JprNotifyProgressTitle")
+        add("")
+    elseif current_preview.blockedReason and current_preview.blockedReason ~= "" then
         add("Blocked: " .. one_line(current_preview.blockedReason), "JprError")
         add("")
     end
@@ -94,7 +99,11 @@ function M.build(preview, selected_event, body_lines)
     add("")
     append_body(layout, add, body_lines)
     add("")
-    add("[1/2/3] action  [e] summary  [<CR>] open draft / submit  [<C-s>] submit  [q] cancel", "JprMuted")
+    if is_submitting then
+        add("Please wait while GitHub processes your review...", "JprMuted")
+    else
+        add("[1/2/3] action  [e] summary  [<CR>] open draft / submit  [<C-s>] submit  [q] cancel", "JprMuted")
+    end
     layout.footer_line = #layout.lines
     return layout
 end

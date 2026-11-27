@@ -2,9 +2,13 @@
 -- side windows (the panel, a base file, the stream's left half) never count.
 local M = {}
 
---- Whether `win` is one of jpr's side windows rather than the main window.
+--- Whether `win` is one of jpr's side windows (or a floating window) rather than the main window.
 function M.is_side(session, win)
-    return (session.panel ~= nil and win == session.panel.win) or vim.w[win].jpr_side == true
+    if (session.panel ~= nil and win == session.panel.win) or vim.w[win].jpr_side == true then
+        return true
+    end
+    local ok, config = pcall(vim.api.nvim_win_get_config, win)
+    return ok and type(config) == "table" and config.relative ~= nil and config.relative ~= ""
 end
 
 --- The main window of `session`'s tab when one is already open, or nil when

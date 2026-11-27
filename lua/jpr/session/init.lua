@@ -3,6 +3,7 @@
 local crash = require("jpr.session.crash")
 local engine = require("jpr.session.engine")
 local panel = require("jpr.views.panel")
+local progress = require("jpr.session.progress")
 
 local M = {}
 
@@ -85,8 +86,11 @@ function M.report_read_only(session)
     )
 end
 
-local function handle_request_error(session, method, params, on_result, on_error, request_error)
+local function handle_request_error(session, method, params, on_result, on_error, opts, progress_handle, request_error)
     if session.closing then
+        if progress_handle then
+            progress_handle:cancel()
+        end
         if on_error then
             on_error(request_error)
         end
@@ -94,13 +98,16 @@ local function handle_request_error(session, method, params, on_result, on_error
     end
     local auth = require("jpr.auth")
     if auth.is_rpc_auth_error(request_error) then
+        if progress_handle then
+            progress_handle:cancel()
+        end
         return auth.prompt_and_resume({
             is_background = false,
             on_authenticated = function()
                 if session.closing or not session.client then
                     return
                 end
-                M.request(session, method, params, on_result, on_error)
+                M.request(session, method, params, on_result, on_error, opts)
             end,
             on_cancel = function()
                 if on_error then
@@ -112,14 +119,26 @@ local function handle_request_error(session, method, params, on_result, on_error
     if on_error then
         on_error(request_error)
     end
-    return jpr().error(("%s failed: %s"):format(method, request_error.message))
+    local error_message = ("%s failed: %s"):format(method, request_error.message)
+    if progress_handle then
+        return progress_handle:fail(error_message)
+    end
+    return jpr().error(error_message)
+end
+
+local function resolve_success_message(opts, result)
+    local message = opts and opts.success_message
+    if type(message) == "function" then
+        return message(result)
+    end
+    return type(message) == "string" and message or nil
 end
 
 --- Sends `method` with `params` to `session`'s engine. `on_result(result)`
 --- runs on success; a failure is passed to `on_error`, when given, and
 --- reported to the user unless the session is closing (a request still in
 --- flight then fails because the engine was stopped on purpose).
-function M.request(session, method, params, on_result, on_error)
+function M.request(session, method, params, on_result, on_error, opts)
     if session.is_read_only then
         if on_error then
             on_error()
@@ -135,9 +154,18 @@ function M.request(session, method, params, on_result, on_error)
             ("the review engine for %s is not running; run %s"):format(M.display_label(session), reopen_hint)
         )
     end
+    local progress_handle = progress.start(session, method, params, opts)
     session.client:request(method, params, function(request_error, result)
         if request_error then
-            return handle_request_error(session, method, params, on_result, on_error, request_error)
+            return handle_request_error(session, method, params, on_result, on_error, opts, progress_handle, request_error)
+        end
+        if progress_handle then
+            local success_message = resolve_success_message(opts, result)
+            if success_message then
+                progress_handle:succeed(success_message)
+            else
+                progress_handle:cancel()
+            end
         end
         on_result(result)
     end)
@@ -171,6 +199,7 @@ end
 --- whose engine dies mid-review keeps its tab and the user's windows.
 local function forget(session, close_tab)
     session.closing = true
+    progress.cancel_all(session)
     if session.client then
         session.client:request("shutdown", nil, function() end)
         session.client:stop()

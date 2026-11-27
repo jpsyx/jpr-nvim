@@ -205,6 +205,8 @@ local function assert_checkout_stderr_dedup_and_failure(calls, notifications)
 end
 
 local function assert_stream_progress_user_file_and_diff_echo(review, worktree)
+    local notify = require("jpr.notify")
+    notify.clear()
     local echoed = {}
     local original_echo = vim.api.nvim_echo
     vim.api.nvim_echo = function(chunks)
@@ -212,10 +214,14 @@ local function assert_stream_progress_user_file_and_diff_echo(review, worktree)
     end
 
     events.on_notification(review, "streamProgress", { completed = 8, total = 20, path = "src/a.rs" }, session.show)
-    assert(#echoed == 1, "streamProgress echoes when loading view is closed")
-    assert(echoed[1][1][1]:find("8/20 (40%)", 1, true) ~= nil, "echo shows count and percent: " .. vim.inspect(echoed))
-    assert(echoed[1][1][1]:find("src/a.rs", 1, true) ~= nil, "echo shows file path: " .. vim.inspect(echoed))
-    assert(echoed[1][1][2] == "JprMuted", "echo uses JprMuted highlight")
+    assert(#echoed == 0, "streamProgress uses top-right progress toast instead of nvim_echo")
+    local progress_toasts = notify.get_toasts()
+    assert(#progress_toasts == 1, "streamProgress opens a progress toast when loading view is closed")
+    local toast_text = table.concat(vim.api.nvim_buf_get_lines(progress_toasts[1].buf, 0, -1, false), "\n")
+    assert(toast_text:find("8/20 (40%)", 1, true) ~= nil, "toast shows count and percent: " .. toast_text)
+    assert(toast_text:find("src/a.rs", 1, true) ~= nil, "toast shows file path: " .. toast_text)
+    events.on_notification(review, "streamProgress", { completed = 20, total = 20, path = "src/z.rs" }, session.show)
+    assert(#notify.get_toasts() == 0, "streamProgress toast closes on completion")
 
     local main_win = require("jpr.views.main_window").find(review)
     vim.api.nvim_set_current_win(main_win)
@@ -233,13 +239,10 @@ local function assert_stream_progress_user_file_and_diff_echo(review, worktree)
     echoed = {}
     diff_view.clear(review, main_win)
     diff_view.apply(review, main_win)
-    assert(
-        #echoed >= 1 and echoed[1][1][1]:find("Loading diff for README.md", 1, true) ~= nil,
-        "diff.apply echoes loading status: " .. vim.inspect(echoed)
-    )
     assert(vim.wait(3000, function()
-        return #echoed >= 2 and echoed[#echoed][1][1] == ""
-    end), "diff.apply clears echo once fileDiff arrives: " .. vim.inspect(echoed))
+        return review.diff and review.diff.applied[main_win] ~= nil
+    end), "diff.apply completes without nvim_echo")
+    assert(#echoed == 0, "diff.apply uses progress toast rather than nvim_echo")
     vim.api.nvim_echo = original_echo
 end
 

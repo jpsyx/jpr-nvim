@@ -167,6 +167,11 @@ end), "the viewedChanged view is shown")
 jpr.error = function(message)
     errors[#errors + 1] = message
 end
+require("jpr.notify").set_listener(function(kind, message)
+    if kind == "error" then
+        errors[#errors + 1] = message
+    end
+end)
 vim.fn.writefile({ "x" }, worktree .. "/BROKEN.md")
 vim.fn.writefile({ "x" }, worktree .. "/NULL.md")
 local files = vim.deepcopy(review.view.files)

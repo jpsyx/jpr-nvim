@@ -82,7 +82,9 @@ local function paint_modal(state)
     if not vim.api.nvim_buf_is_valid(state.buf) then
         return
     end
-    local rendered = render.build(state.preview, state.event, state.body_lines)
+    local rendered = render.build(state.preview, state.event, state.body_lines, {
+        is_submitting = state.in_flight == true,
+    })
     state.rendered = rendered
     vim.bo[state.buf].modifiable = true
     vim.api.nvim_buf_set_lines(state.buf, 0, -1, false, rendered.lines)
@@ -133,6 +135,7 @@ local function execute_submit_review(session, state, event, body)
         return
     end
     state.in_flight = true
+    paint_modal(state)
     require("jpr.session").request(session, "submitReview", {
         event = event,
         body = body,
@@ -142,13 +145,17 @@ local function execute_submit_review(session, state, event, body)
             return
         end
         M.close(session)
-        require("jpr").info("review submitted")
     end, function()
         state.in_flight = false
-        if session.submit == state and state.win and vim.api.nvim_win_is_valid(state.win) then
-            pcall(vim.api.nvim_set_current_win, state.win)
+        if session.submit == state then
+            paint_modal(state)
+            if state.win and vim.api.nvim_win_is_valid(state.win) then
+                pcall(vim.api.nvim_set_current_win, state.win)
+            end
         end
-    end)
+    end, {
+        success_message = "review submitted",
+    })
 end
 
 local function submit_review(session, state)

@@ -318,6 +318,7 @@ local function open_toast(kind, message, opts)
         return nil
     end
     toast.win = win
+    vim.w[win].jpr_side = true
     vim.api.nvim_set_option_value("winhighlight", build_winhighlight_from_kind(kind), { win = win })
     toasts[#toasts + 1] = toast
     reflow_toasts()

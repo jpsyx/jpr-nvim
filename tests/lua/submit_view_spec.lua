@@ -37,13 +37,13 @@ end
 
 -- 1. session.submit_current() without open session errors via jpr.error.
 local errors, infos = {}, {}
-local original_error, original_info = jpr.error, jpr.info
-jpr.error = function(message)
-    errors[#errors + 1] = message
-end
-jpr.info = function(message)
-    infos[#infos + 1] = message
-end
+require("jpr.notify").set_listener(function(kind, message)
+    if kind == "error" then
+        errors[#errors + 1] = message
+    elseif kind == "info" or kind == "success" then
+        infos[#infos + 1] = message
+    end
+end)
 
 session.submit_current()
 assert(#errors == 1 and errors[1]:find("no pull request", 1, true) ~= nil, vim.inspect(errors))

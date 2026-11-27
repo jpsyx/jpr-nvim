@@ -183,11 +183,22 @@ local function handle_stream_progress(session, params)
     if total <= 0 then
         return
     end
+    if completed >= total then
+        if session.stream_progress_handle then
+            session.stream_progress_handle:cancel()
+            session.stream_progress_handle = nil
+        end
+        return
+    end
     local percent = math.floor((completed * 100) / total + 0.5)
     local clean_path = crash.build_clean_text_from_raw(path)
     local suffix = clean_path ~= "" and (" " .. clean_path) or ""
-    local message = ("jpr: Computing diffs %d/%d (%d%%)%s"):format(completed, total, percent, suffix)
-    vim.api.nvim_echo({ { message, "JprMuted" } }, false, {})
+    local message = ("Computing diffs %d/%d (%d%%)%s"):format(completed, total, percent, suffix)
+    if not session.stream_progress_handle then
+        session.stream_progress_handle = jpr().progress(message, { delay_ms = 0 })
+    else
+        session.stream_progress_handle:update(message)
+    end
 end
 
 --- Updates `session`'s views and error reporting in response to engine notifications.
