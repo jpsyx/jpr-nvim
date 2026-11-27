@@ -45,21 +45,37 @@ local function has_local_thread(threads)
     return false
 end
 
-local function append_thread(layout, thread)
+local function highlight_local_badge(layout, range_index, badge)
+    if badge == "" then
+        return
+    end
+    local range = layout.message_ranges[range_index]
+    for line_number = range.first, range.last do
+        local column = layout.lines[line_number]:find(badge, 1, true)
+        if column then
+            layout.highlights[#layout.highlights + 1] = {
+                line = line_number - 1,
+                col_start = column - 1,
+                col_end = column - 1 + #badge,
+                group = "JprThreadLocal",
+            }
+            return
+        end
+    end
+end
+
+local function append_thread(layout, thread, width)
     local local_badge = render.build_local_badge_from_thread(thread)
     for index, message in ipairs(thread.messages or {}) do
         local range_index = #layout.message_ranges + 1
-        render.append_formatted_message(layout, thread, message)
-        if index == 1 and local_badge ~= "" then
-            local range = layout.message_ranges[range_index]
-            local line_text = layout.lines[range.first]
-            layout.lines[range.first] = line_text .. " " .. local_badge
-            layout.highlights[#layout.highlights + 1] = {
-                line = range.first - 1,
-                col_start = #line_text + 1,
-                col_end = #line_text + 1 + #local_badge,
-                group = "JprThreadLocal",
-            }
+        render.append_formatted_message(layout, thread, message, {
+            box = true,
+            width = width,
+            indent = index == 1 and 0 or 4,
+            local_badge = index == 1 and local_badge or nil,
+        })
+        if index == 1 then
+            highlight_local_badge(layout, range_index, local_badge)
         end
         layout.add("")
     end
@@ -142,7 +158,7 @@ local function append_diff_summary(layout, session, is_local)
     layout.add("")
 end
 
-local function create_layout_from_threads(session, threads)
+local function create_layout_from_threads(session, threads, width)
     local pr_threads = filter_pr_threads(threads)
     local layout = render.create_message_layout()
     local is_local = session.mode == "local" and not (session.view and session.view.pr)
@@ -160,7 +176,7 @@ local function create_layout_from_threads(session, threads)
         layout.add("")
     else
         for _, thread in ipairs(pr_threads) do
-            append_thread(layout, thread)
+            append_thread(layout, thread, width)
         end
     end
     local footer
@@ -447,7 +463,14 @@ local function fetch_and_draw(session, state)
         if not vim.api.nvim_buf_is_valid(buf) then
             return
         end
-        local layout = create_layout_from_threads(session, (result and result.threads) or {})
+        local width = 80
+        for _, win in ipairs(vim.fn.win_findbuf(buf)) do
+            if vim.api.nvim_win_is_valid(win) then
+                width = vim.api.nvim_win_get_width(win)
+                break
+            end
+        end
+        local layout = create_layout_from_threads(session, (result and result.threads) or {}, width)
         state.layout = layout
         paint_buffer(buf, layout)
         if state.pending_target then

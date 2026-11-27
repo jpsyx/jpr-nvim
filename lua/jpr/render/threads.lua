@@ -1,5 +1,6 @@
 -- Pure: turns ThreadPreview lists into sign + EOL extmarks, expanded virtual
 -- lines, reaction pills, and popup buffer layouts. No windows or buffers here.
+local comment_text = require("jpr.render.comment_text")
 local one_line = require("jpr.render.panel").one_line
 
 local M = {}
@@ -167,8 +168,8 @@ function M.create_expanded_virt_lines_from_threads(threads, is_above_first)
                 index == 1 and resolved_tag or ""
             )
             virt_lines[#virt_lines + 1] = { { header, group } }
-            for body_line in (tostring(message.body or "") .. "\n"):gmatch("(.-)\n") do
-                virt_lines[#virt_lines + 1] = { { "  │   " .. body_line:gsub("\r$", ""), "Normal" } }
+            for body_line in (comment_text.render_body(message.body) .. "\n"):gmatch("(.-)\n") do
+                virt_lines[#virt_lines + 1] = { { "  │   " .. body_line, "Normal" } }
             end
             local reaction_text = M.build_reactions_line(message.reactions)
             if reaction_text ~= "" then
@@ -251,10 +252,7 @@ function M.create_message_layout()
     return layout
 end
 
---- Appends one formatted `message` (author, sync error, recovery banner, body,
---- reactions, and cursor range) from `thread` into `layout`.
-function M.append_formatted_message(layout, thread, message)
-    local start_line = #layout.lines + 1
+local function build_author_line(message, local_badge)
     local badge = SYNC_BADGE[message.sync] and (" " .. SYNC_BADGE[message.sync]) or ""
     local edited_tag = (message.updated and message.updated ~= message.created) and " (edited)" or ""
     local author_line = ("@%s · %s%s%s"):format(
@@ -263,19 +261,69 @@ function M.append_formatted_message(layout, thread, message)
         edited_tag,
         badge
     )
-    layout.add(author_line, "JprAuthor")
+    if type(local_badge) == "string" and local_badge ~= "" then
+        author_line = author_line .. " " .. local_badge
+    end
+    return author_line
+end
+
+local function append_plain_message(layout, message)
+    layout.add(build_author_line(message), "JprAuthor")
     if message.syncError then
         layout.add("  error: " .. one_line(message.syncError), "JprError")
     end
     if message.recoverableBody then
         layout.add("  [concurrent edit on GitHub won; press e to recover your offline text]", "JprThreadDraft")
     end
-    for body_line in (tostring(message.body or "") .. "\n"):gmatch("(.-)\n") do
-        layout.add("  " .. body_line:gsub("\r$", ""))
+    local body = comment_text.render_body(message.body)
+    if body == "" then
+        layout.add("  ")
+    else
+        for body_line in (body .. "\n"):gmatch("(.-)\n") do
+            layout.add("  " .. body_line)
+        end
     end
     local reaction_text = M.build_reactions_line(message.reactions)
     if reaction_text ~= "" then
         layout.add("  " .. reaction_text, "JprReactionActive")
+    end
+end
+
+local function message_segments(message, local_badge)
+    local segments = { { text = build_author_line(message, local_badge), group = "JprAuthor" } }
+    if message.syncError then
+        segments[#segments + 1] = { text = "error: " .. one_line(message.syncError), group = "JprError" }
+    end
+    if message.recoverableBody then
+        segments[#segments + 1] = {
+            text = "[concurrent edit on GitHub won; press e to recover your offline text]",
+            group = "JprThreadDraft",
+        }
+    end
+    segments[#segments + 1] = { text = comment_text.render_body(message.body), group = nil }
+    local reaction_text = M.build_reactions_line(message.reactions)
+    if reaction_text ~= "" then
+        segments[#segments + 1] = { text = reaction_text, group = "JprReactionActive" }
+    end
+    return segments
+end
+
+local function append_boxed_message(layout, message, opts)
+    local box_lines = comment_text.build_box_lines(message_segments(message, opts.local_badge), opts.width, opts.indent)
+    for _, row in ipairs(box_lines) do
+        layout.add(row.text, row.group)
+    end
+end
+
+--- Appends one formatted `message` (author, sync error, recovery banner, body,
+--- reactions, and cursor range) from `thread` into `layout`.
+--- `opts.box` draws an ASCII box; `opts.indent` indents replies.
+function M.append_formatted_message(layout, thread, message, opts)
+    local start_line = #layout.lines + 1
+    if type(opts) == "table" and opts.box then
+        append_boxed_message(layout, message, opts)
+    else
+        append_plain_message(layout, message)
     end
     layout.message_ranges[#layout.message_ranges + 1] = {
         first = start_line,

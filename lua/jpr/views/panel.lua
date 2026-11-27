@@ -3,6 +3,51 @@
 local mouse = require("jpr.mouse")
 local render = require("jpr.render.panel")
 
+local function git_stdout(worktree, args)
+    local command = { "git", "-C", worktree }
+    for _, arg in ipairs(args) do
+        command[#command + 1] = arg
+    end
+    local output = vim.fn.system(command)
+    if vim.v.shell_error ~= 0 then
+        return nil
+    end
+    return vim.trim(output or "")
+end
+
+--- The branch checked out in `worktree`, or nil when git cannot answer.
+--- Uses `vim.fn.system` so a panel redraw inside a job callback cannot stall
+--- the libuv loop the way `vim.system(...):wait()` can.
+local function read_checked_out_branch(worktree)
+    if type(worktree) ~= "string" or worktree == "" or vim.fn.isdirectory(worktree) ~= 1 then
+        return nil
+    end
+    local name = git_stdout(worktree, { "branch", "--show-current" })
+    if name == nil then
+        return nil
+    end
+    if name ~= "" then
+        return name
+    end
+    local sha = git_stdout(worktree, { "rev-parse", "--short", "HEAD" })
+    if sha == nil or sha == "" then
+        return nil
+    end
+    return "detached-" .. sha
+end
+
+local function cached_checkout_branch(session)
+    if type(session.worktree) ~= "string" or session.worktree == "" then
+        return nil
+    end
+    if session.checkout_branch_known == true then
+        return session.checkout_branch
+    end
+    session.checkout_branch = read_checked_out_branch(session.worktree)
+    session.checkout_branch_known = true
+    return session.checkout_branch
+end
+
 local M = {}
 
 local namespace = vim.api.nvim_create_namespace("jpr-panel")
@@ -386,7 +431,12 @@ function M.render(session, view)
     if session.is_read_only == true and (type(view) ~= "table" or view.isReadOnly ~= true) then
         effective_view = vim.tbl_extend("force", type(view) == "table" and view or {}, { isReadOnly = true })
     end
-    local built = render.build(effective_view, os.time(), { collapsed_dirs = panel.collapsed_dirs })
+    local width = vim.api.nvim_win_is_valid(panel.win) and vim.api.nvim_win_get_width(panel.win) or nil
+    local built = render.build(effective_view, os.time(), {
+        collapsed_dirs = panel.collapsed_dirs,
+        width = width,
+        checkout_branch = cached_checkout_branch(session),
+    })
     panel.paths = built.paths
     panel.rows = built.rows
     panel.selectable_lines = built.selectable_lines

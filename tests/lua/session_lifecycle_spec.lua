@@ -210,10 +210,10 @@ local function assert_second_crash_enters_read_only_mode(died_tab, died)
     local panel_buf = vim.fn.bufnr("jpr://panel/12")
     assert(panel_buf ~= -1, "panel buffer stays open in read-only mode")
     local panel_lines = vim.api.nvim_buf_get_lines(panel_buf, 0, -1, false)
-    assert(panel_lines[3] and panel_lines[3]:find("[read-only]", 1, true) ~= nil, "panel renders [read-only]: " .. vim.inspect(panel_lines))
+    assert(panel_lines[4] and panel_lines[4]:find("[read-only]", 1, true) ~= nil, "panel renders [read-only]: " .. vim.inspect(panel_lines))
     require("jpr.views.panel").render(died, { pr = died.view.pr, files = died.view.files })
     panel_lines = vim.api.nvim_buf_get_lines(panel_buf, 0, -1, false)
-    assert(panel_lines[3] and panel_lines[3]:find("[read-only]", 1, true) ~= nil, "panel re-render keeps [read-only] badge")
+    assert(panel_lines[4] and panel_lines[4]:find("[read-only]", 1, true) ~= nil, "panel re-render keeps [read-only] badge")
     assert(find_notification("engine-pr-12.log", vim.log.levels.ERROR) ~= nil, "error names engine-pr-12.log: " .. vim.inspect(notifications))
     return compose_buf
 end

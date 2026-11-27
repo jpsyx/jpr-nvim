@@ -377,4 +377,44 @@ local all_viewed_view = {
 }
 assert(panel.find_next_unviewed_path(all_viewed_view, "src/a.rs") == nil, "nil when every file is viewed")
 
+-- A long PR title wraps inside the sidebar width, and the header shows the PR
+-- branch plus a distinct session checkout branch.
+local long_title = "Added deterministic linting for several rules and removed them from non-deterministic reviews"
+local wrapped = panel.build({
+    pr = {
+        number = 330,
+        title = long_title,
+        headRef = "feat/oxlint-phase3",
+        baseRef = "develop",
+    },
+    files = {},
+    sync = { state = "never" },
+}, 0, { width = 44, checkout_branch = "pr-330" })
+for index, line in ipairs(wrapped.lines) do
+    assert(vim.fn.strdisplaywidth(line) <= 44, ("line %d wider than the sidebar: %s"):format(index, line))
+end
+assert(wrapped.lines[1] ~= "#330 " .. long_title, "long title is not one overflowing line")
+local wrapped_text = table.concat(wrapped.lines, "\n")
+assert(wrapped_text:find("#330", 1, true) ~= nil, wrapped_text)
+assert(wrapped_text:find("non-deterministic reviews", 1, true) ~= nil, wrapped_text)
+assert(wrapped_text:find("feat/oxlint-phase3 -> develop", 1, true) ~= nil, wrapped_text)
+assert(wrapped_text:find("checkout pr-330", 1, true) ~= nil, wrapped_text)
+assert(wrapped.summary_line > 6, "branch lines sit above Diff summary")
+
+local reused = panel.build({
+    pr = { number = 330, title = "Short", headRef = "feat/oxlint-phase3", baseRef = "develop" },
+    files = {},
+    sync = { state = "never" },
+}, 0, { width = 44, checkout_branch = "feat/oxlint-phase3" })
+local reused_text = table.concat(reused.lines, "\n")
+assert(reused_text:find("feat/oxlint-phase3 -> develop", 1, true) ~= nil, reused_text)
+assert(reused_text:find("checkout ", 1, true) == nil, "reused PR branch is not repeated: " .. reused_text)
+assert(vim.fn.strdisplaywidth(reused.lines[1]) <= 44, reused.lines[1])
+
+local unwrapped = panel.build({
+    pr = { number = 7, title = long_title },
+    files = {},
+}, 0)
+assert(unwrapped.lines[1] == "#7 " .. long_title, "callers without a width keep one title line")
+
 print("panel_render_spec: ok")
