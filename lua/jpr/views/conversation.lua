@@ -85,7 +85,7 @@ local function build_diffstat_line_from_view(view)
     )
 end
 
-local function build_pr_meta_line_from_pr(pr)
+local function build_pr_metadata_line_from_pr(pr)
     local parts = {}
     if type(pr.author) == "string" and pr.author ~= "" then
         parts[#parts + 1] = "@" .. pr.author
@@ -116,10 +116,10 @@ end
 local function append_diff_summary(layout, session, is_local)
     local view = type(session.view) == "table" and session.view or {}
     local pr = type(view.pr) == "table" and view.pr or nil
-    local local_ctx = type(view.localContext) == "table" and view.localContext or nil
+    local local_context = type(view.localContext) == "table" and view.localContext or nil
     if is_local then
-        local branch = tostring((local_ctx and local_ctx.branch) or session.branch or "worktree")
-        local base_ref = tostring((local_ctx and local_ctx.baseRef) or session.base_ref or "")
+        local branch = tostring((local_context and local_context.branch) or session.branch or "worktree")
+        local base_ref = tostring((local_context and local_context.baseRef) or session.base_ref or "")
         local local_title = base_ref ~= "" and ("LOCAL %s vs %s"):format(branch, base_ref) or ("LOCAL %s"):format(branch)
         layout.add(local_title, "JprTitle")
         layout.add(build_diffstat_line_from_view(view), "JprMuted")
@@ -129,9 +129,9 @@ local function append_diff_summary(layout, session, is_local)
         local pr_number = (pr and pr.number) or session.number or 0
         local pr_title = (pr and type(pr.title) == "string" and pr.title ~= "") and pr.title or "Diff summary"
         layout.add(("#%d %s"):format(pr_number, pr_title), "JprTitle")
-        local meta_line = pr and build_pr_meta_line_from_pr(pr) or nil
-        if meta_line then
-            layout.add(meta_line, "JprMuted")
+        local metadata_line = pr and build_pr_metadata_line_from_pr(pr) or nil
+        if metadata_line then
+            layout.add(metadata_line, "JprMuted")
         end
         layout.add(build_diffstat_line_from_view(view), "JprMuted")
         layout.add("")
