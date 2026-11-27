@@ -1,5 +1,7 @@
 -- Pure: turns the engine's SessionView into panel lines, highlights and a
 -- line-to-path map. No windows or buffers here.
+local wrap_text = require("jpr.tui.render").wrap_text
+
 local M = {}
 
 local VIEWED_MARK = { VIEWED = "✓", DISMISSED = "●", UNVIEWED = " " }
@@ -20,6 +22,38 @@ end
 --- and git's file names can.
 function M.one_line(text)
     return vim.trim((tostring(text):gsub("%s*[\r\n]+%s*", " ")))
+end
+
+--- PR head/base plus the session checkout branch when it is a different name.
+--- A reused checkout of `headRef` is the head line itself.
+function M.build_branch_detail_lines(pr, local_context, checkout_branch)
+    local lines = {}
+    local head = type(pr) == "table" and type(pr.headRef) == "string" and pr.headRef or ""
+    local base = type(pr) == "table" and type(pr.baseRef) == "string" and pr.baseRef or ""
+    local local_branch = type(local_context) == "table" and type(local_context.branch) == "string" and local_context.branch or ""
+    if head ~= "" and base ~= "" then
+        lines[#lines + 1] = head .. " -> " .. base
+    elseif head ~= "" then
+        lines[#lines + 1] = head
+    elseif base ~= "" then
+        lines[#lines + 1] = base
+    end
+    local shown = head ~= "" and head or local_branch
+    if type(checkout_branch) == "string" and checkout_branch ~= "" and checkout_branch ~= shown then
+        lines[#lines + 1] = "checkout " .. checkout_branch
+    end
+    return lines
+end
+
+local function add_fitted_line(content, text, group, width)
+    local clean = M.one_line(text)
+    local lines = { clean }
+    if type(width) == "number" and width >= 8 and vim.fn.strdisplaywidth(clean) > width then
+        lines = wrap_text(clean, width)
+    end
+    for _, line in ipairs(lines) do
+        content.add_line(line, group)
+    end
 end
 
 --- The sync status line and its highlight group.
@@ -415,6 +449,8 @@ end
 --- `line` is 0-based and columns are byte offsets; `paths` and `rows` are keyed by 1-based line number.
 function M.build(view, now, opts)
     local collapsed_dirs = type(opts) == "table" and type(opts.collapsed_dirs) == "table" and opts.collapsed_dirs or {}
+    local width = type(opts) == "table" and tonumber(opts.width) or nil
+    local checkout_branch = type(opts) == "table" and opts.checkout_branch or nil
     local content = { lines = {}, highlights = {}, paths = {}, rows = {}, selectable_lines = {} }
     function content.add_line(text, group)
         content.lines[#content.lines + 1] = text
@@ -426,11 +462,14 @@ function M.build(view, now, opts)
     local local_ctx = type(view.localContext) == "table" and view.localContext or nil
     local is_unlinked_local = pr == nil and local_ctx ~= nil
     if pr then
-        content.add_line(("#%d %s"):format(pr.number, M.one_line(pr.title)), "JprTitle")
+        add_fitted_line(content, ("#%d %s"):format(pr.number, pr.title or ""), "JprTitle", width)
     elseif local_ctx then
-        content.add_line(("LOCAL %s vs %s"):format(M.one_line(local_ctx.branch or ""), M.one_line(local_ctx.baseRef or "")), "JprTitle")
+        add_fitted_line(content, ("LOCAL %s vs %s"):format(local_ctx.branch or "", local_ctx.baseRef or ""), "JprTitle", width)
     else
-        content.add_line("Loading pull request…", "JprTitle")
+        add_fitted_line(content, "Loading pull request…", "JprTitle", width)
+    end
+    for _, branch_line in ipairs(M.build_branch_detail_lines(pr, local_ctx, checkout_branch)) do
+        add_fitted_line(content, branch_line, "JprMuted", width)
     end
     add_progress_bar_line(content, view)
     content.add_line(M.build_counts_text(view), "JprMuted")

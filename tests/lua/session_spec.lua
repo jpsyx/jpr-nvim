@@ -50,7 +50,7 @@ assert(vim.wait(3000, function()
     return vim.api.nvim_buf_get_lines(review.panel.buf, 0, 1, false)[1] == "#7 Fix the widget"
 end), "the panel shows the synced pull request")
 local lines = vim.api.nvim_buf_get_lines(review.panel.buf, 0, -1, false)
-assert(lines[8] == "  README.md  +2 -1 [1]", vim.inspect(lines))
+assert(lines[9] == "  README.md  +2 -1 [1]", vim.inspect(lines))
 
 assert(jpr.defaults.agent == "claude", "default agent")
 assert(jpr.defaults.claude_cmd == "claude", "default claude_cmd")
@@ -70,7 +70,7 @@ for _, subcommand in ipairs({ "agent", "send", "prepass" }) do
 end
 
 vim.api.nvim_set_current_win(review.panel.win)
-vim.api.nvim_win_set_cursor(review.panel.win, { 8, 0 })
+vim.api.nvim_win_set_cursor(review.panel.win, { 9, 0 })
 panel_view.open_file_under_cursor(review)
 assert(vim.api.nvim_get_current_win() ~= review.panel.win, "the file opens beside the panel")
 assert(vim.fn.resolve(vim.api.nvim_buf_get_name(0)) == vim.fn.resolve(worktree .. "/README.md"), "the worktree file opens")

@@ -87,6 +87,15 @@ assert(conversation_text:find("Includes regression test.", 1, true) ~= nil, "PR 
 assert(conversation_text:find("\r", 1, true) == nil, "CRLF normalized out of PR body")
 assert(conversation_text:find("@alice", 1, true) ~= nil, "author header rendered: " .. conversation_text)
 assert(conversation_text:find("nit: rename this", 1, true) == nil, "code threads excluded: " .. conversation_text)
+assert(conversation_text:find("|", 1, true) ~= nil, "conversation comments are boxed: " .. conversation_text)
+assert(conversation_text:find("_", 1, true) ~= nil, "comment boxes use underscore rules: " .. conversation_text)
+local comment_box_line = nil
+for _, line in ipairs(conversation_lines) do
+    if line:find("Overall looks clean!", 1, true) then
+        comment_box_line = line
+    end
+end
+assert(comment_box_line ~= nil and comment_box_line:find("|", 1, true) ~= nil, "comment body sits inside a box: " .. tostring(comment_box_line))
 
 local conversation_start = review.conversation.layout.conversation_start_line
 assert(type(conversation_start) == "number" and conversation_start > 1, "conversation_start_line is below summary: " .. tostring(conversation_start))

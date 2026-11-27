@@ -129,7 +129,7 @@ local function assert_worktree_status_changed_redraws_panel_badge(context)
     assert(context.review.view.worktreeStatus.isDirty == true, "worktreeStatusChanged updates session.view")
     local panel_lines = vim.api.nvim_buf_get_lines(context.review.panel.buf, 0, -1, false)
     assert(
-        panel_lines[3] and panel_lines[3]:find("dirty \194\183 \226\134\1451 \226\134\1470", 1, true) ~= nil,
+        panel_lines[4] and panel_lines[4]:find("dirty \194\183 \226\134\1451 \226\134\1470", 1, true) ~= nil,
         "panel redraws dirty and ahead/behind badge: " .. vim.inspect(panel_lines)
     )
 end

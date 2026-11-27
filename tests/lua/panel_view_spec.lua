@@ -55,7 +55,7 @@ for _, win in ipairs(vim.api.nvim_tabpage_list_wins(review.tab)) do
         vim.api.nvim_win_close(win, true)
     end
 end
-press("<CR>", 8)
+press("<CR>", 9)
 local file_win = vim.api.nvim_get_current_win()
 assert(file_win ~= panel_win, "the file opens beside the panel")
 assert(vim.fn.resolve(vim.api.nvim_buf_get_name(0)) == vim.fn.resolve(worktree .. "/README.md"), "<CR> opens README.md")
@@ -75,7 +75,7 @@ assert(
     "o keymap has expected desc: " .. tostring(o_keymap.desc)
 )
 vim.api.nvim_win_close(file_win, true)
-press("o", 8)
+press("o", 9)
 file_win = vim.api.nvim_get_current_win()
 assert(file_win ~= panel_win, "o opens the file beside the panel")
 assert(vim.fn.resolve(vim.api.nvim_buf_get_name(0)) == vim.fn.resolve(worktree .. "/README.md"), "o opens README.md")
@@ -100,7 +100,7 @@ panel_view.render(review, {
     tree = { { depth = 0, name = "notes.md", file = 0 }, { depth = 0, name = "../x", file = 1 } },
 })
 local buf_before = vim.api.nvim_win_get_buf(file_win)
-for _, line in ipairs({ 8, 9 }) do
+for _, line in ipairs({ 9, 10 }) do
     errors = {}
     local pressed, press_err = pcall(press, "<CR>", line)
     assert(pressed, "line " .. line .. " threw: " .. tostring(press_err))
@@ -117,22 +117,22 @@ local function find_sent_requests(needle)
         return line:find('"method":"setViewed"', 1, true) ~= nil and line:find(needle, 1, true) ~= nil
     end, vim.fn.readfile(log))
 end
-press("v", 8)
+press("v", 9)
 assert(vim.wait(3000, function()
     return review.view.viewedCount == 1
 end), "the engine's viewedChanged reaches the view")
 assert(#find_sent_requests('"viewed":true') == 1 and #find_sent_requests('"path":"README.md"') == 1, vim.inspect(vim.fn.readfile(log)))
-press("v", 8)
+press("v", 9)
 assert(vim.wait(3000, function()
     return #find_sent_requests('"viewed":false') == 1
 end), "v on a viewed file unmarks it")
 press("v", 1)
-press("v", 6)
+press("v", 7)
 vim.wait(200)
 assert(#find_sent_requests("setViewed") == 2, "v on a header or Diff summary row sends nothing")
 
 -- <CR> on the Diff summary row (line 6) opens the unified view scrolled to line 1.
-press("<CR>", 6)
+press("<CR>", 7)
 local summary_win = vim.api.nvim_get_current_win()
 assert(summary_win ~= panel_win, "<CR> on line 6 focuses the main window beside the panel")
 local summary_buf = vim.api.nvim_win_get_buf(summary_win)
@@ -143,8 +143,8 @@ assert(vim.wait(3000, function()
 end), "summary row opens unified buffer at line 1")
 require("jpr.views.conversation").close(review)
 
--- <CR> on the Conversation row (line 7) opens the unified view scrolled to the Conversation heading.
-press("<CR>", 7)
+-- <CR> on the Conversation row (line 8) opens the unified view scrolled to the Conversation heading.
+press("<CR>", 8)
 local conversation_win = vim.api.nvim_get_current_win()
 assert(conversation_win ~= panel_win, "<CR> on line 7 focuses the main window beside the panel")
 local conversation_buf = vim.api.nvim_win_get_buf(conversation_win)
@@ -157,7 +157,7 @@ end), "conversation buffer renders PR comments and scrolls to conversation start
 require("jpr.views.conversation").close(review)
 
 -- `o` on the Conversation row also opens the PR conversation buffer identically to <CR>.
-press("o", 7)
+press("o", 8)
 local conversation_win_from_o = vim.api.nvim_get_current_win()
 assert(conversation_win_from_o ~= panel_win, "o on line 7 focuses the main window beside the panel")
 local conversation_buf_from_o = vim.api.nvim_win_get_buf(conversation_win_from_o)
@@ -180,7 +180,7 @@ end), "the stream is split")
 local left_win = review.stream.left_win
 local stream_win = vim.fn.win_findbuf(review.stream.buffers.main)[1]
 assert(#vim.api.nvim_tabpage_list_wins(review.tab) == 3, "the panel and the halves")
-press("<CR>", 8)
+press("<CR>", 9)
 assert(vim.api.nvim_get_current_win() == stream_win, "README.md opens in the main window")
 assert(vim.fn.resolve(vim.api.nvim_buf_get_name(0)) == vim.fn.resolve(worktree .. "/README.md"), "<CR> opens README.md")
 assert(not vim.api.nvim_win_is_valid(left_win) or vim.api.nvim_win_get_buf(left_win) ~= vim.api.nvim_get_current_buf(), "not in the left half")
@@ -224,9 +224,9 @@ vim.api.nvim_set_current_win(panel_win)
 vim.api.nvim_win_set_cursor(panel_win, { 1, 3 })
 vim.api.nvim_exec_autocmds("CursorMoved", { buffer = review.panel.buf })
 local snapped_cursor = vim.api.nvim_win_get_cursor(panel_win)
-assert(snapped_cursor[1] == 6 and snapped_cursor[2] == 0, "header snaps to Diff summary col 0: " .. vim.inspect(snapped_cursor))
+assert(snapped_cursor[1] == 7 and snapped_cursor[2] == 0, "header snaps to Diff summary col 0: " .. vim.inspect(snapped_cursor))
 local row_info = panel_view.get_row_under_cursor(review)
-assert(row_info and row_info.line == 6 and row_info.row.kind == "summary", vim.inspect(row_info))
+assert(row_info and row_info.line == 7 and row_info.row.kind == "summary", vim.inspect(row_info))
 
 -- Horizontal keys (w, $, 0) are no-ops; j/k/gg/G move strictly across selectable_lines.
 run_panel_key("w")
@@ -236,32 +236,32 @@ assert(vim.api.nvim_win_get_cursor(panel_win)[2] == 0, "horizontal keys stay at 
 assert(vim.wo[panel_win].sidescrolloff == 0, "sidescrolloff is 0 on panel window")
 
 run_panel_key("j")
-assert(vim.api.nvim_win_get_cursor(panel_win)[1] == 7, "j moves to Conversation")
+assert(vim.api.nvim_win_get_cursor(panel_win)[1] == 8, "j moves to Conversation")
 run_panel_key("j")
-assert(vim.api.nvim_win_get_cursor(panel_win)[1] == 8, "j moves to src/ dir")
+assert(vim.api.nvim_win_get_cursor(panel_win)[1] == 9, "j moves to src/ dir")
 run_panel_key("G")
-assert(vim.api.nvim_win_get_cursor(panel_win)[1] == 11, "G jumps to last selectable item")
+assert(vim.api.nvim_win_get_cursor(panel_win)[1] == 12, "G jumps to last selectable item")
 run_panel_key("k")
-assert(vim.api.nvim_win_get_cursor(panel_win)[1] == 10, "k moves up to src/b.rs")
+assert(vim.api.nvim_win_get_cursor(panel_win)[1] == 11, "k moves up to src/b.rs")
 run_panel_key("gg")
-assert(vim.api.nvim_win_get_cursor(panel_win)[1] == 6, "gg jumps to Diff summary")
+assert(vim.api.nvim_win_get_cursor(panel_win)[1] == 7, "gg jumps to Diff summary")
 
 -- h on child file jumps to parent_dir; h on expanded dir collapses it.
-vim.api.nvim_win_set_cursor(panel_win, { 10, 0 })
+vim.api.nvim_win_set_cursor(panel_win, { 11, 0 })
 run_panel_key("h")
-assert(vim.api.nvim_win_get_cursor(panel_win)[1] == 8, "h on child file jumps to parent src/ dir")
+assert(vim.api.nvim_win_get_cursor(panel_win)[1] == 9, "h on child file jumps to parent src/ dir")
 run_panel_key("h")
 assert(review.panel.collapsed_dirs["src"] == true, "h on expanded dir collapses it")
-assert(vim.api.nvim_buf_get_lines(review.panel.buf, 7, 8, false)[1] == "▸ src/ (0/2)", "collapsed src/ shows viewed files out of all descendant files")
-assert(vim.api.nvim_win_get_cursor(panel_win)[1] == 8, "cursor stays on collapsed dir")
+assert(vim.api.nvim_buf_get_lines(review.panel.buf, 8, 9, false)[1] == "▸ src/ (0/2)", "collapsed src/ shows viewed files out of all descendant files")
+assert(vim.api.nvim_win_get_cursor(panel_win)[1] == 9, "cursor stays on collapsed dir")
 
 -- o expands a collapsed dir, does nothing on an already-expanded dir.
 run_panel_key("o")
 assert(review.panel.collapsed_dirs["src"] == nil, "o expands collapsed dir")
-assert(vim.api.nvim_win_get_cursor(panel_win)[1] == 8, "cursor stays on expanded dir after o")
+assert(vim.api.nvim_win_get_cursor(panel_win)[1] == 9, "cursor stays on expanded dir after o")
 run_panel_key("o")
 assert(review.panel.collapsed_dirs["src"] == nil, "o on already-expanded dir does nothing")
-assert(vim.api.nvim_win_get_cursor(panel_win)[1] == 8, "o on already-expanded dir does not move cursor")
+assert(vim.api.nvim_win_get_cursor(panel_win)[1] == 9, "o on already-expanded dir does not move cursor")
 
 -- <CR> toggles directories.
 run_panel_key("<CR>")
@@ -275,9 +275,9 @@ run_panel_key("h")
 assert(review.panel.collapsed_dirs["src"] == true, "re-collapsed src/")
 run_panel_key("l")
 assert(review.panel.collapsed_dirs["src"] == nil, "l expands collapsed dir")
-assert(vim.api.nvim_win_get_cursor(panel_win)[1] == 8, "l expanding dir keeps cursor on dir")
+assert(vim.api.nvim_win_get_cursor(panel_win)[1] == 9, "l expanding dir keeps cursor on dir")
 run_panel_key("l")
-assert(vim.api.nvim_win_get_cursor(panel_win)[1] == 9, "l on expanded dir steps into first child")
+assert(vim.api.nvim_win_get_cursor(panel_win)[1] == 10, "l on expanded dir steps into first child")
 local main_buf_before_l = vim.api.nvim_win_get_buf(stream_win)
 run_panel_key("l")
 assert(vim.api.nvim_get_current_win() == panel_win, "l on file stays in panel window")
@@ -285,22 +285,22 @@ assert(vim.api.nvim_win_get_buf(stream_win) == main_buf_before_l, "l on file doe
 run_panel_key("<Right>")
 assert(vim.api.nvim_get_current_win() == panel_win, "<Right> on file stays in panel window")
 assert(vim.api.nvim_win_get_buf(stream_win) == main_buf_before_l, "<Right> on file does not open it in main window")
-vim.api.nvim_win_set_cursor(panel_win, { 6, 0 })
+vim.api.nvim_win_set_cursor(panel_win, { 7, 0 })
 run_panel_key("l")
 assert(vim.api.nvim_get_current_win() == panel_win, "l on Diff summary row stays in panel window")
-vim.api.nvim_win_set_cursor(panel_win, { 7, 0 })
+vim.api.nvim_win_set_cursor(panel_win, { 8, 0 })
 run_panel_key("l")
 assert(vim.api.nvim_get_current_win() == panel_win, "l on Conversation row stays in panel window")
 
 -- Cursor stays on the same file path (and on Diff summary) across M.render redraws.
 vim.api.nvim_set_current_win(panel_win)
-vim.api.nvim_win_set_cursor(panel_win, { 6, 0 })
+vim.api.nvim_win_set_cursor(panel_win, { 7, 0 })
 panel_view.render(review, tree_view)
-assert(vim.api.nvim_win_get_cursor(panel_win)[1] == 6, "cursor stays on Diff summary across redraw")
-vim.api.nvim_win_set_cursor(panel_win, { 10, 0 })
+assert(vim.api.nvim_win_get_cursor(panel_win)[1] == 7, "cursor stays on Diff summary across redraw")
+vim.api.nvim_win_set_cursor(panel_win, { 11, 0 })
 panel_view.render(review, tree_view)
 local preserved = vim.api.nvim_win_get_cursor(panel_win)
-assert(preserved[1] == 10 and preserved[2] == 0, "cursor stays on src/b.rs across redraw: " .. vim.inspect(preserved))
+assert(preserved[1] == 11 and preserved[2] == 0, "cursor stays on src/b.rs across redraw: " .. vim.inspect(preserved))
 
 -- Pressing `v` on an expanded or collapsed directory sends a single batched
 -- setViewed request with all descendant paths, and advances the main window
@@ -312,11 +312,11 @@ all_src_viewed.viewedCount = 2
 vim.fn.writefile({ vim.json.encode(all_src_viewed) }, set_viewed_payload)
 
 -- Open src/a.rs in main window (hiding stream), then press v on src/ dir in panel.
-press("<CR>", 9)
+press("<CR>", 10)
 assert(vim.fn.resolve(vim.api.nvim_buf_get_name(0)) == vim.fn.resolve(worktree .. "/src/a.rs"), "opened src/a.rs in main window")
 local main_win_for_dir = vim.api.nvim_get_current_win()
 local before_dir_requests = #find_sent_requests('"paths":')
-press("v", 8)
+press("v", 9)
 assert(vim.wait(3000, function()
     return #find_sent_requests('"paths":') == before_dir_requests + 1
 end), "v on expanded src/ dir sends batched setViewed paths")
@@ -337,7 +337,7 @@ assert(vim.api.nvim_get_current_win() == panel_win, "sidebar keeps cursor focus 
 run_panel_key("h")
 assert(review.panel.collapsed_dirs["src"] == true, "collapsed src/")
 vim.fn.writefile({ vim.json.encode(tree_view) }, set_viewed_payload)
-press("v", 8)
+press("v", 9)
 assert(vim.wait(3000, function()
     return #find_sent_requests('"paths":') == before_dir_requests + 2 and review.view.viewedCount == 0
 end), "v on collapsed src/ dir sends batched unmark request")
@@ -374,13 +374,13 @@ local expanded_dir_stream = {
 }
 vim.fn.writefile({ vim.json.encode(all_src_viewed) }, set_viewed_payload)
 vim.fn.writefile({ vim.json.encode(folded_dir_stream) }, stream_payload)
-press("v", 8)
+press("v", 9)
 assert(vim.wait(3000, function()
     return vim.api.nvim_win_call(live_stream_win, function() return vim.fn.foldclosed(1) == 1 end)
 end), "visible full diff view repaints to collapse newly viewed directory files")
 vim.fn.writefile({ vim.json.encode(tree_view) }, set_viewed_payload)
 vim.fn.writefile({ vim.json.encode(expanded_dir_stream) }, stream_payload)
-press("v", 8)
+press("v", 9)
 assert(vim.wait(3000, function()
     return vim.api.nvim_win_call(live_stream_win, function() return vim.fn.foldclosed(1) == -1 end)
 end), "visible full diff view repaints to expand newly unviewed directory files")
@@ -400,7 +400,7 @@ local is_mouse_ok, mouse_error = pcall(function()
 
     -- Single-click on collapsed src/ directory expands it, then clicking again collapses and re-expands it.
     assert(review.panel.collapsed_dirs["src"] == true, "src/ starts collapsed from prior test")
-    vim.fn.getmousepos = function() return { winid = panel_win, line = 8, column = 3 } end
+    vim.fn.getmousepos = function() return { winid = panel_win, line = 9, column = 3 } end
     left_mouse_map.callback()
     assert(review.panel.collapsed_dirs["src"] == nil, "single-click on collapsed dir expands it")
     left_mouse_map.callback()
@@ -409,7 +409,7 @@ local is_mouse_ok, mouse_error = pcall(function()
     assert(review.panel.collapsed_dirs["src"] == nil, "single-click re-expands src/ so src/a.rs is visible")
 
     -- Single-click on a file row opens that file in the main window.
-    vim.fn.getmousepos = function() return { winid = panel_win, line = 9, column = 5 } end
+    vim.fn.getmousepos = function() return { winid = panel_win, line = 10, column = 5 } end
     left_mouse_map.callback()
     assert(vim.fn.resolve(vim.api.nvim_buf_get_name(0)) == vim.fn.resolve(worktree .. "/src/a.rs"), "single-click opens src/a.rs")
 
@@ -438,10 +438,10 @@ local is_mouse_ok, mouse_error = pcall(function()
 
     -- Single-click on a non-selectable header line keeps selection unchanged.
     vim.api.nvim_set_current_win(panel_win)
-    vim.api.nvim_win_set_cursor(panel_win, { 9, 0 })
+    vim.api.nvim_win_set_cursor(panel_win, { 10, 0 })
     vim.fn.getmousepos = function() return { winid = panel_win, line = 1, column = 2 } end
     left_mouse_map.callback()
-    assert(vim.api.nvim_win_get_cursor(panel_win)[1] == 9, "click on non-selectable header preserves selection")
+    assert(vim.api.nvim_win_get_cursor(panel_win)[1] == 10, "click on non-selectable header preserves selection")
 
     -- Single-click outside panel_win forwards natively via passthrough.
     vim.fn.getmousepos = function() return { winid = live_stream_win, line = 2, column = 1 } end
@@ -459,9 +459,9 @@ local helpers = dofile(root .. "/tests/lua/support/helpers.lua")
 review.panel.collapsed_dirs = {}
 panel_view.render(review, tree_view)
 local panel_lines = vim.api.nvim_buf_get_lines(review.panel.buf, 0, -1, false)
-assert(panel_lines[6]:find("Diff summary", 1, true) ~= nil, panel_lines[6])
-assert(panel_lines[8]:find("src/", 1, true) ~= nil, panel_lines[8])
-assert(panel_lines[9]:find("a.rs", 1, true) ~= nil, panel_lines[9])
+assert(panel_lines[7]:find("Diff summary", 1, true) ~= nil, panel_lines[7])
+assert(panel_lines[9]:find("src/", 1, true) ~= nil, panel_lines[9])
+assert(panel_lines[10]:find("a.rs", 1, true) ~= nil, panel_lines[10])
 
 local function press_panel(lhs, line)
     review.panel.collapsed_dirs = {}
@@ -481,7 +481,7 @@ local function submit_comment(body)
 end
 
 local comments_before = #helpers.read_requests(log, "comment")
-press_panel("gc", 9)
+press_panel("gc", 10)
 submit_comment("file from gc")
 assert(vim.wait(3000, function()
     return #helpers.read_requests(log, "comment") == comments_before + 1
@@ -489,7 +489,7 @@ end), "sidebar gc file comment sent")
 local gc_file = helpers.read_requests(log, "comment")[comments_before + 1].params
 assert(vim.deep_equal(gc_file.anchor, { file = "src/a.rs", kind = "file", side = "RIGHT" }), vim.inspect(gc_file))
 
-press_panel("gf", 9)
+press_panel("gf", 10)
 submit_comment("file from gf")
 assert(vim.wait(3000, function()
     return #helpers.read_requests(log, "comment") == comments_before + 2
@@ -497,7 +497,7 @@ end), "sidebar gf file comment sent")
 local gf_file = helpers.read_requests(log, "comment")[comments_before + 2].params
 assert(vim.deep_equal(gf_file.anchor, { file = "src/a.rs", kind = "file", side = "RIGHT" }), vim.inspect(gf_file))
 
-press_panel("gc", 6)
+press_panel("gc", 7)
 submit_comment("pr from summary")
 assert(vim.wait(3000, function()
     return #helpers.read_requests(log, "comment") == comments_before + 3
@@ -510,12 +510,12 @@ local report_error = jpr.error
 jpr.error = function(message)
     comment_errors[#comment_errors + 1] = message
 end
-press_panel("gc", 8)
+press_panel("gc", 9)
 assert(#comment_errors == 1, "gc on a directory reports an error: " .. vim.inspect(comment_errors))
 assert(helpers.find_floating_win("GitHub") == nil, "gc on a directory opens no compose window")
 jpr.error = report_error
 
-press_panel("gp", 8)
+press_panel("gp", 9)
 submit_comment("pr from gp")
 assert(vim.wait(3000, function()
     return #helpers.read_requests(log, "comment") == comments_before + 4
