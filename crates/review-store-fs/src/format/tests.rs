@@ -32,6 +32,7 @@ fn a_session_round_trips_inside_a_version_3_envelope() {
     assert_eq!(encoded_json["version"], json!(3));
     assert_eq!(encoded_json["pr"]["headSha"], json!("abc123"));
     assert_eq!(encoded_json["pr"]["baseSha"], json!("base000"));
+    assert_eq!(encoded_json["pr"]["body"], json!("Fixes the widget crash."));
     assert_eq!(encoded_json["socket"], json!("/tmp/jpr.sock"));
     assert_eq!(
         encoded_json["agentSessionId"],
@@ -49,6 +50,7 @@ fn a_version_1_and_2_session_load_with_empty_agent_fields() {
     .unwrap();
     let pr = v1.pr.unwrap();
     assert_eq!((pr.head_sha.as_str(), pr.base_sha.as_str()), ("abc123", ""));
+    assert_eq!(pr.body, "");
     assert_eq!(v1.socket, None);
     assert_eq!(v1.agent_session_id, None);
     assert_eq!(v1.agent_kind, None);
