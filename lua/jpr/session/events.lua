@@ -132,8 +132,8 @@ local function handle_sync_failed(session, params)
     end
 end
 
-local function pluralize(count, singular, plural)
-    return ("%d %s"):format(count, count == 1 and singular or plural)
+local function pluralize(item_count, singular, plural)
+    return ("%d %s"):format(item_count, item_count == 1 and singular or plural)
 end
 
 --- Builds a concise human-readable summary for a non-empty `SyncDelta`, or nil.
@@ -255,9 +255,9 @@ local function handle_event_notification(session, params, show_session)
     elseif params.type == "agentPrepassWritten" then
         apply_session_view(session, params.view)
         panel.render(session, session.view)
-        local count = tonumber(params.count) or 0
-        if count > 0 then
-            jpr().info("Agent added " .. pluralize(count, "pre-pass finding", "pre-pass findings"))
+        local finding_count = tonumber(params.count) or 0
+        if finding_count > 0 then
+            jpr().info("Agent added " .. pluralize(finding_count, "pre-pass finding", "pre-pass findings"))
         end
     elseif params.type == "worktreeStatusChanged" then
         apply_session_view(session, params.view)

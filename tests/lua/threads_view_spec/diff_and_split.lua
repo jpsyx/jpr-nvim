@@ -1,5 +1,5 @@
 -- Sections 1-7: unified thread signs, navigation, expand, split routing, and cleanup.
-local function test_unified_signs_and_navigation(context)
+local function test_unified_mode_places_signs_and_jumps_between_threads(context)
     local buf, win = context.buf, context.win
     assert(vim.wait(3000, function()
         return #context.get_thread_marks(buf) > 0
@@ -37,7 +37,7 @@ local function test_unified_signs_and_navigation(context)
     assert(vim.api.nvim_win_get_cursor(win)[1] == 2, "[t keymap moves to line 2")
 end
 
-local function test_unified_expand_and_collapse(context)
+local function test_unified_mode_expands_and_collapses_inline_thread_lines(context)
     local buf = context.buf
     context.session.expand_current()
     assert(vim.wait(3000, function()
@@ -85,7 +85,7 @@ local function open_split_base_window(context)
     return base_win, base_buf, initial_base_signcolumn
 end
 
-local function test_split_threads_changed_routing(context, base_win, base_buf)
+local function test_split_mode_routes_threads_changed_to_matching_side_buffers(context, base_win, base_buf)
     context.mock_state.install_file_diff_mock()
 
     vim.api.nvim_set_current_win(base_win)
@@ -110,7 +110,7 @@ local function test_split_threads_changed_routing(context, base_win, base_buf)
     assert(vim.wo[context.win].signcolumn == "yes", "file window enables signcolumn when RIGHT threads exist")
 end
 
-local function test_split_expand_and_navigation(context, base_win, base_buf)
+local function test_split_mode_expands_inline_threads_and_navigates_per_pane(context, base_win, base_buf)
     context.session.expand_current()
     assert(context.find_base_window(context.review.tab) == base_win, "expand preserves split base_win handle")
     assert(vim.api.nvim_get_current_win() == base_win, "expand preserves focus on base_win")
@@ -156,7 +156,7 @@ local function test_empty_threads_restores_signcolumn(context, base_win, base_bu
     )
 end
 
-local function test_manual_base_close_and_clear_cleanup(context, base_win, base_buf)
+local function test_manual_base_close_and_clear_remove_thread_extmarks_and_state(context, base_win, base_buf)
     context.mock_state.threads = { context.mock_state.left_thread, context.mock_state.right_thread }
     local calls_before = context.mock_state.file_diff_calls
     context.session.on_notification(context.review, "event", { type = "threadsChanged", view = context.review.view })
@@ -188,11 +188,11 @@ local function test_manual_base_close_and_clear_cleanup(context, base_win, base_
 end
 
 return function(context)
-    test_unified_signs_and_navigation(context)
-    test_unified_expand_and_collapse(context)
+    test_unified_mode_places_signs_and_jumps_between_threads(context)
+    test_unified_mode_expands_and_collapses_inline_thread_lines(context)
     local base_win, base_buf, initial_base_signcolumn = open_split_base_window(context)
-    test_split_threads_changed_routing(context, base_win, base_buf)
-    test_split_expand_and_navigation(context, base_win, base_buf)
+    test_split_mode_routes_threads_changed_to_matching_side_buffers(context, base_win, base_buf)
+    test_split_mode_expands_inline_threads_and_navigates_per_pane(context, base_win, base_buf)
     test_empty_threads_restores_signcolumn(context, base_win, base_buf, initial_base_signcolumn)
-    test_manual_base_close_and_clear_cleanup(context, base_win, base_buf)
+    test_manual_base_close_and_clear_remove_thread_extmarks_and_state(context, base_win, base_buf)
 end

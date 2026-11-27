@@ -92,7 +92,7 @@ pub fn run(base: Option<&str>, repo: Option<&str>, no_pr: bool, theme: Theme) ->
     // Pass ONLY explicit `--repo` to `GhForge` (never `origin`-inferred repo)
     // so forks resolve upstream PRs and non-GitHub remotes report `Ok(None)`.
     let forge = GhForge::new(info.worktree.clone(), repo.map(str::to_owned));
-    let output = resolve_local_output(
+    let output = create_local_command_output(
         &info,
         base,
         repo,
@@ -106,7 +106,7 @@ pub fn run(base: Option<&str>, repo: Option<&str>, no_pr: bool, theme: Theme) ->
 }
 
 /// Decides between attaching to an open PR or staying in local mode.
-pub fn resolve_local_output(
+pub fn create_local_command_output(
     info: &LocalWorktreeInfo,
     base_override: Option<&str>,
     explicit_repo: Option<&str>,
@@ -168,7 +168,7 @@ mod tests {
         let probed = AtomicBool::new(false);
         let mut info = sample_info();
         info.base_ref = "HEAD".into();
-        let output = resolve_local_output(
+        let output = create_local_command_output(
             &info,
             Some("HEAD"),
             None,
@@ -197,7 +197,7 @@ mod tests {
 
     #[test]
     fn bare_local_attaches_to_open_pr_when_detected() {
-        let output = resolve_local_output(
+        let output = create_local_command_output(
             &sample_info(),
             None,
             None,
@@ -222,7 +222,7 @@ mod tests {
     #[test]
     fn bare_local_falls_back_to_local_with_warning_on_probe_error() {
         let warned = AtomicBool::new(false);
-        let output = resolve_local_output(
+        let output = create_local_command_output(
             &sample_info(),
             None,
             None,
@@ -241,7 +241,7 @@ mod tests {
 
     #[test]
     fn bare_local_propagates_auth_error_instead_of_falling_back_to_local_mode() {
-        let error = resolve_local_output(
+        let error = create_local_command_output(
             &sample_info(),
             None,
             None,

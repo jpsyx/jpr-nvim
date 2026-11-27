@@ -4,6 +4,7 @@ local crash = require("jpr.session.crash")
 local engine = require("jpr.session.engine")
 local panel = require("jpr.views.panel")
 local progress = require("jpr.session.progress")
+local request = require("jpr.session.request")
 
 local M = {}
 
@@ -77,61 +78,7 @@ end
 
 --- Reports that `session` is in read-only mode after an engine crash.
 function M.report_read_only(session)
-    local reopen_hint = session.number and (":Jpr open %d"):format(session.number) or ":Jpr local"
-    return jpr().error(
-        ("%s is in read-only mode after an engine crash; run :Jpr close and %s"):format(
-            M.display_label(session),
-            reopen_hint
-        )
-    )
-end
-
-local function handle_request_error(session, method, params, on_result, on_error, opts, progress_handle, request_error)
-    if session.closing then
-        if progress_handle then
-            progress_handle:cancel()
-        end
-        if on_error then
-            on_error(request_error)
-        end
-        return
-    end
-    local auth = require("jpr.auth")
-    if auth.is_rpc_auth_error(request_error) then
-        if progress_handle then
-            progress_handle:cancel()
-        end
-        return auth.prompt_and_resume({
-            is_background = false,
-            on_authenticated = function()
-                if session.closing or not session.client then
-                    return
-                end
-                M.request(session, method, params, on_result, on_error, opts)
-            end,
-            on_cancel = function()
-                if on_error then
-                    on_error(request_error)
-                end
-            end,
-        })
-    end
-    if on_error then
-        on_error(request_error)
-    end
-    local error_message = ("%s failed: %s"):format(method, request_error.message)
-    if progress_handle then
-        return progress_handle:fail(error_message)
-    end
-    return jpr().error(error_message)
-end
-
-local function resolve_success_message(opts, result)
-    local message = opts and opts.success_message
-    if type(message) == "function" then
-        return message(result)
-    end
-    return type(message) == "string" and message or nil
+    return request.report_read_only(M, session)
 end
 
 --- Sends `method` with `params` to `session`'s engine. `on_result(result)`
@@ -139,36 +86,7 @@ end
 --- reported to the user unless the session is closing (a request still in
 --- flight then fails because the engine was stopped on purpose).
 function M.request(session, method, params, on_result, on_error, opts)
-    if session.is_read_only then
-        if on_error then
-            on_error()
-        end
-        return M.report_read_only(session)
-    end
-    if not session.client then
-        if on_error then
-            on_error()
-        end
-        local reopen_hint = session.number and (":Jpr open %d"):format(session.number) or ":Jpr local"
-        return jpr().error(
-            ("the review engine for %s is not running; run %s"):format(M.display_label(session), reopen_hint)
-        )
-    end
-    local progress_handle = progress.start(session, method, params, opts)
-    session.client:request(method, params, function(request_error, result)
-        if request_error then
-            return handle_request_error(session, method, params, on_result, on_error, opts, progress_handle, request_error)
-        end
-        if progress_handle then
-            local success_message = resolve_success_message(opts, result)
-            if success_message then
-                progress_handle:succeed(success_message)
-            else
-                progress_handle:cancel()
-            end
-        end
-        on_result(result)
-    end)
+    return request.send(M, session, method, params, on_result, on_error, opts)
 end
 
 local function is_clean_unnamed_buffer(buf)

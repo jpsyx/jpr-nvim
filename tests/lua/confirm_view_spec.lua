@@ -55,7 +55,7 @@ local function test_layout_renders_headline_items_selection_and_hover_help()
     assert(second_layout.item_for_line[second_layout.cursor_line] == 2, "cursor_line maps to option 2")
 end
 
-local function test_open_confirm_cancel_close_and_winclosed()
+local function test_confirm_modal_fires_callbacks_on_confirm_cancel_close_and_winclosed()
     local confirms, cancels = 0, 0
     local state = confirm.open({
         title = " Send to Coding Agent ",
@@ -171,6 +171,6 @@ local function test_open_confirm_cancel_close_and_winclosed()
 end
 
 test_layout_renders_headline_items_selection_and_hover_help()
-test_open_confirm_cancel_close_and_winclosed()
+test_confirm_modal_fires_callbacks_on_confirm_cancel_close_and_winclosed()
 
 print("confirm_view_spec: ok")

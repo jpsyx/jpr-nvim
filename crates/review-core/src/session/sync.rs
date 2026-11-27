@@ -1,102 +1,17 @@
 //! Pulling the pull request from the forge.
 
+mod head_move;
+
 use anyhow::Result;
-use review_model::{
-    ChangedFile, Event, HeadMoveOutcome, Origin, PullRequest, SessionView, SyncState, Thread,
-};
+use review_model::{ChangedFile, Event, Origin, PullRequest, SessionView, SyncState, Thread};
 
 use super::ReviewSession;
 use crate::collapsed::viewed_states_from_files;
 use crate::comments::{merge_unflushed_threads, reconcile_concurrent_edits, record_agreed_bodies};
-use crate::ports::{FastForwardOutcome, ForgeSnapshot};
-use crate::reanchor::{collect_changed_digest_paths, hash_bounded_file_bytes};
+use crate::ports::ForgeSnapshot;
+use crate::reanchor::hash_bounded_file_bytes;
 use crate::sync_delta::{SyncComparisonSnapshot, compute_sync_delta};
 use crate::viewed::{apply_queued, drop_stale_marks};
-
-struct HeadMoveSummary {
-    outcome: HeadMoveOutcome,
-    conflicted_paths: Vec<String>,
-    message: Option<String>,
-}
-
-impl HeadMoveSummary {
-    const fn create_clean(outcome: HeadMoveOutcome) -> Self {
-        Self {
-            outcome,
-            conflicted_paths: Vec::new(),
-            message: None,
-        }
-    }
-
-    const fn create_with_message(outcome: HeadMoveOutcome, message: String) -> Self {
-        Self {
-            outcome,
-            conflicted_paths: Vec::new(),
-            message: Some(message),
-        }
-    }
-
-    fn create_conflict_from_paths(head_sha: &str, conflicted_paths: Vec<String>) -> Self {
-        let short_head = build_short_sha_from_sha(head_sha);
-        let paths_list = conflicted_paths.join(", ");
-        Self {
-            outcome: HeadMoveOutcome::RestoreConflict,
-            conflicted_paths,
-            message: Some(format!(
-                "fast-forwarded to {short_head}, but restoring local changes conflicted in {paths_list}"
-            )),
-        }
-    }
-}
-
-fn build_short_sha_from_sha(sha: &str) -> &str {
-    sha.get(..7).unwrap_or(sha)
-}
-
-fn fast_forward_result_to_head_move(result: Result<FastForwardOutcome>) -> HeadMoveSummary {
-    result.map_or_else(
-        |error| HeadMoveSummary::create_with_message(HeadMoveOutcome::Failed, format!("{error:#}")),
-        fast_forward_outcome_to_head_move,
-    )
-}
-
-fn fast_forward_outcome_to_head_move(outcome: FastForwardOutcome) -> HeadMoveSummary {
-    match outcome {
-        FastForwardOutcome::AlreadyAtTarget { .. } => {
-            HeadMoveSummary::create_clean(HeadMoveOutcome::AlreadyAtTarget)
-        }
-        FastForwardOutcome::FastForwarded { .. } => {
-            HeadMoveSummary::create_clean(HeadMoveOutcome::FastForwarded)
-        }
-        FastForwardOutcome::RestoreConflict {
-            head_sha,
-            conflicted_paths,
-            ..
-        } => HeadMoveSummary::create_conflict_from_paths(&head_sha, conflicted_paths),
-        FastForwardOutcome::AheadOfTarget {
-            head_sha,
-            target_sha,
-        } => HeadMoveSummary::create_with_message(
-            HeadMoveOutcome::AheadOfTarget,
-            format!(
-                "local HEAD {} has unpushed commits ahead of remote {}",
-                build_short_sha_from_sha(&head_sha),
-                build_short_sha_from_sha(&target_sha),
-            ),
-        ),
-        FastForwardOutcome::Diverged {
-            head_sha,
-            target_sha,
-        } => HeadMoveSummary::create_with_message(
-            HeadMoveOutcome::Diverged,
-            format!(
-                "local HEAD {} and remote {} have diverged; left worktree untouched",
-                build_short_sha_from_sha(&head_sha),
-                build_short_sha_from_sha(&target_sha),
-            ),
-        ),
-    }
-}
 
 impl ReviewSession {
     /// Sends the queued viewed marks first, then pulls the pull request from
@@ -176,27 +91,12 @@ impl ReviewSession {
         is_background: bool,
     ) -> Result<SessionView> {
         let before_snapshot = self.create_sync_comparison_snapshot();
-        let previous_head_sha = self
-            .saved
-            .session
-            .pr
-            .as_ref()
-            .map(|existing_pr| existing_pr.head_sha.clone());
         let pr_head_sha = pr.head_sha.clone();
         let was_own_push = self
             .pushed_head
             .as_ref()
             .is_some_and(|pushed| pushed.pushed_sha == pr_head_sha);
-        let prior_head_sha = self.get_prior_head_sha_for_sync(previous_head_sha, &pr_head_sha);
-        self.has_checked_reopen_head = true;
-        if let Some(prior_sha) = prior_head_sha
-            .as_ref()
-            .filter(|prior_sha| *prior_sha != &pr_head_sha)
-        {
-            self.pending_head_move_from = Some(prior_sha.clone());
-        } else {
-            self.pending_head_move_from = None;
-        }
+        let moved_from_sha = self.track_head_move_for_sync(&pr_head_sha);
         self.reconcile_pulled_state(pr, snapshot, now)?;
         let after_snapshot = self.create_sync_comparison_snapshot();
         let delta = compute_sync_delta(
@@ -205,13 +105,12 @@ impl ReviewSession {
             &self.saved.registry.id_map,
             was_own_push,
         );
-        let view =
-            if let Some(prior_sha) = prior_head_sha.filter(|prior_sha| prior_sha != &pr_head_sha) {
-                self.handle_head_moved(&prior_sha, &pr_head_sha)?
-            } else {
-                self.seed_pulled_file_digests();
-                self.view()
-            };
+        let view = if let Some(prior_sha) = moved_from_sha {
+            self.handle_head_moved(&prior_sha, &pr_head_sha)?
+        } else {
+            self.seed_pulled_file_digests();
+            self.view()
+        };
         self.publish(&Event::Synced {
             view: Box::new(view.clone()),
             is_background,
@@ -340,48 +239,6 @@ impl ReviewSession {
             &local_only_paths,
             should_prune_empty,
         );
-    }
-
-    fn handle_head_moved(&mut self, previous_sha: &str, pr_head_sha: &str) -> Result<SessionView> {
-        let summary =
-            fast_forward_result_to_head_move(self.ports.workspace.fast_forward_to(pr_head_sha));
-        if matches!(
-            summary.outcome,
-            HeadMoveOutcome::AlreadyAtTarget
-                | HeadMoveOutcome::FastForwarded
-                | HeadMoveOutcome::RestoreConflict
-        ) {
-            self.reanchor_after_head_move(&summary.conflicted_paths)?;
-        }
-        if summary.outcome != HeadMoveOutcome::Failed {
-            self.pending_head_move_from = None;
-        }
-        let view = self.view();
-        self.publish(&Event::HeadMoved {
-            previous_sha: previous_sha.to_owned(),
-            head_sha: pr_head_sha.to_owned(),
-            outcome: summary.outcome,
-            conflicted_paths: summary.conflicted_paths,
-            message: summary.message,
-            view: Box::new(view.clone()),
-        });
-        Ok(view)
-    }
-
-    fn reanchor_after_head_move(&mut self, excluded_paths: &[String]) -> Result<()> {
-        let current_digests = self.collect_worktree_digests();
-        let mut candidate_paths = self.disk_digests.as_ref().map_or_else(
-            || self.collect_local_thread_paths(),
-            |previous_digests| collect_changed_digest_paths(previous_digests, &current_digests),
-        );
-        if !excluded_paths.is_empty() {
-            candidate_paths.retain(|candidate_path| !excluded_paths.contains(candidate_path));
-        }
-        if !candidate_paths.is_empty() {
-            self.reanchor_and_save_local_threads(&candidate_paths)?;
-        }
-        self.disk_digests = Some(current_digests);
-        Ok(())
     }
 
     fn seed_pulled_file_digests(&mut self) {

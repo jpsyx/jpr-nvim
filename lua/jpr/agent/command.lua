@@ -180,7 +180,7 @@ local function read_file_bytes(path)
     return data
 end
 
-local function resolve_claude_settings_path(home_directory, claude_config_dir)
+local function build_claude_settings_path(home_directory, claude_config_dir)
     if type(claude_config_dir) == "string" and claude_config_dir ~= "" then
         return claude_config_dir .. "/settings.json"
     end
@@ -199,7 +199,7 @@ end
 
 --- Whether Claude Code's settings file enables `"editorMode": "vim"`.
 function M.is_claude_vim_mode_enabled(home_directory, claude_config_dir)
-    local settings_path = resolve_claude_settings_path(home_directory, claude_config_dir)
+    local settings_path = build_claude_settings_path(home_directory, claude_config_dir)
     if not settings_path then
         return false
     end

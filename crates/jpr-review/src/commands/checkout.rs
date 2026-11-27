@@ -35,14 +35,14 @@ pub fn run(
         ensure_expected_repo(&pr, expected_repo)?;
         (pr, cwd)
     } else {
-        resolve_managed_checkout_root(&cwd, number, expected_repo, theme)?
+        prepare_managed_checkout_root(&cwd, number, expected_repo, theme)?
     };
     let worktree = checkout_in_root(&checkout_root, &pr, worktree_cmd, theme)?;
     println!("{}", output_line(&pr, &worktree));
     Ok(())
 }
 
-fn resolve_managed_checkout_root(
+fn prepare_managed_checkout_root(
     cwd: &Path,
     number: u64,
     expected_repo: Option<&str>,

@@ -211,7 +211,7 @@ function M.build_contrast_group_name(source_group, kind)
     return prefix .. encoded
 end
 
-local function resolve_active_diff_bg(kind, normal_bg)
+local function get_active_diff_bg(kind, normal_bg)
     local diff_group = KIND_TO_DIFF_GROUP[kind]
     local active_diff = vim.api.nvim_get_hl(0, { name = diff_group, link = false })
     if type(active_diff.bg) == "number" then
@@ -223,8 +223,8 @@ end
 
 local function create_theme_context()
     local normal_highlight = vim.api.nvim_get_hl(0, { name = "Normal", link = false })
-    local add_bg = resolve_active_diff_bg("add", normal_highlight.bg)
-    local delete_bg = resolve_active_diff_bg("delete", normal_highlight.bg)
+    local add_bg = get_active_diff_bg("add", normal_highlight.bg)
+    local delete_bg = get_active_diff_bg("delete", normal_highlight.bg)
     return {
         normal_bg = normal_highlight.bg,
         diff_bg = { add = add_bg, delete = delete_bg },

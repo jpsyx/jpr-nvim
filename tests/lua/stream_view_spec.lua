@@ -31,6 +31,7 @@ local context = {
 }
 
 dofile(root .. "/tests/lua/stream_view_spec/core.lua")(context)
+dofile(root .. "/tests/lua/stream_view_spec/lifecycle.lua")(context)
 dofile(root .. "/tests/lua/stream_view_spec/threads.lua")(context)
 
 print("stream_view_spec: ok")

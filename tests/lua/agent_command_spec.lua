@@ -4,7 +4,7 @@ package.path = root .. "/lua/?.lua;" .. root .. "/lua/?/init.lua;" .. package.pa
 
 local command = require("jpr.agent.command")
 
-local function test_parse_command_argv()
+local function test_parse_command_argv_splits_quoted_args_and_rejects_unterminated()
     assert(vim.deep_equal(command.parse_command_argv("cl", "claude"), { "cl" }), "plain executable string")
     assert(
         vim.deep_equal(command.parse_command_argv("cl --model opus", "claude"), { "cl", "--model", "opus" }),
@@ -26,7 +26,7 @@ local function test_parse_command_argv()
     assert(vim.deep_equal(command.parse_command_argv(nil, "codex"), { "codex" }), "nil uses fallback")
 end
 
-local function test_launch_argv_and_cold_start_prompt()
+local function test_build_launch_argv_appends_session_flags_and_cold_start_prompt()
     local home_dir = vim.fn.tempname()
     local worktree = "/tmp/my_repo.work/pr-7"
     local session_id = "00000000-0000-4000-8000-000000000001"
@@ -115,7 +115,7 @@ local function test_launch_argv_and_cold_start_prompt()
     end
 end
 
-local function test_claude_model_and_effort_flags()
+local function test_claude_launch_argv_forwards_model_and_effort_unless_overridden()
     local home_dir = vim.fn.tempname()
     local worktree = "/tmp/my_repo.work/pr-7"
     local session_id = "00000000-0000-4000-8000-000000000002"
@@ -181,7 +181,7 @@ local function test_claude_model_and_effort_flags()
     )
 end
 
-local function test_claude_vim_mode_detection()
+local function test_claude_vim_mode_detects_editor_mode_from_settings_json()
     local home_dir = vim.fn.tempname()
     assert(command.is_claude_vim_mode_enabled(home_dir, "") == false, "missing settings file is false")
 
@@ -201,7 +201,7 @@ local function test_claude_vim_mode_detection()
     assert(command.is_claude_vim_mode_enabled(home_dir, custom_cfg) == true, "custom config dir overrides home")
 end
 
-local function test_extract_prompt_preview_items()
+local function test_extract_prompt_preview_items_truncates_and_caps_preview_list()
     local prompt = table.concat({
         "Address 7 local review comments on PR #7 (octo/widgets).",
         "First run `jpr-review guide`.",
@@ -229,10 +229,10 @@ local function test_extract_prompt_preview_items()
     )
 end
 
-test_parse_command_argv()
-test_launch_argv_and_cold_start_prompt()
-test_claude_model_and_effort_flags()
-test_claude_vim_mode_detection()
-test_extract_prompt_preview_items()
+test_parse_command_argv_splits_quoted_args_and_rejects_unterminated()
+test_build_launch_argv_appends_session_flags_and_cold_start_prompt()
+test_claude_launch_argv_forwards_model_and_effort_unless_overridden()
+test_claude_vim_mode_detects_editor_mode_from_settings_json()
+test_extract_prompt_preview_items_truncates_and_caps_preview_list()
 
 print("agent_command_spec: ok")

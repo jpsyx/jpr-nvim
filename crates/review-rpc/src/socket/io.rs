@@ -136,7 +136,7 @@ fn write_socket_reply_with_timeout(
         }
         match stream.write(&line[written..]) {
             Ok(0) => bail!("socket closed while writing reply"),
-            Ok(count) => written += count,
+            Ok(bytes_written) => written += bytes_written,
             Err(error) if is_retryable_io_error(error.kind()) => {}
             Err(error) => return Err(error).context("writing socket reply"),
         }

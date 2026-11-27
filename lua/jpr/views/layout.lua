@@ -184,7 +184,7 @@ function M.reconcile(session, opts)
         has_agent = info.agent_win ~= nil,
         total_columns = vim.o.columns,
         panel_width = config.panel_width,
-        agent_width = agent_window.resolve_vertical_width(config, vim.o.columns),
+        agent_width = agent_window.get_vertical_width(config, vim.o.columns),
     })
     session.layout_reconciling = true
     apply_layout_plan(info, plan)

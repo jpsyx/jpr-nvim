@@ -13,7 +13,7 @@ fn a_bare_invocation_has_no_subcommand() {
 }
 
 #[test]
-fn local_parses_optional_base_repo_and_no_pr() {
+fn local_subcommand_accepts_optional_base_repo_and_no_pr() {
     let bare = Cli::try_parse_from(["jpr-review", "local"]).unwrap();
     assert_eq!(
         bare.command,
@@ -86,7 +86,7 @@ fn checkout_takes_the_repository_it_expects() {
 }
 
 #[test]
-fn serve_supports_pr_and_local_modes_with_mutual_exclusion() {
+fn serve_accepts_pr_or_local_mode_and_rejects_conflicting_flags() {
     let pr_cli =
         Cli::try_parse_from(["jpr-review", "serve", "--pr", "7", "--repo", "octo/widgets"])
             .unwrap();
@@ -141,7 +141,7 @@ fn serve_supports_pr_and_local_modes_with_mutual_exclusion() {
 }
 
 #[test]
-fn state_path_supports_local_flag_and_rejects_conflict_with_pr() {
+fn state_path_accepts_local_flag_and_rejects_conflict_with_pr() {
     let local = Cli::try_parse_from(["jpr-review", "state-path", "--local"]).unwrap();
     assert_eq!(
         local.command,
@@ -155,13 +155,13 @@ fn state_path_supports_local_flag_and_rejects_conflict_with_pr() {
 }
 
 #[test]
-fn guide_parses_without_arguments() {
+fn guide_subcommand_needs_no_arguments() {
     let cli = Cli::try_parse_from(["jpr-review", "guide"]).unwrap();
     assert_eq!(cli.command, Some(Command::Guide));
 }
 
 #[test]
-fn threads_parses_pr_repo_and_local_flag() {
+fn threads_subcommand_captures_pr_repo_and_local_flag() {
     let cli = Cli::try_parse_from([
         "jpr-review",
         "threads",
@@ -184,7 +184,7 @@ fn threads_parses_pr_repo_and_local_flag() {
 }
 
 #[test]
-fn reply_parses_positional_thread_id_and_body() {
+fn reply_subcommand_captures_positional_thread_id_and_body() {
     let cli =
         Cli::try_parse_from(["jpr-review", "reply", "loc-1", "--body", "Done. (abc1234)"]).unwrap();
     assert_eq!(
@@ -200,7 +200,7 @@ fn reply_parses_positional_thread_id_and_body() {
 }
 
 #[test]
-fn prepass_write_parses_input_file_flag() {
+fn prepass_write_subcommand_captures_input_file_flag() {
     let cli =
         Cli::try_parse_from(["jpr-review", "prepass-write", "--input", "findings.json"]).unwrap();
     assert_eq!(
@@ -244,7 +244,7 @@ fn prs_uses_default_limit_and_optional_repo() {
 }
 
 #[test]
-fn owners_and_repos_parse_expected_flags() {
+fn owners_and_repos_apply_default_limits_and_reject_zero() {
     let owners = Cli::try_parse_from(["jpr-review", "owners"]).unwrap();
     assert_eq!(owners.command, Some(Command::Owners));
     let default_repos = Cli::try_parse_from(["jpr-review", "repos"]).unwrap();

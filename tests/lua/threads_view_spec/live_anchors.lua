@@ -71,7 +71,7 @@ local function create_eof_anchor_fixtures()
     }
 end
 
-local function test_live_local_anchor_updates(context)
+local function test_editing_buffer_shifts_local_thread_anchors_and_emits_updates(context)
     context.session.toggle_view()
     assert(context.view_mode.get() == "unified", "switched back to unified mode")
     local fixtures = create_local_anchor_fixtures()
@@ -126,7 +126,7 @@ local function test_github_only_does_not_emit_anchor_updates(context)
     assert(#context.helpers.read_requests(context.log, "updateLocalAnchors") == github_only_before, "non-local threads never emit updateLocalAnchors")
 end
 
-local function test_eof_deletion_and_clamping(context)
+local function test_deleting_eof_lines_clamps_local_thread_anchor_to_last_line(context)
     vim.api.nvim_buf_set_lines(context.buf, 0, -1, false, { "L1", "L2", "L3", "L4", "L5" })
     context.mock_state.threads = create_eof_anchor_fixtures()
     local calls_before = context.mock_state.file_diff_calls
@@ -181,7 +181,7 @@ local function test_update_error_still_refreshes(context)
     context.review.client.request = base_request
 end
 
-local function test_split_nil_anchor_bounds(context)
+local function test_split_mode_skips_threads_with_nil_anchor_bounds_safely(context)
     local split_base_buf = vim.api.nvim_create_buf(false, true)
     local split_head_buf = vim.api.nvim_create_buf(false, true)
     vim.api.nvim_buf_set_lines(split_base_buf, 0, -1, false, { "base 1", "base 2", "base 3" })
@@ -224,9 +224,9 @@ local function test_split_nil_anchor_bounds(context)
 end
 
 return function(context)
-    test_live_local_anchor_updates(context)
+    test_editing_buffer_shifts_local_thread_anchors_and_emits_updates(context)
     test_github_only_does_not_emit_anchor_updates(context)
-    test_eof_deletion_and_clamping(context)
+    test_deleting_eof_lines_clamps_local_thread_anchor_to_last_line(context)
     test_update_error_still_refreshes(context)
-    test_split_nil_anchor_bounds(context)
+    test_split_mode_skips_threads_with_nil_anchor_bounds_safely(context)
 end

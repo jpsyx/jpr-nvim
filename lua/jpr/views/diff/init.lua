@@ -71,27 +71,27 @@ end
 
 --- How many removed lines `marks` draw above the buffer's first line.
 local function count_lines_above_first(marks)
-    local count = 0
+    local line_count = 0
     for _, mark in ipairs(marks) do
         if mark.line == 0 and mark.opts.virt_lines_above then
-            count = count + #mark.opts.virt_lines
+            line_count = line_count + #mark.opts.virt_lines
         end
     end
-    return count
+    return line_count
 end
 
---- Scrolls every window showing the top of `buf` up to the `count` virtual
+--- Scrolls every window showing the top of `buf` up to the `line_count` virtual
 --- lines above its first line, which Neovim otherwise keeps hidden until the
 --- user scrolls up (a deleted header, or all of a deleted file).
-local function reveal_lines_above_first(buf, count)
-    if count == 0 then
+local function reveal_lines_above_first(buf, line_count)
+    if line_count == 0 then
         return
     end
     for _, win in ipairs(vim.fn.win_findbuf(buf)) do
         vim.api.nvim_win_call(win, function()
             local view = vim.fn.winsaveview()
             if view.topline == 1 then
-                view.topfill = count
+                view.topfill = line_count
                 vim.fn.winrestview(view)
             end
         end)

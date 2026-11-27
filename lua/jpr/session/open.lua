@@ -331,52 +331,17 @@ end
 --- Attaches PR listing, checkout argument building/parsing, and `:Jpr open`
 --- handlers onto `session_mod`.
 function M.attach(session_mod)
-    --- Returns a set `{ [number] = true }` of pull request numbers currently open
-    --- in valid tabs (optionally filtered to `repo`), used for `[open]` badges.
-    function session_mod.open_tab_numbers(repo)
+    session_mod.open_tab_numbers = function(repo)
         return collect_open_tab_numbers(session_mod, repo)
     end
-
-    --- Returns whether `tab` currently has an in-flight loading checkout.
-    function session_mod.has_pending_tab(tab)
-        return has_pending_tab(tab)
-    end
-
-    --- Cancels and closes an in-flight loading checkout tab if `tab` is one.
-    function session_mod.close_pending_tab(tab)
-        return close_pending_tab(tab)
-    end
-
-    --- Returns whether another in-flight checkout already claims `candidate` as its buffer key.
-    function session_mod.is_pending_buf_key_taken(session, candidate)
-        return is_pending_buf_key_taken(session, candidate)
-    end
-
-    --- Cancels any in-flight checkouts whose loading tabs have been closed.
-    function session_mod.cancel_closed_pending_tabs()
-        return cancel_closed_pending_tabs()
-    end
-
-    --- Runs `jpr-review prs` asynchronously in the current working directory
-    --- (or for `opts.repo`) and calls `on_result(prs)` or `on_error(message)`.
-    function session_mod.list_open_prs(on_result, on_error, opts)
-        return list_open_prs_from_cli(on_result, on_error, opts)
-    end
-
-    --- The `jpr-review checkout` command for PR `number`. With `repo`
-    --- (owner/name), checkout refuses a PR from any other repository.
-    function session_mod.checkout_args(number, repo)
-        return build_checkout_args(number, repo)
-    end
-
-    --- The JSON object on the last non-empty line of `checkout`'s stdout.
-    function session_mod.parse_checkout(stdout)
-        return parse_checkout_output(stdout)
-    end
-
-    --- `:Jpr open <number>`: reuse its tab, or check it out and start a session.
-    --- `repo` (owner/name, from a URL) must match too, when given.
-    function session_mod.open(number, repo)
+    session_mod.has_pending_tab = has_pending_tab
+    session_mod.close_pending_tab = close_pending_tab
+    session_mod.is_pending_buf_key_taken = is_pending_buf_key_taken
+    session_mod.cancel_closed_pending_tabs = cancel_closed_pending_tabs
+    session_mod.list_open_prs = list_open_prs_from_cli
+    session_mod.checkout_args = build_checkout_args
+    session_mod.parse_checkout = parse_checkout_output
+    session_mod.open = function(number, repo)
         return open_pull_request(session_mod, number, repo)
     end
 end

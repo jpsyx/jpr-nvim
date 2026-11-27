@@ -139,7 +139,7 @@ fn local_mode_refuses_all_github_only_operations_and_returns_empty_mentions() {
 }
 
 #[test]
-fn local_mode_supports_local_comments_agent_launch_bulk_send_and_prepass() {
+fn local_mode_runs_local_comments_agent_launch_send_and_prepass_end_to_end() {
     let fakes = Fakes::new(200);
     fakes.workspace.put_base("src/a.rs", "fn a() {}\n");
     fakes.workspace.put_disk("src/a.rs", "fn a() { 1 }\n");

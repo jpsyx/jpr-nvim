@@ -72,6 +72,20 @@ pub fn handle(
             let mode = get_mode_from_params(params)?;
             to_value(&engine_result_to_rpc(lock(session)?.stream(mode))?)
         }
+        "setViewed" | "setCollapsed" | "refreshWorktree" => {
+            handle_workspace_method(session, request.method.as_str(), params)
+        }
+        "shutdown" => Ok(Value::Null),
+        other => comments::handle_comment_method(session, other, params),
+    }
+}
+
+fn handle_workspace_method(
+    session: &Mutex<ReviewSession>,
+    method: &str,
+    params: &Value,
+) -> Result<Value, RpcError> {
+    match method {
         "setViewed" => {
             let paths = get_viewed_paths_from_params(params)?;
             let viewed = get_bool_from_params(params, "viewed")?;
@@ -95,8 +109,7 @@ pub fn handle(
                 lock(session)?.refresh_worktree(&renames),
             )?)
         }
-        "shutdown" => Ok(Value::Null),
-        other => comments::handle_comment_method(session, other, params),
+        _ => unreachable!("only workspace methods route here"),
     }
 }
 

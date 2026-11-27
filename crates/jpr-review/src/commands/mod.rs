@@ -61,27 +61,40 @@ pub fn run_command(command: &Command, theme: Theme) -> Result<()> {
             base,
             repo,
             poll,
-        } => {
-            if *is_local {
-                serve::run_local(base.as_deref(), repo.as_deref(), *poll)
-            } else {
-                let number = pr.context("--pr is required unless --local is set")?;
-                let repo_name = repo
-                    .as_deref()
-                    .context("--repo is required unless --local is set")?;
-                serve::run(number, repo_name, *poll)
-            }
-        }
+        } => run_serve_command(*pr, *is_local, base.as_deref(), repo.as_deref(), *poll),
         Command::StatePath { pr, is_local, repo } => {
-            if *is_local {
-                state_path::run_local(repo.as_deref())
-            } else {
-                let number = pr_number(*pr, theme)?;
-                state_path::run(number, &repo_name(repo.as_deref(), theme)?)
-            }
+            run_state_path_command(*pr, *is_local, repo.as_deref(), theme)
         }
         other => run_agent_command(other, theme),
     }
+}
+
+fn run_serve_command(
+    pr: Option<u64>,
+    is_local: bool,
+    base: Option<&str>,
+    repo: Option<&str>,
+    poll: u64,
+) -> Result<()> {
+    if is_local {
+        return serve::run_local(base, repo, poll);
+    }
+    let number = pr.context("--pr is required unless --local is set")?;
+    let repo_name = repo.context("--repo is required unless --local is set")?;
+    serve::run(number, repo_name, poll)
+}
+
+fn run_state_path_command(
+    pr: Option<u64>,
+    is_local: bool,
+    repo: Option<&str>,
+    theme: Theme,
+) -> Result<()> {
+    if is_local {
+        return state_path::run_local(repo);
+    }
+    let number = pr_number(pr, theme)?;
+    state_path::run(number, &repo_name(repo, theme)?)
 }
 
 /// Runs the subcommand parsed into `cli`, or fails when no subcommand is present.

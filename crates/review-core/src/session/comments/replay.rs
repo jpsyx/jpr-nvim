@@ -162,20 +162,35 @@ impl ReviewSession {
         };
         match self.ports.forge.reply_to_thread(pr, &request) {
             Ok(created_message) => {
-                if created_message.sync == Some(MessageSync::Draft)
-                    && self.saved.registry.pending_review_id.is_none()
-                {
-                    self.refresh_pending_review_id(pr);
-                }
-                let created_message_id = created_message.id.clone();
-                if let Some(slot) = find_message_mut(&mut self.threads, temp_message_id) {
-                    *slot = created_message;
-                }
-                self.record_id_mapping(temp_message_id, &created_message_id, remaining_ops);
+                self.apply_replayed_reply_message(
+                    pr,
+                    temp_message_id,
+                    created_message,
+                    remaining_ops,
+                );
                 ReplayOutcome::Landed
             }
             Err(error) => self.handle_op_message_error(temp_message_id, error),
         }
+    }
+
+    fn apply_replayed_reply_message(
+        &mut self,
+        pr: &PullRequest,
+        temp_message_id: &str,
+        created_message: review_model::Message,
+        remaining_ops: &mut [QueuedCommentOp],
+    ) {
+        if created_message.sync == Some(MessageSync::Draft)
+            && self.saved.registry.pending_review_id.is_none()
+        {
+            self.refresh_pending_review_id(pr);
+        }
+        let created_message_id = created_message.id.clone();
+        if let Some(slot) = find_message_mut(&mut self.threads, temp_message_id) {
+            *slot = created_message;
+        }
+        self.record_id_mapping(temp_message_id, &created_message_id, remaining_ops);
     }
 
     fn replay_edit(

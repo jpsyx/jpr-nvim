@@ -51,7 +51,7 @@ local function prune_unreferenced_unified_buffer(buf)
     end
 end
 
-local function resolve_split_diff_kinds(win, topline, botline)
+local function collect_split_diff_kinds(win, topline, botline)
     local is_ok, kinds = pcall(vim.api.nvim_win_call, win, function()
         local found = {}
         for row = topline, botline do
@@ -68,7 +68,7 @@ local function resolve_split_diff_kinds(win, topline, botline)
     return is_ok and kinds or {}
 end
 
-local function resolve_diff_kinds(entry, win, buf, topline, botline)
+local function collect_diff_kinds(entry, win, buf, topline, botline)
     if entry.mode == "unified" then
         local added_lines = entry.buf == buf and unified_lines_by_buf[buf] or nil
         if not added_lines then
@@ -82,7 +82,7 @@ local function resolve_diff_kinds(entry, win, buf, topline, botline)
         end
         return kinds
     end
-    return resolve_split_diff_kinds(win, topline, botline)
+    return collect_split_diff_kinds(win, topline, botline)
 end
 
 local function filter_eligible_lines(buf, diff_kinds, topline, botline)
@@ -269,7 +269,7 @@ function M.collect_viewport_marks(win, buf, topline, botline)
     if not entry or not vim.api.nvim_buf_is_valid(buf) or topline < 0 or botline < topline then
         return {}
     end
-    local diff_kinds = resolve_diff_kinds(entry, win, buf, topline, botline)
+    local diff_kinds = collect_diff_kinds(entry, win, buf, topline, botline)
     if next(diff_kinds) == nil then
         return {}
     end

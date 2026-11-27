@@ -37,14 +37,14 @@ fn parsed_threads_page() -> ThreadsPage {
 }
 
 #[test]
-fn parses_the_head_commit_and_the_next_cursor() {
+fn threads_page_extracts_head_commit_and_next_cursor() {
     let (head, _, cursor) = parsed_threads_page();
     assert_eq!(head, "head1");
     assert_eq!(cursor.as_deref(), Some("CUR"));
 }
 
 #[test]
-fn parses_a_line_thread() {
+fn line_thread_maps_anchor_and_published_message_sync() {
     let (_, threads, _) = parsed_threads_page();
     let line = &threads[0];
     assert_eq!(
@@ -55,7 +55,7 @@ fn parses_a_line_thread() {
 }
 
 #[test]
-fn parses_a_resolved_range_thread_with_a_bot_draft() {
+fn resolved_range_thread_maps_left_side_bot_author_and_draft_state() {
     let (_, threads, _) = parsed_threads_page();
     let range = &threads[1];
     assert_eq!(
@@ -73,7 +73,7 @@ fn parses_a_resolved_range_thread_with_a_bot_draft() {
 }
 
 #[test]
-fn parses_an_outdated_thread_at_its_original_line() {
+fn outdated_thread_falls_back_to_original_line() {
     let (_, threads, _) = parsed_threads_page();
     let outdated = &threads[2];
     assert!(outdated.outdated);
@@ -84,7 +84,7 @@ fn parses_an_outdated_thread_at_its_original_line() {
 }
 
 #[test]
-fn parses_a_file_thread() {
+fn file_thread_maps_file_anchor_without_line_numbers() {
     let (_, threads, _) = parsed_threads_page();
     let file = &threads[3];
     assert_eq!(
@@ -98,7 +98,7 @@ fn parses_a_file_thread() {
 }
 
 #[test]
-fn parses_files_with_counts_and_viewed_state() {
+fn files_page_maps_diff_counts_viewed_states_and_clears_final_cursor() {
     let data = json!({ "node": { "files": {
         "pageInfo": { "hasNextPage": false, "endCursor": "X" },
         "nodes": [

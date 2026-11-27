@@ -1,4 +1,7 @@
 -- jpr: review GitHub pull requests in Neovim, backed by the jpr-review engine.
+local dispatch = require("jpr.commands.dispatch")
+local keymaps = require("jpr.keymaps")
+
 local M = {}
 
 --- Release version of the Neovim plugin, paired with the jpr-review binary.
@@ -76,27 +79,10 @@ function M.define_highlights()
     require("jpr.highlights").define_highlights()
 end
 
-local bound_palette_key = M.defaults.keys.palette
-
 --- Binds the configured global `<Plug>(jpr-palette)` shortcut (default `<leader>J`),
 --- removing any previous plugin-owned palette mapping when changed or disabled.
 function M.bind_global_keys()
-    if type(bound_palette_key) == "string" and bound_palette_key ~= "" then
-        local existing = vim.fn.maparg(bound_palette_key, "n", false, true)
-        if existing and existing.rhs == "<Plug>(jpr-palette)" then
-            pcall(vim.keymap.del, "n", bound_palette_key)
-        end
-    end
-    bound_palette_key = nil
-    local palette_key = M.config.keys and M.config.keys.palette
-    if type(palette_key) == "string" and palette_key ~= "" then
-        vim.keymap.set("n", palette_key, "<Plug>(jpr-palette)", {
-            remap = true,
-            silent = true,
-            desc = "Open Jpr command palette",
-        })
-        bound_palette_key = palette_key
-    end
+    keymaps.bind_global_keys(M.config)
 end
 
 --- Configures the plugin from a user's `opts` (see `defaults`), for example
@@ -112,142 +98,37 @@ function M.binary_path()
     return require("jpr.binary").get_binary_path_from_config(M.config)
 end
 
-local function bind_plug_key(buf, modes, lhs, plug, desc)
-    if type(lhs) == "string" and lhs ~= "" then
-        vim.keymap.set(
-            modes,
-            lhs,
-            plug,
-            { buffer = buf, remap = true, silent = true, nowait = true, desc = desc }
-        )
-    end
-end
-
---- Binds review-wide session keys (`comment`, `pr_comment`, `send_agent`,
---- `submit_review`, `toggle_agent`, `toggle_panel`) on `buf`, skipping any
---- entry set to `false` or empty.
+--- Binds review-wide session keys on `buf`, skipping any entry set to `false` or empty.
 function M.bind_session_keys(buf)
-    local keys = M.config.keys or {}
-    bind_plug_key(buf, "n", keys.comment, "<Plug>(jpr-comment)", "New comment for the current view")
-    bind_plug_key(buf, "n", keys.pr_comment, "<Plug>(jpr-pr-comment)", "New standalone PR comment")
-    bind_plug_key(buf, "n", keys.send_agent, "<Plug>(jpr-send-agent)", "Send local threads to coding agent")
-    bind_plug_key(buf, "n", keys.submit_review, "<Plug>(jpr-submit-review)", "Open GitHub review submission modal")
-    bind_plug_key(buf, "n", keys.toggle_agent, "<Plug>(jpr-toggle-agent)", "Toggle coding agent terminal panel")
-    bind_plug_key(buf, "n", keys.toggle_panel, "<Plug>(jpr-toggle-panel)", "Toggle diff sidebar panel")
+    keymaps.bind_session_keys(M.config, buf)
 end
 
---- Binds configured comment, thread, and review session keys in buffer `buf`
---- to their `<Plug>(jpr-*)` mappings, skipping any entry set to `false`.
+--- Binds configured comment, thread, and review session keys in buffer `buf`.
 function M.bind_buffer_keys(buf)
-    local keys = M.config.keys or {}
-    bind_plug_key(buf, { "n", "x" }, keys.comment, "<Plug>(jpr-comment)", "New GitHub draft comment")
-    bind_plug_key(buf, { "n", "x" }, keys.suggest_comment, "<Plug>(jpr-suggest-comment)", "New GitHub suggestion comment")
-    bind_plug_key(buf, "n", keys.file_comment, "<Plug>(jpr-file-comment)", "New file-level GitHub comment")
-    bind_plug_key(buf, "n", keys.full_diff, "<Plug>(jpr-full-diff)", "Switch to the full branch diff view")
-    bind_plug_key(buf, "n", keys.toggle_viewed, "<Plug>(jpr-toggle-viewed)", "Toggle viewed for the current file")
-    bind_plug_key(buf, "n", keys.thread_popup, "<Plug>(jpr-thread-popup)", "Open review thread popup")
-    bind_plug_key(buf, "n", keys.next_thread, "<Plug>(jpr-next-thread)", "Next review thread")
-    bind_plug_key(buf, "n", keys.prev_thread, "<Plug>(jpr-prev-thread)", "Previous review thread")
-    M.bind_session_keys(buf)
+    keymaps.bind_buffer_keys(M.config, buf)
 end
 
---- Binds `keys.full_diff` on a non-changed worktree buffer `buf` with an expr
---- guard so it opens the full diff inside review tabs and falls back to native
---- `keys.full_diff` in non-review tabs.
+--- Binds `keys.full_diff` on a non-changed worktree buffer `buf` with an expr guard.
 function M.bind_tab_aware_full_diff_key(buf)
-    local full_diff_key = M.config.keys and M.config.keys.full_diff
-    if type(full_diff_key) ~= "string" or full_diff_key == "" then
-        return
-    end
-    vim.keymap.set("n", full_diff_key, function()
-        local session_module = package.loaded["jpr.session"]
-        if session_module and session_module.current() ~= nil then
-            return "<Plug>(jpr-full-diff)"
-        end
-        return full_diff_key
-    end, { buffer = buf, expr = true, remap = true, silent = true, nowait = true, desc = "Switch to the full branch diff view" })
+    keymaps.bind_tab_aware_full_diff_key(M.config, buf)
 end
 
---- Binds `keys.pr_comment` on a non-changed worktree buffer `buf` with an expr
---- guard so it opens a standalone PR comment inside review tabs and falls back
---- to the native key in non-review tabs.
+--- Binds `keys.pr_comment` on a non-changed worktree buffer `buf` with an expr guard.
 function M.bind_tab_aware_pr_comment_key(buf)
-    local comment_key = M.config.keys and M.config.keys.pr_comment
-    if type(comment_key) ~= "string" or comment_key == "" then
-        return
-    end
-    vim.keymap.set("n", comment_key, function()
-        local session_module = package.loaded["jpr.session"]
-        if session_module and session_module.current() ~= nil then
-            return "<Plug>(jpr-pr-comment)"
-        end
-        return comment_key
-    end, { buffer = buf, expr = true, remap = true, silent = true, nowait = true, desc = "New standalone PR comment" })
+    keymaps.bind_tab_aware_pr_comment_key(M.config, buf)
 end
 
---- Binds `keys.toggle_panel` on a non-changed worktree buffer `buf` with an
---- expr guard so it toggles the diff sidebar inside review tabs and falls back
---- to native `keys.toggle_panel` in non-review tabs.
+--- Binds `keys.toggle_panel` on a non-changed worktree buffer `buf` with an expr guard.
 function M.bind_tab_aware_toggle_panel_key(buf)
-    local panel_key = M.config.keys and M.config.keys.toggle_panel
-    if type(panel_key) ~= "string" or panel_key == "" then
-        return
-    end
-    vim.keymap.set("n", panel_key, function()
-        local session_module = package.loaded["jpr.session"]
-        if session_module and session_module.current() ~= nil then
-            return "<Plug>(jpr-toggle-panel)"
-        end
-        return panel_key
-    end, { buffer = buf, expr = true, remap = true, silent = true, nowait = true, desc = "Toggle diff sidebar panel" })
+    keymaps.bind_tab_aware_toggle_panel_key(M.config, buf)
 end
 
---- The PR number in a `:Jpr open` argument: `123`, `#123`, or a pull request
---- URL. A URL also gives its repository as a second value, `owner/name`.
-function M.parse_pr_arg(arg)
-    if type(arg) ~= "string" then
-        return nil
-    end
-    local repo, url_number = arg:match("^%a+://[^/]+/([^/]+/[^/]+)/pull/(%d+)")
-    local raw_number = url_number or arg:match("^#?(%d+)$") or arg:match("/pull/(%d+)")
-    local parsed_number = raw_number and tonumber(raw_number) or nil
-    if not parsed_number or parsed_number < 1 then
-        return nil
-    end
-    return parsed_number, repo
-end
+--- The PR number in a `:Jpr open` argument: `123`, `#123`, or a pull request URL.
+M.parse_pr_arg = dispatch.parse_pr_arg
 
-local function filter_by_prefix(items, prefix)
-    return vim.tbl_filter(function(name)
-        return vim.startswith(name, prefix)
-    end, items)
-end
-
-local function slice_from_jpr_command(cmdline)
-    local raw = cmdline or ""
-    local start_index = raw:find("%f[%a]Jpr%f[%A]")
-    if start_index then
-        return raw:sub(start_index)
-    end
-    return raw
-end
-
---- Completes `:Jpr <subcommand>` and schema-defined single-step arguments
---- (`toggle`, `comment`, `agent`).
+--- Completes `:Jpr <subcommand>` and schema-defined single-step arguments.
 function M.complete(arglead, cmdline)
-    local command_tail = slice_from_jpr_command(cmdline)
-    local trimmed = vim.trim(command_tail)
-    local words = trimmed ~= "" and vim.split(trimmed, "%s+") or {}
-    local has_trailing_space = command_tail:match("%s$") ~= nil
-    local token_index = has_trailing_space and (#words + 1) or #words
-    if token_index <= 2 then
-        return filter_by_prefix(M.subcommands, arglead or "")
-    end
-    if token_index == 3 then
-        local candidates = require("jpr.commands.schema").subcommand_arg_completions(words[2])
-        return filter_by_prefix(candidates, arglead or "")
-    end
-    return {}
+    return dispatch.complete(M.subcommands, arglead, cmdline)
 end
 
 --- Tells the user something failed, as a red top-right `jpr` toast.
@@ -284,235 +165,14 @@ function M.statusline()
     return require("jpr.render.statusline").build_statusline_from_session(session_module.current())
 end
 
-local function build_tui_context(session, cmd_opts)
-    return require("jpr.tui.context").create_context_from_session(session, cmd_opts)
-end
-
-local function open_pr_picker_for_context(context)
-    local open_spec = require("jpr.commands.schema").find_command_spec("open")
-    return require("jpr.tui.wizard").open_command(open_spec, { source = "list" }, context, { start_step_id = "pr" })
-end
-
-local function dispatch_open_subcommand(session, argument, context)
-    if argument == nil or argument == "" then
-        if not context.has_session and not require("jpr.repo_picker").is_git_repo(vim.fn.getcwd()) then
-            return require("jpr.repo_picker").pick(function(selected_repo)
-                local repo_context = vim.tbl_extend("force", context, {
-                    is_git_repo = false,
-                    repo = selected_repo,
-                })
-                open_pr_picker_for_context(repo_context)
-            end)
-        end
-        return open_pr_picker_for_context(context)
-    end
-    local number, repo = M.parse_pr_arg(argument)
-    if not number then
-        return M.error(("invalid pull request %q; expected a PR number, #number, or pull request URL"):format(argument))
-    end
-    return session.open(number, repo)
-end
-
-local function dispatch_validated_arg(subcommand, argument, label, on_valid)
-    local valid_values = require("jpr.commands.schema").subcommand_arg_completions(subcommand)
-    if vim.tbl_contains(valid_values, argument) then
-        return on_valid(argument)
-    end
-    return M.error(("invalid %s %q; expected one of: %s"):format(label, tostring(argument), table.concat(valid_values, ", ")))
-end
-
-local function dispatch_comment_subcommand(session, argument, cmd_opts, context)
-    if argument == nil or argument == "" then
-        return session.comment_current(cmd_opts)
-    end
-    return dispatch_validated_arg("comment", argument, "comment scope", function(kind)
-        local comment_spec = require("jpr.commands.schema").find_command_spec("comment")
-        return comment_spec.execute({ kind = kind }, context)
-    end)
-end
-
-local function dispatch_optional_arg_subcommand(session, subcommand, argument, cmd_opts, context)
-    if subcommand == "open" then
-        return dispatch_open_subcommand(session, argument, context)
-    end
-    if subcommand == "local" then
-        local base_ref = (type(argument) == "string" and vim.trim(argument) ~= "") and vim.trim(argument) or nil
-        return session.open_local(base_ref)
-    end
-    if subcommand == "toggle" then
-        if argument == nil or argument == "" then
-            return session.toggle_view()
-        end
-        return dispatch_validated_arg("toggle", argument, "diff view", session.set_view_mode)
-    end
-    if subcommand == "comment" then
-        return dispatch_comment_subcommand(session, argument, cmd_opts, context)
-    end
-    if subcommand == "agent" then
-        if argument == nil or argument == "" then
-            return session.agent_current()
-        end
-        return dispatch_validated_arg("agent", argument, "agent", session.agent_current)
-    end
-    return nil
-end
-
-local OPTIONAL_ARG_SUBCOMMANDS = { open = true, ["local"] = true, toggle = true, comment = true, agent = true }
-local ZERO_ARG_SESSION_METHODS = {
-    sync = "sync_current",
-    panel = "panel_current",
-    stream = "stream_current",
-    suggest = "suggest_current",
-    expand = "expand_current",
-    summary = "summary_current",
-    conversation = "conversation_current",
-    ["pr-comment"] = "pr_comment_current",
-    submit = "submit_current",
-    push = "push_current",
-    send = "send_current",
-    prepass = "prepass_current",
-    close = "close_current",
-}
-
-local function is_numeric_pr_attempt(token)
-    if type(token) ~= "string" then
-        return false
-    end
-    return tonumber(token) ~= nil or token:match("^#%-?%d") ~= nil
-end
-
-local function dispatch_direct_subcommand(session, args, cmd_opts, context)
-    local subcommand = args[1]
-    if subcommand == "keys" then
-        if #args > 1 then
-            return M.error(":Jpr keys does not accept arguments")
-        end
-        return require("jpr.views.cheatsheet").open()
-    end
-    if OPTIONAL_ARG_SUBCOMMANDS[subcommand] then
-        if #args > 2 then
-            return M.error(("too many arguments for :Jpr %s"):format(subcommand))
-        end
-        return dispatch_optional_arg_subcommand(session, subcommand, args[2], cmd_opts, context)
-    end
-    local method_name = ZERO_ARG_SESSION_METHODS[subcommand]
-    if method_name then
-        if #args > 1 then
-            return M.error((":Jpr %s does not accept arguments"):format(subcommand))
-        end
-        return session[method_name]()
-    end
-    local pr_number, pr_repo = M.parse_pr_arg(subcommand)
-    if pr_number then
-        if #args > 1 then
-            return M.error(("too many arguments for :Jpr %s"):format(subcommand))
-        end
-        return session.open(pr_number, pr_repo)
-    end
-    if is_numeric_pr_attempt(subcommand) then
-        return M.error(("invalid pull request %q; expected a positive PR number, #number, or pull request URL"):format(subcommand))
-    end
-    M.error(("unknown subcommand %q; expected one of: %s"):format(tostring(subcommand), table.concat(M.subcommands, ", ")))
-end
-
---- Rewrites a leading command alias to its canonical id, leaving real
---- subcommands and unknown names unchanged.
-local function canonicalize_command_args(args)
-    if type(args[1]) ~= "string" then
-        return args
-    end
-    local resolved = require("jpr.commands.schema").resolve_command_id(args[1])
-    if resolved == nil or resolved == args[1] then
-        return args
-    end
-    local canonical_args = { resolved }
-    for index = 2, #args do
-        canonical_args[index] = args[index]
-    end
-    return canonical_args
-end
-
-local function open_palette_with_repo_picker(commands, context)
-    local repo_picker = require("jpr.repo_picker")
-    local is_in_git_repo = repo_picker.is_git_repo(vim.fn.getcwd())
-    if context.has_session or context.has_pending_tab or is_in_git_repo then
-        context.is_git_repo = context.has_session or is_in_git_repo
-        return require("jpr.tui.wizard").open_palette(commands, context)
-    end
-    local function pick_and_open()
-        repo_picker.pick(function(selected_repo)
-            local scoped_context = vim.tbl_extend("force", context, {
-                is_git_repo = false,
-                repo = selected_repo,
-                title = (" Jpr Commands · %s "):format(selected_repo),
-                on_back = pick_and_open,
-            })
-            require("jpr.tui.wizard").open_palette(commands, scoped_context)
-        end)
-    end
-    return pick_and_open()
-end
-
---- Dispatches `:Jpr [subcommand [arg]]` with optional command options `cmd_opts` (such as range), opening the interactive floating command palette when no subcommand is given.
+--- Dispatches `:Jpr [subcommand [arg]]` with optional command options `cmd_opts`.
 function M.command(fargs, cmd_opts)
-    local args = canonicalize_command_args(fargs or {})
-    local session = require("jpr.session")
-    local context = build_tui_context(session, cmd_opts)
-    if #args == 0 then
-        local commands = require("jpr.commands.schema").create_command_specs()
-        return open_palette_with_repo_picker(commands, context)
-    end
-    return dispatch_direct_subcommand(session, args, cmd_opts, context)
-end
-
---- Captures the 1-indexed inclusive visual line range and exits visual mode,
---- returning nil when called outside visual mode.
-local function visual_range_opts()
-    local mode = vim.fn.mode(1):sub(1, 1)
-    if mode ~= "v" and mode ~= "V" and mode ~= "\22" then
-        return nil
-    end
-    local first_line, second_line = vim.fn.line("v"), vim.fn.line(".")
-    local line1 = math.min(first_line, second_line)
-    local line2 = math.max(first_line, second_line)
-    vim.api.nvim_feedkeys(vim.api.nvim_replace_termcodes("<Esc>", true, false, true), "nx", false)
-    return { line1 = line1, line2 = line2, range = 2 }
+    return dispatch.command(M, fargs, cmd_opts)
 end
 
 --- Dispatches a `<Plug>(jpr-*)` action `name` to the active review session.
 function M.action(name)
-    local session = require("jpr.session")
-    if name == "comment" or name == "suggest_comment" then
-        local opts = visual_range_opts() or {}
-        if name == "suggest_comment" then
-            opts.suggest = true
-        end
-        return session.comment_current(opts)
-    end
-    local dispatch = {
-        file_comment = function()
-            session.comment_current({ file = true })
-        end,
-        pr_comment = session.pr_comment_current,
-        full_diff = session.stream_current,
-        toggle_viewed = session.toggle_viewed_current,
-        thread_popup = session.popup_current,
-        next_thread = function()
-            session.jump_thread_current(1)
-        end,
-        prev_thread = function()
-            session.jump_thread_current(-1)
-        end,
-        send_agent = session.send_current,
-        submit_review = session.submit_current,
-        toggle_agent = session.agent_current,
-        toggle_panel = session.panel_current,
-    }
-    local handler = dispatch[name]
-    if handler then
-        return handler()
-    end
-    M.error(("unknown action %q"):format(tostring(name)))
+    return dispatch.action(M, name)
 end
 
 return M

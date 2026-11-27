@@ -52,6 +52,7 @@ local context = {
 }
 
 dofile(root .. "/tests/lua/popup_spec/actions.lua")(context)
+dofile(root .. "/tests/lua/popup_spec/multi_thread.lua")(context)
 dofile(root .. "/tests/lua/popup_spec/lifecycle.lua")(context)
 dofile(root .. "/tests/lua/popup_spec/scroll.lua")(context)
 
@@ -83,7 +84,7 @@ local function build_local_preview(overrides)
     return vim.tbl_extend("force", base, overrides or {})
 end
 
-local function test_non_local_guards()
+local function test_non_local_thread_rejects_promote_and_send_keeping_popup_open()
     local main_win = require("jpr.views.main_window").find(review)
     require("jpr.views.main_window").edit(review, main_win, "README.md", 1)
     local buf = vim.api.nvim_win_get_buf(main_win)
@@ -129,7 +130,7 @@ local function test_non_local_guards()
     helpers.press_key("q")
 end
 
-local function test_local_promote_and_refresh()
+local function test_local_thread_promotes_refreshes_badge_and_blocks_repromote()
     local popup_module = require("jpr.comments.popup")
     local local_thread = build_local_preview()
     popup_module.open(review, { local_thread })
@@ -175,7 +176,7 @@ local function test_local_promote_and_refresh()
     popup_module.close(review)
 end
 
-local function test_local_send_and_react()
+local function test_local_thread_dispatches_agent_send_and_rejects_reactions()
     local popup_module = require("jpr.comments.popup")
     local sent_calls = {}
     local original_agent = package.loaded["jpr.agent"]
@@ -202,7 +203,7 @@ local function test_local_send_and_react()
     popup_module.close(review)
 end
 
-local function test_local_reply_and_delete()
+local function test_local_thread_opens_reply_with_history_and_deletes_without_authorship()
     local popup_module = require("jpr.comments.popup")
     popup_module.open(review, { build_local_preview() })
     local reply_popup = helpers.find_floating_win()
@@ -237,10 +238,10 @@ local function test_local_reply_and_delete()
     assert(helpers.read_requests(log, "deleteMessage")[deletes_before + 1].params.messageId == "loc-m-1")
 end
 
-test_non_local_guards()
-test_local_promote_and_refresh()
-test_local_send_and_react()
-test_local_reply_and_delete()
+test_non_local_thread_rejects_promote_and_send_keeping_popup_open()
+test_local_thread_promotes_refreshes_badge_and_blocks_repromote()
+test_local_thread_dispatches_agent_send_and_rejects_reactions()
+test_local_thread_opens_reply_with_history_and_deletes_without_authorship()
 
 jpr.error = original_error
 jpr.info = original_info

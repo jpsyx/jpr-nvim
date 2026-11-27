@@ -99,7 +99,7 @@ local function test_default_shortcuts_bound_and_dispatch_across_all_review_buffe
     session.close_current()
 end
 
-local function test_custom_and_disabled_session_shortcuts()
+local function test_custom_session_shortcuts_rebind_and_disabled_keys_stay_unbound()
     local review = setup_review_session({
         keys = {
             send_agent = false,
@@ -129,6 +129,6 @@ local function test_custom_and_disabled_session_shortcuts()
 end
 
 test_default_shortcuts_bound_and_dispatch_across_all_review_buffers()
-test_custom_and_disabled_session_shortcuts()
+test_custom_session_shortcuts_rebind_and_disabled_keys_stay_unbound()
 
 print("session_shortcuts_spec: ok")

@@ -5,13 +5,13 @@ package.path = root .. "/lua/?.lua;" .. root .. "/lua/?/init.lua;" .. package.pa
 local target = require("jpr.comments.target")
 
 local function assert_kind(location, request, expected)
-    local kind, error_message = target.resolve_comment_kind(location, request)
+    local kind, error_message = target.classify_comment_kind(location, request)
     assert(kind == expected, ("%s at %s -> %s (%s)"):format(request, vim.inspect(location), tostring(kind), tostring(error_message)))
     assert(error_message == nil, "successful choice has no error: " .. tostring(error_message))
 end
 
 local function assert_error(location, request)
-    local kind, error_message = target.resolve_comment_kind(location, request)
+    local kind, error_message = target.classify_comment_kind(location, request)
     assert(kind == nil and type(error_message) == "string" and error_message ~= "", vim.inspect({ kind, error_message }))
 end
 

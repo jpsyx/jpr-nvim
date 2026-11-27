@@ -33,7 +33,7 @@ end
 
 --- Computes the paste-to-submit settle delay in milliseconds from `config`,
 --- `profile`, and agent `kind`.
-function M.resolve_submit_delay_ms(config, profile, kind)
+function M.get_submit_delay_ms(config, profile, kind)
     local active_config = type(config) == "table" and config or jpr().config
     if type(active_config.agent_submit_delay_ms) == "number" and active_config.agent_submit_delay_ms >= 0 then
         return active_config.agent_submit_delay_ms
@@ -111,7 +111,7 @@ local function paste_and_submit(session, agent_state, dispatch, on_submitted)
     if not send_terminal_bytes(agent_state, paste_bytes, "could not write prompt to the agent terminal") then
         return finish_dispatch(agent_state)
     end
-    local delay_ms = M.resolve_submit_delay_ms(jpr().config, dispatch.profile, agent_state.kind)
+    local delay_ms = M.get_submit_delay_ms(jpr().config, dispatch.profile, agent_state.kind)
     vim.defer_fn(function()
         if not is_active_target(session, agent_state) then
             return finish_dispatch(agent_state)

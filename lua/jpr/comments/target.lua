@@ -14,7 +14,7 @@ end
 --- @param request string|nil
 --- @return string|nil
 --- @return string|nil
-function M.resolve_comment_kind(location, request)
+function M.classify_comment_kind(location, request)
     local loc = type(location) == "table" and location or {}
     if request == "pr" then
         return "pr"

@@ -157,7 +157,7 @@ local function create_comment_anchor(session, win, buf, opts)
     if location.is_on_diff_line == true and request == "versatile" then
         return create_line_anchor(session, win, buf, opts)
     end
-    local kind, error_message = require("jpr.comments.target").resolve_comment_kind(location, request)
+    local kind, error_message = require("jpr.comments.target").classify_comment_kind(location, request)
     if kind == "file" or kind == "pr" then
         return create_static_anchor(kind, location.file_path)
     end
@@ -167,115 +167,91 @@ local function create_comment_anchor(session, win, buf, opts)
     return nil, error_message
 end
 
+local function with_current_session(session_mod, action)
+    local session = session_mod.current()
+    if not session then
+        return jpr().error("no pull request is open in this tab")
+    end
+    return action(session)
+end
+
+local function expand_session_threads(session)
+    session.threads_expanded = not session.threads_expanded
+    require("jpr.views.threads").redraw_all(session)
+    require("jpr.views.stream").refresh(session, true)
+end
+
+local function jump_session_thread(session, step)
+    local buf = vim.api.nvim_get_current_buf()
+    if is_stream_buffer(session, buf) then
+        return require("jpr.views.stream").jump(session, "threads", step)
+    end
+    require("jpr.views.threads").jump(session, step)
+end
+
+local function open_session_popup(session)
+    local win = vim.api.nvim_get_current_win()
+    local buf = vim.api.nvim_win_get_buf(win)
+    local line = vim.api.nvim_win_get_cursor(win)[1]
+    local threads = is_stream_buffer(session, buf)
+            and require("jpr.views.stream").threads_at_cursor(session, line, win)
+        or require("jpr.views.threads").threads_at_cursor(session, buf, line)
+    require("jpr.comments.popup").open(session, threads)
+end
+
+local function open_session_comment(session, opts)
+    local comment_opts = opts or {}
+    local win = vim.api.nvim_get_current_win()
+    local buf = vim.api.nvim_win_get_buf(win)
+    local anchor, error_message = create_comment_anchor(session, win, buf, comment_opts)
+    if not anchor then
+        return jpr().error(error_message)
+    end
+    require("jpr.comments.compose").open_new(session, anchor, { suggest = comment_opts.suggest == true })
+end
+
 --- Attaches thread, comment, conversation, suggest, and submit commands onto `session_mod`.
 function M.attach(session_mod)
-    --- `:Jpr expand`: toggles inline thread expansion across diff and stream buffers.
-    function session_mod.expand_current()
-        local session = session_mod.current()
-        if not session then
-            return jpr().error("no pull request is open in this tab")
-        end
-        session.threads_expanded = not session.threads_expanded
-        require("jpr.views.threads").redraw_all(session)
-        require("jpr.views.stream").refresh(session, true)
+    session_mod.expand_current = function()
+        return with_current_session(session_mod, expand_session_threads)
     end
-
-    --- Jumps to the next (`step == 1`) or previous (`step == -1`) review thread in
-    --- the active diff or stream buffer.
-    function session_mod.jump_thread_current(step)
-        local session = session_mod.current()
-        if not session then
-            return jpr().error("no pull request is open in this tab")
-        end
-        local buf = vim.api.nvim_get_current_buf()
-        if is_stream_buffer(session, buf) then
-            return require("jpr.views.stream").jump(session, "threads", step)
-        end
-        require("jpr.views.threads").jump(session, step)
+    session_mod.jump_thread_current = function(step)
+        return with_current_session(session_mod, function(session)
+            return jump_session_thread(session, step)
+        end)
     end
-
-    --- Opens the floating thread popup for the review thread(s) at the cursor
-    --- in the active diff or stream buffer.
-    function session_mod.popup_current()
-        local session = session_mod.current()
-        if not session then
-            return jpr().error("no pull request is open in this tab")
-        end
-        local win = vim.api.nvim_get_current_win()
-        local buf = vim.api.nvim_win_get_buf(win)
-        local line = vim.api.nvim_win_get_cursor(win)[1]
-        local threads
-        if is_stream_buffer(session, buf) then
-            threads = require("jpr.views.stream").threads_at_cursor(session, line, win)
-        else
-            threads = require("jpr.views.threads").threads_at_cursor(session, buf, line)
-        end
-        require("jpr.comments.popup").open(session, threads)
+    session_mod.popup_current = function()
+        return with_current_session(session_mod, open_session_popup)
     end
-
-    --- Opens the comment compose buffer for the current line, visual range,
-    --- file (`opts.file`), or the only comment the current view can take.
-    function session_mod.comment_current(opts)
-        local session = session_mod.current()
-        if not session then
-            return jpr().error("no pull request is open in this tab")
-        end
-        local comment_opts = opts or {}
-        local win = vim.api.nvim_get_current_win()
-        local buf = vim.api.nvim_win_get_buf(win)
-        local anchor, error_message = create_comment_anchor(session, win, buf, comment_opts)
-        if not anchor then
-            return jpr().error(error_message)
-        end
-        require("jpr.comments.compose").open_new(session, anchor, { suggest = comment_opts.suggest == true })
+    session_mod.comment_current = function(opts)
+        return with_current_session(session_mod, function(session)
+            return open_session_comment(session, opts)
+        end)
     end
-
-    --- Opens a standalone pull-request conversation comment, separate from the pending review.
-    function session_mod.pr_comment_current()
-        local session = session_mod.current()
-        if not session then
-            return jpr().error("no pull request is open in this tab")
-        end
-        require("jpr.comments.compose").open_new(session, { kind = "pr", side = "RIGHT" })
+    session_mod.pr_comment_current = function()
+        return with_current_session(session_mod, function(session)
+            require("jpr.comments.compose").open_new(session, { kind = "pr", side = "RIGHT" })
+        end)
     end
-
-    --- `:Jpr summary`: opens the unified Diff summary + PR conversation buffer
-    --- in the main window scrolled to the top of the diff summary.
-    function session_mod.summary_current()
-        local session = session_mod.current()
-        if not session then
-            return jpr().error("no pull request is open in this tab")
-        end
-        require("jpr.views.conversation").show(session, { target = "summary" })
+    session_mod.summary_current = function()
+        return with_current_session(session_mod, function(session)
+            require("jpr.views.conversation").show(session, { target = "summary" })
+        end)
     end
-
-    --- `:Jpr conversation`: opens the unified Diff summary + PR conversation
-    --- buffer in the main window scrolled to the top of the conversation.
-    function session_mod.conversation_current()
-        local session = session_mod.current()
-        if not session then
-            return jpr().error("no pull request is open in this tab")
-        end
-        require("jpr.views.conversation").show(session, { target = "conversation" })
+    session_mod.conversation_current = function()
+        return with_current_session(session_mod, function(session)
+            require("jpr.views.conversation").show(session, { target = "conversation" })
+        end)
     end
-
-    --- `:Jpr suggest`: turns the local edit at the cursor line into a GitHub
-    --- draft suggestion comment and reverts just that hunk.
-    function session_mod.suggest_current()
-        local session = session_mod.current()
-        if not session then
-            return jpr().error("no pull request is open in this tab")
-        end
-        require("jpr.comments.suggest").run(session)
+    session_mod.suggest_current = function()
+        return with_current_session(session_mod, function(session)
+            require("jpr.comments.suggest").run(session)
+        end)
     end
-
-    --- `:Jpr submit`: opens the review submission modal for the current PR.
-    function session_mod.submit_current()
-        local session = session_mod.current()
-        if not session then
-            return jpr().error("no pull request is open in this tab")
-        end
-        require("jpr.views.submit").open(session)
+    session_mod.submit_current = function()
+        return with_current_session(session_mod, function(session)
+            require("jpr.views.submit").open(session)
+        end)
     end
 end
 

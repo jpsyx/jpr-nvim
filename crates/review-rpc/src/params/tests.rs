@@ -70,7 +70,7 @@ fn anchor_extractor_deserializes_valid_anchor_and_rejects_malformed_object() {
 }
 
 #[test]
-fn reaction_and_review_event_extractors_validate_known_wire_names() {
+fn reaction_and_review_event_extractors_map_known_names_and_reject_unknown() {
     let react = json!({ "messageId": "C1", "content": "THUMBS_UP" });
     assert_eq!(
         get_reaction_from_params(&react).unwrap(),
@@ -111,7 +111,7 @@ fn optional_string_and_u64_extractors_accept_null_and_unsigned_integers() {
 }
 
 #[test]
-fn origin_and_agent_kind_default_and_validate() {
+fn origin_and_agent_kind_default_when_omitted_and_reject_unknown_values() {
     assert_eq!(get_origin_from_params(&json!({})).unwrap(), Origin::Github);
     assert_eq!(
         get_origin_from_params(&Value::Null).unwrap(),
@@ -169,7 +169,7 @@ fn get_round_kind_from_params_maps_known_kinds_and_rejects_unknown() {
 }
 
 #[test]
-fn string_vec_prepass_findings_and_anchor_updates_parse_arrays() {
+fn array_extractors_decode_valid_items_and_reject_wrong_shapes() {
     assert_eq!(
         get_string_vec_from_params(&json!({ "threadIds": ["loc-1"] }), "threadIds").unwrap(),
         vec!["loc-1".to_owned()]
@@ -244,7 +244,7 @@ fn non_object_and_numeric_edge_cases_are_rejected_as_invalid_params() {
 }
 
 #[test]
-fn get_renames_from_params_parses_optional_array_and_rejects_invalid_shape() {
+fn get_renames_from_params_defaults_empty_decodes_pairs_and_rejects_non_array() {
     assert_eq!(get_renames_from_params(&Value::Null).unwrap(), Vec::new());
     assert_eq!(get_renames_from_params(&json!({})).unwrap(), Vec::new());
     let renames = get_renames_from_params(&json!({

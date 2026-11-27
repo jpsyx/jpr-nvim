@@ -1,0 +1,206 @@
+-- Floating thread inspector at the cursor: renders full messages and dispatches
+-- reply (r), edit (e), delete (d), resolve (R), reaction (+), retry (X),
+-- promote (p), and send (s).
+local actions = require("jpr.comments.popup.actions")
+local render = require("jpr.render.threads")
+
+local M = {}
+
+local namespace = vim.api.nvim_create_namespace("jpr-popup")
+
+local function clamp_popup_height(line_count)
+    return math.min(22, math.max(6, line_count))
+end
+
+--- Closes the active floating thread popup for `session`, if any.
+function M.close(session)
+    local popup = session and session.popup
+    if not popup then
+        return
+    end
+    session.popup = nil
+    if vim.api.nvim_win_is_valid(popup.win) then
+        pcall(vim.api.nvim_win_close, popup.win, true)
+    end
+    if vim.api.nvim_buf_is_valid(popup.buf) then
+        pcall(vim.api.nvim_buf_delete, popup.buf, { force = true })
+    end
+end
+
+--- Prompts the user to pick a GitHub reaction and passes the chosen content to `on_select`.
+function M.pick_reaction(on_select)
+    vim.ui.select(render.REACTION_ORDER, {
+        prompt = "Toggle reaction:",
+        format_item = function(content)
+            return ("%s  %s"):format(render.REACTION_EMOJI[content] or "", content)
+        end,
+    }, function(choice)
+        if choice then
+            on_select(choice)
+        end
+    end)
+end
+
+local function paint_popup(popup, threads)
+    local layout = render.create_popup_layout_from_threads(threads)
+    popup.threads, popup.layout = threads, layout
+    vim.bo[popup.buf].modifiable = true
+    vim.api.nvim_buf_set_lines(popup.buf, 0, -1, false, layout.lines)
+    vim.bo[popup.buf].modifiable = false
+    vim.api.nvim_buf_clear_namespace(popup.buf, namespace, 0, -1)
+    for _, highlight in ipairs(layout.highlights) do
+        vim.api.nvim_buf_set_extmark(popup.buf, namespace, highlight.line, highlight.col_start, {
+            end_col = highlight.col_end,
+            hl_group = highlight.group,
+            strict = false,
+        })
+    end
+end
+
+local function merge_updated_thread(item, updated_thread)
+    local updated_messages = updated_thread.messages or {}
+    local is_outdated = item.outdated
+    if updated_thread.outdated ~= nil then
+        is_outdated = updated_thread.outdated
+    end
+    local merged = vim.tbl_extend("force", item, {
+        origin = updated_thread.origin or item.origin,
+        kind = updated_thread.kind or item.kind,
+        state = updated_thread.state,
+        outdated = is_outdated,
+        messages = updated_messages,
+        messageCount = #updated_messages,
+    })
+    merged.agent = updated_thread.agent
+    merged.promotedTo = updated_thread.promotedTo
+    return merged
+end
+
+--- Updates the open popup in place when `updated_thread` changes, clamping the
+--- window height and cursor position if the rendered line count shrinks.
+function M.refresh_from_thread(session, updated_thread)
+    local popup = session and session.popup
+    if
+        not popup
+        or not updated_thread
+        or not popup.buf
+        or not vim.api.nvim_buf_is_valid(popup.buf)
+        or not popup.win
+        or not vim.api.nvim_win_is_valid(popup.win)
+    then
+        return
+    end
+    local target_id = type(updated_thread.id) == "string" and updated_thread.id or updated_thread.threadId
+    local updated_list, was_matched = {}, false
+    for _, item in ipairs(popup.threads or {}) do
+        if item.threadId == target_id then
+            was_matched = true
+            updated_list[#updated_list + 1] = merge_updated_thread(item, updated_thread)
+        else
+            updated_list[#updated_list + 1] = item
+        end
+    end
+    if not was_matched then
+        return
+    end
+    local saved_cursor = vim.api.nvim_win_get_cursor(popup.win)
+    paint_popup(popup, updated_list)
+    if vim.api.nvim_win_is_valid(popup.win) then
+        pcall(vim.api.nvim_win_set_height, popup.win, clamp_popup_height(#popup.layout.lines))
+        local clamped_line = math.max(1, math.min(saved_cursor[1], #popup.layout.lines))
+        pcall(vim.api.nvim_win_set_cursor, popup.win, { clamped_line, saved_cursor[2] })
+    end
+end
+
+--- Silently reloads the open thread popup when it displays `target_thread_id`
+--- (or any thread when `target_thread_id` is nil).
+function M.refresh_open(session, target_thread_id)
+    local popup = session and session.popup
+    if not popup or not popup.win or not vim.api.nvim_win_is_valid(popup.win) or not session.client then
+        return
+    end
+    local watched_ids = {}
+    for _, item in ipairs(popup.threads or {}) do
+        if type(item.threadId) == "string" then
+            watched_ids[item.threadId] = true
+        end
+    end
+    if target_thread_id ~= nil and not watched_ids[target_thread_id] then
+        return
+    end
+    require("jpr.session").request(session, "threads", nil, function(result)
+        if session.closing or session.popup ~= popup then
+            return
+        end
+        for _, thread in ipairs(type(result) == "table" and result.threads or {}) do
+            if watched_ids[thread.id] then
+                M.refresh_from_thread(session, thread)
+            end
+        end
+    end, nil, { silent = true })
+end
+
+--- Scrolls floating thread window `win` to the bottom of `layout` while
+--- ensuring the first line of the last message stays visible at or below the
+--- viewport top, placing the cursor at that message's start.
+function M.scroll_to_last_message(win, layout)
+    if not win or not vim.api.nvim_win_is_valid(win) or type(layout) ~= "table" then
+        return
+    end
+    local lines = layout.lines or {}
+    local ranges = layout.message_ranges or {}
+    local last_range = ranges[#ranges]
+    if #lines == 0 or not last_range then
+        return
+    end
+    vim.api.nvim_win_call(win, function()
+        vim.api.nvim_win_set_cursor(win, { #lines, 0 })
+        vim.cmd("normal! zb")
+        local top_line = vim.fn.winsaveview().topline
+        vim.api.nvim_win_set_cursor(win, { last_range.first, 0 })
+        if top_line > last_range.first then
+            vim.cmd("normal! zt")
+        end
+    end)
+end
+
+--- Opens the floating thread popup displaying `threads` at the cursor.
+function M.open(session, threads)
+    if not threads or #threads == 0 then
+        return require("jpr").info("no review thread on this line")
+    end
+    M.close(session)
+    local buf = vim.api.nvim_create_buf(false, true)
+    vim.bo[buf].buftype = "nofile"
+    vim.bo[buf].bufhidden = "wipe"
+    vim.bo[buf].filetype = "markdown"
+    local popup = { buf = buf, threads = threads }
+    paint_popup(popup, threads)
+    local width = math.min(84, math.max(52, vim.o.columns - 12))
+    popup.win = vim.api.nvim_open_win(buf, true, {
+        relative = "cursor",
+        row = 1,
+        col = 0,
+        width = width,
+        height = clamp_popup_height(#popup.layout.lines),
+        style = "minimal",
+        border = "rounded",
+        title = " Review Thread ",
+        title_pos = "center",
+    })
+    vim.api.nvim_set_option_value("wrap", true, { win = popup.win, scope = "local" })
+    M.scroll_to_last_message(popup.win, popup.layout)
+    session.popup = popup
+    vim.api.nvim_create_autocmd("BufWipeout", {
+        buffer = buf,
+        once = true,
+        callback = function()
+            if session.popup == popup then
+                session.popup = nil
+            end
+        end,
+    })
+    actions.bind_popup_keys(M, session, buf)
+end
+
+return M

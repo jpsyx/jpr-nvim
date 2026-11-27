@@ -43,7 +43,7 @@ local function create_virt_lines_from_input(raw_input, context, explicit_error)
         end
         return { { { "Enter a new name or path", "JprMuted" } } }
     end
-    local resolved = panel_paths.resolve_input_from_context(raw_input, context)
+    local resolved = panel_paths.parse_input_from_context(raw_input, context)
     if not resolved.ok then
         return { { { resolved.error, "JprError" } } }
     end
@@ -123,7 +123,7 @@ local function bind_input_keys(state, on_confirm)
             return
         end
         local raw_input = vim.api.nvim_buf_get_lines(state.buf, 0, 1, false)[1] or ""
-        local resolved = panel_paths.resolve_input_from_context(raw_input, state.context)
+        local resolved = panel_paths.parse_input_from_context(raw_input, state.context)
         if not resolved.ok then
             paint_virt_lines(state, resolved.error)
             return

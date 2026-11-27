@@ -11,7 +11,7 @@ function M.normalize_path(path)
     return normalized
 end
 
-local function resolve_realpath_or_parent(path)
+local function find_realpath_or_parent(path)
     local direct = vim.uv.fs_realpath(path)
     if direct then
         return M.normalize_path(direct)
@@ -40,7 +40,7 @@ local function is_path_under_root(path, root)
     if path == root or path:sub(1, #root + 1) == root .. "/" then
         return true
     end
-    local real_path = resolve_realpath_or_parent(path)
+    local real_path = find_realpath_or_parent(path)
     local real_root = vim.uv.fs_realpath(root)
     if real_path and real_root then
         local norm_root = M.normalize_path(real_root)

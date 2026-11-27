@@ -23,15 +23,15 @@ local function create_mock_session()
     }, origin_win
 end
 
-local function test_resolve_vertical_width()
-    assert(terminal.resolve_vertical_width({ agent_width = nil }, 160) == 64, "40% of 160 cols is 64")
-    assert(terminal.resolve_vertical_width({ agent_width = nil }, 120) == 60, "clamps up to 60 on 120 cols")
-    assert(terminal.resolve_vertical_width({ agent_width = nil }, 70) == 50, "respects columns - 20 on narrow screen")
-    assert(terminal.resolve_vertical_width({ agent_width = 72 }, 160) == 72, "honors explicit agent_width")
-    assert(terminal.resolve_vertical_width({ agent_width = 120 }, 100) == 90, "clamps explicit width to columns - 10")
+local function test_get_vertical_width_clamps_default_and_explicit_column_widths()
+    assert(terminal.get_vertical_width({ agent_width = nil }, 160) == 64, "40% of 160 cols is 64")
+    assert(terminal.get_vertical_width({ agent_width = nil }, 120) == 60, "clamps up to 60 on 120 cols")
+    assert(terminal.get_vertical_width({ agent_width = nil }, 70) == 50, "respects columns - 20 on narrow screen")
+    assert(terminal.get_vertical_width({ agent_width = 72 }, 160) == 72, "honors explicit agent_width")
+    assert(terminal.get_vertical_width({ agent_width = 120 }, 100) == 90, "clamps explicit width to columns - 10")
 end
 
-local function test_on_demand_toggleterm_hooks_shading_and_open_mapping()
+local function test_terminal_loads_toggleterm_on_demand_and_attaches_shading_and_mappings()
     local lazy_loads = {}
     local hl_calls = {}
     local saved = {
@@ -123,7 +123,7 @@ local function test_on_demand_toggleterm_hooks_shading_and_open_mapping()
     end
 end
 
-local function test_hide_without_quitting_and_focus_preservation()
+local function test_hide_keeps_terminal_job_alive_and_preserves_editor_focus()
     jpr.setup({ agent_load_toggleterm = false, agent_direction = "vertical", agent_width = nil })
     local session, origin_win = create_mock_session()
 
@@ -159,7 +159,7 @@ local function test_hide_without_quitting_and_focus_preservation()
     pcall(vim.cmd, "tabclose!")
 end
 
-local function test_float_background_launch_and_tab_breakout_toggling()
+local function test_float_launches_in_background_and_tab_breakout_toggles_cleanly()
     -- 1. Float + focus = false launches in background without opening a float.
     jpr.setup({ agent_load_toggleterm = false, agent_direction = "float" })
     local float_session, float_origin = create_mock_session()
@@ -245,9 +245,9 @@ local function test_float_background_launch_and_tab_breakout_toggling()
     jpr.setup({})
 end
 
-test_resolve_vertical_width()
-test_on_demand_toggleterm_hooks_shading_and_open_mapping()
-test_hide_without_quitting_and_focus_preservation()
-test_float_background_launch_and_tab_breakout_toggling()
+test_get_vertical_width_clamps_default_and_explicit_column_widths()
+test_terminal_loads_toggleterm_on_demand_and_attaches_shading_and_mappings()
+test_hide_keeps_terminal_job_alive_and_preserves_editor_focus()
+test_float_launches_in_background_and_tab_breakout_toggles_cleanly()
 
 print("agent_terminal_spec: ok")

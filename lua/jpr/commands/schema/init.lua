@@ -305,7 +305,7 @@ end
 --- An unknown name returns nil.
 --- @param name string|nil
 --- @return string|nil
-function M.resolve_command_id(name)
+function M.canonicalize_command_id(name)
     if type(name) ~= "string" or name == "" then
         return nil
     end
@@ -352,7 +352,7 @@ end
 --- @param subcommand string|nil
 --- @return string[]
 function M.subcommand_arg_completions(subcommand)
-    local resolved_id = M.resolve_command_id(subcommand) or subcommand
+    local resolved_id = M.canonicalize_command_id(subcommand) or subcommand
     local command = M.find_command_spec(resolved_id)
     if not command or type(command.steps) ~= "table" or #command.steps ~= 1 then
         return {}

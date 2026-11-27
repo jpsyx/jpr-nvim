@@ -191,54 +191,45 @@ local function toggle_viewed_in_session(session_mod, session)
     end)
 end
 
+local function close_current_session(session_mod, forget)
+    local current_tab = vim.api.nvim_get_current_tabpage()
+    if not session_mod.current() and session_mod.close_pending_tab and session_mod.close_pending_tab(current_tab) then
+        return
+    end
+    return run_with_current(session_mod, function(session)
+        forget(session, true)
+    end)
+end
+
+local function set_session_view_mode(session_mod, mode)
+    if mode ~= "unified" and mode ~= "split" then
+        return jpr().error(("invalid diff view %q; expected unified or split"):format(tostring(mode)))
+    end
+    require("jpr.view_mode").set(mode)
+    redraw_all_session_views(session_mod, mode)
+end
+
 local function attach_view_commands(session_mod, forget)
-    --- `:Jpr close`: stops the current tab's engine, closes the tab (unless it is
-    --- the last one) and forgets the session.
-    function session_mod.close_current()
-        local current_tab = vim.api.nvim_get_current_tabpage()
-        if not session_mod.current() and session_mod.close_pending_tab and session_mod.close_pending_tab(current_tab) then
-            return
-        end
-        return run_with_current(session_mod, function(session)
-            forget(session, true)
-        end)
+    session_mod.close_current = function()
+        return close_current_session(session_mod, forget)
     end
-
-    --- `:Jpr toggle`: flips every review between unified and split views, and
-    --- remembers the choice.
-    function session_mod.toggle_view()
-        local mode = require("jpr.view_mode").toggle()
-        redraw_all_session_views(session_mod, mode)
+    session_mod.toggle_view = function()
+        redraw_all_session_views(session_mod, require("jpr.view_mode").toggle())
     end
-
-    --- `:Jpr toggle <unified|split>`: sets the diff view mode and redraws active reviews.
-    function session_mod.set_view_mode(mode)
-        if mode ~= "unified" and mode ~= "split" then
-            return jpr().error(("invalid diff view %q; expected unified or split"):format(tostring(mode)))
-        end
-        require("jpr.view_mode").set(mode)
-        redraw_all_session_views(session_mod, mode)
+    session_mod.set_view_mode = function(mode)
+        return set_session_view_mode(session_mod, mode)
     end
-
-    --- `:Jpr stream`: shows the current review's stream beside the panel and
-    --- focuses it.
-    function session_mod.stream_current()
+    session_mod.stream_current = function()
         return run_with_current(session_mod, function(session)
             require("jpr.views.stream").show(session, { focus = true })
         end)
     end
-
-    --- `:Jpr panel`: toggles or reopens the diff sidebar panel in the current
-    --- review tab.
-    function session_mod.panel_current()
+    session_mod.panel_current = function()
         return run_with_current(session_mod, function(session)
             require("jpr.views.panel").toggle(session)
         end)
     end
-
-    --- Toggles viewed on the current file or directory across the sidebar panel,
-    --- full diff stream, and single-file editor or split base buffers.
-    function session_mod.toggle_viewed_current()
+    session_mod.toggle_viewed_current = function()
         return run_with_current(session_mod, function(session)
             toggle_viewed_in_session(session_mod, session)
         end)

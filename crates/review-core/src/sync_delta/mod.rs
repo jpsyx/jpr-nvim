@@ -141,17 +141,10 @@ fn count_thread_and_comment_deltas(
                 _ => {}
             }
         }
-        for message in &thread.messages {
-            let canonical_message_id = canonicalize_id(&message.id, id_map);
-            let previous_body = before_message_bodies
-                .get(canonical_message_id)
-                .or_else(|| before_message_bodies.get(message.id.as_str()));
-            match previous_body {
-                None => new_comments += 1,
-                Some(old_body) if *old_body != message.body.as_str() => updated_comments += 1,
-                Some(_) => {}
-            }
-        }
+        let (thread_new, thread_updated) =
+            count_message_deltas_for_thread(thread, &before_message_bodies, id_map);
+        new_comments += thread_new;
+        updated_comments += thread_updated;
     }
     (
         new_comments,
@@ -159,6 +152,27 @@ fn count_thread_and_comment_deltas(
         resolved_threads,
         reopened_threads,
     )
+}
+
+fn count_message_deltas_for_thread(
+    thread: &Thread,
+    before_message_bodies: &BTreeMap<&str, &str>,
+    id_map: &BTreeMap<String, String>,
+) -> (usize, usize) {
+    let mut new_comments = 0;
+    let mut updated_comments = 0;
+    for message in &thread.messages {
+        let canonical_message_id = canonicalize_id(&message.id, id_map);
+        let previous_body = before_message_bodies
+            .get(canonical_message_id)
+            .or_else(|| before_message_bodies.get(message.id.as_str()));
+        match previous_body {
+            None => new_comments += 1,
+            Some(old_body) if *old_body != message.body.as_str() => updated_comments += 1,
+            Some(_) => {}
+        }
+    }
+    (new_comments, updated_comments)
 }
 
 #[cfg(test)]

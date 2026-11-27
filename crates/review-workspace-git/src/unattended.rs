@@ -157,8 +157,8 @@ impl PipeReader {
             let bytes = Arc::clone(&bytes);
             thread::spawn(move || {
                 let mut chunk = [0_u8; 8192];
-                while let Ok(count @ 1..) = pipe.read(&mut chunk) {
-                    lock(&bytes).extend_from_slice(&chunk[..count]);
+                while let Ok(bytes_read @ 1..) = pipe.read(&mut chunk) {
+                    lock(&bytes).extend_from_slice(&chunk[..bytes_read]);
                 }
             })
         });

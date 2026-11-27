@@ -20,7 +20,7 @@ pub fn state_dir(
 ) -> Result<PathBuf> {
     check_component("owner", owner)?;
     check_component("repository name", repo)?;
-    let base = resolve_state_base(xdg_state_home, home).join(app);
+    let base = build_state_base_dir(xdg_state_home, home).join(app);
     Ok(base.join(owner).join(repo).join(format!("pr-{number}")))
 }
 
@@ -38,7 +38,7 @@ pub fn local_state_dir(
     worktree_root: &Path,
     branch: &str,
 ) -> Result<PathBuf> {
-    let base = resolve_state_base(xdg_state_home, home).join(app);
+    let base = build_state_base_dir(xdg_state_home, home).join(app);
     let repo_dir = if let Some((owner, repo)) = owner_repo {
         check_component("owner", owner)?;
         check_component("repository name", repo)?;
@@ -61,7 +61,7 @@ pub fn local_state_dir(
     Ok(repo_dir.join(format!("local-{branch_slug}-{branch_hash:08x}")))
 }
 
-fn resolve_state_base(xdg_state_home: Option<&Path>, home: &Path) -> PathBuf {
+fn build_state_base_dir(xdg_state_home: Option<&Path>, home: &Path) -> PathBuf {
     xdg_state_home
         .filter(|path| path.is_absolute())
         .map_or_else(|| home.join(".local").join("state"), Path::to_path_buf)

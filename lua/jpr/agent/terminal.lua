@@ -5,7 +5,7 @@ local agent_window = require("jpr.agent.window")
 
 local M = {}
 
-M.resolve_vertical_width = agent_window.resolve_vertical_width
+M.get_vertical_width = agent_window.get_vertical_width
 
 local function jpr()
     return require("jpr")

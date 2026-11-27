@@ -38,7 +38,7 @@ fn create_renamed_local_session() -> Arc<Mutex<ReviewSession>> {
 }
 
 #[test]
-fn serve_handles_refresh_worktree_and_reports_protocol_7() {
+fn serve_refresh_worktree_moves_renamed_local_threads_and_reports_protocol_version() {
     let shared = create_renamed_local_session();
     let input = request(1, "initialize")
         + &build_request_with_params(

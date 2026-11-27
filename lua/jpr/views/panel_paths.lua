@@ -140,7 +140,7 @@ end
 
 --- Resolves `raw_input` against `context` (`mode`, `worktree`, `current_dir`,
 --- optional `target_path` and `is_directory`), enforcing worktree boundaries.
-function M.resolve_input_from_context(raw_input, context)
+function M.parse_input_from_context(raw_input, context)
     local parsed, input_err, err_mode = validate_raw_input(raw_input, context)
     if not parsed then
         return { ok = false, error = input_err, mode = err_mode }

@@ -12,7 +12,7 @@ local panel_view = require("jpr.views.panel")
 local session = require("jpr.session")
 local view_mode = require("jpr.view_mode")
 
-local function test_compute_layout_widths()
+local function test_compute_layout_widths_respects_panel_main_and_agent_bounds()
     -- 1. Sidebar + Editor + AI -> both side widths locked, editor fills middle.
     local all_three = layout.compute_layout_widths({
         has_panel = true,
@@ -120,7 +120,7 @@ local function attach_fake_vertical_agent(review)
     return win, buf
 end
 
-local function test_live_layout_transitions_and_panel_toggle()
+local function test_layout_transitions_resize_windows_and_toggle_panel_cleanly()
     local review = setup_session()
     local main_window = require("jpr.views.main_window")
 
@@ -229,7 +229,7 @@ local function test_live_layout_transitions_and_panel_toggle()
     jpr.setup({})
 end
 
-test_compute_layout_widths()
-test_live_layout_transitions_and_panel_toggle()
+test_compute_layout_widths_respects_panel_main_and_agent_bounds()
+test_layout_transitions_resize_windows_and_toggle_panel_cleanly()
 
 print("layout_and_panel_toggle_spec: ok")

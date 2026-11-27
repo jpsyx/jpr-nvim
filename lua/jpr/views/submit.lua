@@ -118,16 +118,16 @@ end
 
 local function build_submit_confirm_headline(event, draft_count, body)
     local action_label = EVENT_LABELS[event] or tostring(event)
-    local count = tonumber(draft_count) or 0
-    local draft_noun = count == 1 and "draft comment" or "draft comments"
+    local normalized_draft_count = tonumber(draft_count) or 0
+    local draft_noun = normalized_draft_count == 1 and "draft comment" or "draft comments"
     local has_summary = vim.trim(body) ~= ""
-    if count == 0 and has_summary then
+    if normalized_draft_count == 0 and has_summary then
         return ("Submit %s review with 0 draft comments (summary only) to GitHub?"):format(action_label)
     end
     if has_summary then
-        return ("Submit %s review with %d %s and a summary to GitHub?"):format(action_label, count, draft_noun)
+        return ("Submit %s review with %d %s and a summary to GitHub?"):format(action_label, normalized_draft_count, draft_noun)
     end
-    return ("Submit %s review with %d %s to GitHub?"):format(action_label, count, draft_noun)
+    return ("Submit %s review with %d %s to GitHub?"):format(action_label, normalized_draft_count, draft_noun)
 end
 
 local function execute_submit_review(session, state, event, body)

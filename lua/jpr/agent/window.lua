@@ -6,7 +6,7 @@ local M = {}
 
 --- Computes the vertical split width in columns from `config` and optional
 --- `total_columns` (defaulting to `vim.o.columns`).
-function M.resolve_vertical_width(config, total_columns)
+function M.get_vertical_width(config, total_columns)
     local columns = (type(total_columns) == "number" and total_columns > 0) and total_columns or vim.o.columns
     local configured = type(config) == "table" and config.agent_width or nil
     if type(configured) == "number" and configured > 0 then
@@ -110,7 +110,7 @@ local function open_split_window(session, buf, direction, config)
     if not target_win or not vim.api.nvim_win_is_valid(target_win) then
         return nil
     end
-    local width = M.resolve_vertical_width(config)
+    local width = M.get_vertical_width(config)
     local ok, win = pcall(vim.api.nvim_open_win, buf, true, { split = "right", win = target_win, width = width })
     return (ok and win and vim.api.nvim_win_is_valid(win)) and win or nil
 end

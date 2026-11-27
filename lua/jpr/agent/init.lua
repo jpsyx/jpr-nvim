@@ -197,8 +197,8 @@ local function maybe_notify_background_float(dispatch)
     if (jpr().config.agent_direction or "vertical") ~= "float" then
         return
     end
-    local count = type(dispatch.threadIds) == "table" and #dispatch.threadIds or 0
-    local label = count > 0 and ("sent %d thread(s) to agent (press ga to open)"):format(count)
+    local thread_count = type(dispatch.threadIds) == "table" and #dispatch.threadIds or 0
+    local label = thread_count > 0 and ("sent %d thread(s) to agent (press ga to open)"):format(thread_count)
         or "sent prompt to agent (press ga to open)"
     jpr().info(label)
 end
@@ -241,17 +241,17 @@ end
 
 local function open_send_confirmation(session, dispatch)
     close_send_confirm(session)
-    local count = type(dispatch.threadIds) == "table" and #dispatch.threadIds or 0
+    local thread_count = type(dispatch.threadIds) == "table" and #dispatch.threadIds or 0
     local target_kind = (type(dispatch.profile) == "table" and dispatch.profile.kind) or jpr().config.agent or "claude"
     local name = agent_display_name(target_kind)
-    local noun = count == 1 and "thread" or "threads"
-    local title_noun = count == 1 and "Thread" or "Threads"
+    local noun = thread_count == 1 and "thread" or "threads"
+    local title_noun = thread_count == 1 and "Thread" or "Threads"
     local state
     state = confirm.open({
         title = " Send to Coding Agent ",
-        headline = ("Send %d local review %s to %s?"):format(count, noun, name),
+        headline = ("Send %d local review %s to %s?"):format(thread_count, noun, name),
         items = command.extract_prompt_preview_items(dispatch.prompt, 5),
-        confirm_label = ("Send %d %s to %s"):format(count, title_noun, name),
+        confirm_label = ("Send %d %s to %s"):format(thread_count, title_noun, name),
         confirm_badge = "[send]",
         confirm_help = ("Auto-submit %s to the %s terminal while keeping focus here."):format(noun, name),
         cancel_label = "Cancel",

@@ -9,7 +9,7 @@ local jpr = require("jpr")
 local command = require("jpr.agent.command")
 local delivery = require("jpr.agent.delivery")
 
-local function test_pure_paste_submit_and_visual_detection()
+local function test_paste_submit_sequence_wraps_bracketed_paste_and_detects_visual_mode()
     local dirty = "Line 1 \27[201~injected\27[31m text"
     assert(
         delivery.build_bracketed_paste_from_prompt(dirty) == "\27[200~Line 1 [201~injected[31m text\27[201~",
@@ -19,9 +19,9 @@ local function test_pure_paste_submit_and_visual_detection()
     assert(delivery.profile_to_submit_bytes({ submitKey = "enter" }) == "\r", "enter submit byte")
     assert(delivery.profile_to_submit_bytes(nil) == "\r", "default enter submit byte")
 
-    assert(delivery.resolve_submit_delay_ms({}, { submitDelayMs = 200 }, "claude") == 350, "claude enforces >= 350ms settle")
-    assert(delivery.resolve_submit_delay_ms({}, { submitDelayMs = 200 }, "codex") == 200, "codex keeps 200ms")
-    assert(delivery.resolve_submit_delay_ms({ agent_submit_delay_ms = 25 }, { submitDelayMs = 200 }, "claude") == 25, "config override wins")
+    assert(delivery.get_submit_delay_ms({}, { submitDelayMs = 200 }, "claude") == 350, "claude enforces >= 350ms settle")
+    assert(delivery.get_submit_delay_ms({}, { submitDelayMs = 200 }, "codex") == 200, "codex keeps 200ms")
+    assert(delivery.get_submit_delay_ms({ agent_submit_delay_ms = 25 }, { submitDelayMs = 200 }, "claude") == 25, "config override wins")
 
     local buf = vim.api.nvim_create_buf(false, true)
     vim.api.nvim_buf_set_lines(buf, 0, -1, false, { "prompt>", "", "-- VISUAL --", "" })
@@ -88,7 +88,7 @@ local function create_fake_agent_state(buf_lines, is_ready)
     return session, agent_state
 end
 
-local function test_readiness_gating_and_fallback_timer()
+local function test_pty_dispatch_waits_for_readiness_or_flushes_on_fallback_timer()
     local writes = {}
     local submitted = {}
     local original_chansend = vim.fn.chansend
@@ -179,7 +179,7 @@ local function test_readiness_gating_and_fallback_timer()
     command.is_claude_vim_mode_enabled = original_vim_mode
 end
 
-local function test_vim_mode_normal_vs_visual_and_exit_guard()
+local function test_vim_mode_switches_to_insert_before_paste_and_aborts_on_exit()
     local writes = {}
     local submitted = {}
     local original_chansend = vim.fn.chansend
@@ -242,8 +242,8 @@ local function test_vim_mode_normal_vs_visual_and_exit_guard()
     command.is_claude_vim_mode_enabled = original_vim_mode
 end
 
-test_pure_paste_submit_and_visual_detection()
-test_readiness_gating_and_fallback_timer()
-test_vim_mode_normal_vs_visual_and_exit_guard()
+test_paste_submit_sequence_wraps_bracketed_paste_and_detects_visual_mode()
+test_pty_dispatch_waits_for_readiness_or_flushes_on_fallback_timer()
+test_vim_mode_switches_to_insert_before_paste_and_aborts_on_exit()
 
 print("agent_delivery_spec: ok")
