@@ -260,3 +260,34 @@ fn linking_unions_collapsed_directories_that_still_contain_viewed_files() {
         BTreeSet::from(["lib".to_owned(), "src".to_owned()])
     );
 }
+
+#[test]
+fn linking_keeps_collapsed_dirs_with_unviewed_and_already_dismissed_files() {
+    let fakes = Fakes::new(200);
+    let mut snapshot = unviewed_pr_snapshot();
+    snapshot.files = vec![
+        changed_file("src/a.rs", ViewedState::Unviewed),
+        changed_file("lib/old.rs", ViewedState::Dismissed),
+        changed_file("lib/new.rs", ViewedState::Unviewed),
+    ];
+    fakes.forge.set_snapshot(snapshot);
+    fakes.workspace.put_base("src/a.rs", "old\n");
+    fakes.workspace.put_disk("src/a.rs", "new\n");
+    let mut prior = StoreSnapshot {
+        files: vec![
+            changed_file("lib/old.rs", ViewedState::Dismissed),
+            changed_file("lib/new.rs", ViewedState::Unviewed),
+        ],
+        ..StoreSnapshot::default()
+    };
+    prior.local.collapsed_dirs = BTreeSet::from(["lib".to_owned()]);
+    fakes.store.set_retarget_snapshot(Some(prior));
+
+    let mut session = open_local(&fakes);
+    session.set_collapsed("src", true).unwrap();
+    let view = session.sync().unwrap();
+    assert_eq!(
+        view.collapsed_dirs,
+        BTreeSet::from(["lib".to_owned(), "src".to_owned()])
+    );
+}

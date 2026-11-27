@@ -309,3 +309,70 @@ fn refresh_worktree_rewrites_collapsed_directory_prefixes() {
         ])
     );
 }
+
+#[test]
+fn disk_edit_dismissing_viewed_local_file_expands_only_its_collapsed_ancestors() {
+    let fakes = Fakes::new(100);
+    fakes.workspace.put_disk("apps/cli/a.rs", "fn a() {}\n");
+    fakes.workspace.put_disk("apps/cli/sub/b.rs", "fn b() {}\n");
+    fakes.workspace.put_disk("apps/other/c.rs", "fn c() {}\n");
+    let mut session = fakes.open_synced();
+    session.refresh_worktree(&[]).unwrap();
+
+    session.set_viewed("apps/cli/a.rs", true).unwrap();
+    session.set_viewed("apps/cli/sub/b.rs", true).unwrap();
+    session.set_viewed("apps/other/c.rs", true).unwrap();
+    session.set_collapsed("apps/cli/sub", true).unwrap();
+    session.set_collapsed("apps/other", true).unwrap();
+    session.set_collapsed("apps/cli", true).unwrap();
+    session.set_collapsed("apps", true).unwrap();
+
+    // First edit transitions Viewed -> Dismissed: opens apps and apps/cli only.
+    fakes
+        .workspace
+        .put_disk("apps/cli/a.rs", "fn a() { let x = 1; }\n");
+    session.poll_worktree_files().unwrap();
+    assert_eq!(
+        session.view().collapsed_dirs,
+        BTreeSet::from(["apps/cli/sub".to_owned(), "apps/other".to_owned()])
+    );
+
+    // Intentionally re-collapsing while already Dismissed stays collapsed on further edits.
+    session.set_collapsed("apps/cli", true).unwrap();
+    session.set_collapsed("apps", true).unwrap();
+    fakes
+        .workspace
+        .put_disk("apps/cli/a.rs", "fn a() { let x = 2; }\n");
+    session.poll_worktree_files().unwrap();
+    assert_eq!(
+        session.view().collapsed_dirs,
+        BTreeSet::from([
+            "apps".to_owned(),
+            "apps/cli".to_owned(),
+            "apps/cli/sub".to_owned(),
+            "apps/other".to_owned(),
+        ])
+    );
+}
+
+#[test]
+fn refresh_worktree_dismissing_viewed_local_file_expands_only_its_collapsed_ancestors() {
+    let fakes = Fakes::new(100);
+    fakes.workspace.put_disk("apps/cli/a.rs", "fn a() {}\n");
+    fakes.workspace.put_disk("apps/other/c.rs", "fn c() {}\n");
+    let mut session = fakes.open_synced();
+    session.refresh_worktree(&[]).unwrap();
+
+    session.set_viewed("apps/cli/a.rs", true).unwrap();
+    session.set_viewed("apps/other/c.rs", true).unwrap();
+    session.set_collapsed("apps/other", true).unwrap();
+    session.set_collapsed("apps/cli", true).unwrap();
+    session.set_collapsed("apps", true).unwrap();
+
+    fakes.workspace.put_disk("apps/cli/a.rs", "fn a() { 1 }\n");
+    let view = session.refresh_worktree(&[]).unwrap();
+    assert_eq!(
+        view.collapsed_dirs,
+        BTreeSet::from(["apps/other".to_owned()])
+    );
+}

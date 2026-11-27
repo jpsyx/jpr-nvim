@@ -48,12 +48,14 @@ impl ReviewSession {
             self.saved.session.agent_session_id = prior.session.agent_session_id;
             self.saved.session.agent_kind = prior.session.agent_kind;
         }
+        self.saved.files = prior.files;
         self.saved.registry = prior.registry;
         for (path, state) in &self.saved.local.local_viewed {
             if *state == ViewedState::Viewed {
                 self.saved.registry.queued_viewed.remove(path);
             }
         }
+        crate::viewed::apply_queued(&mut self.saved.files, &self.saved.registry.queued_viewed);
         self.saved.local.next_round = self.saved.local.next_round.max(prior.local.next_round);
         self.saved.local.next_local_id = self
             .saved

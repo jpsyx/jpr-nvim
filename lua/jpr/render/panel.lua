@@ -361,6 +361,23 @@ local function add_directory_line(content, row, dir_path, parent_dir, is_collaps
     content.selectable_lines[#content.selectable_lines + 1] = line_1based
 end
 
+local function is_directory_collapsed(collapsed_dirs, parent_dir, segment, dir_path)
+    if collapsed_dirs[dir_path] == true then
+        return true
+    end
+    if segment:find("/", 1, true) == nil then
+        return false
+    end
+    local current = parent_dir
+    for part in segment:gmatch("[^/]+") do
+        current = current and (current .. "/" .. part) or part
+        if collapsed_dirs[current] == true then
+            return true
+        end
+    end
+    return false
+end
+
 local function render_tree_rows(content, view, collapsed_dirs, is_unlinked_local, hide_viewed)
     local files = view.files or {}
     local tree = view.tree or M.create_flat_tree_from_files(files)
@@ -389,7 +406,7 @@ local function render_tree_rows(content, view, collapsed_dirs, is_unlinked_local
         else
             local segment = tostring(row.name):gsub("/+$", "")
             local dir_path = parent_dir and (parent_dir .. "/" .. segment) or segment
-            local is_collapsed = collapsed_dirs[dir_path] == true
+            local is_collapsed = is_directory_collapsed(collapsed_dirs, parent_dir, segment, dir_path)
             local viewed_count, total_count = count_descendant_viewed_files(tree, index, row.depth, files)
             add_directory_line(content, row, dir_path, parent_dir, is_collapsed, viewed_count, total_count)
             if is_collapsed then

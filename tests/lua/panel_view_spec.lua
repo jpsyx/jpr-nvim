@@ -285,15 +285,23 @@ review.panel.collapsed_dirs["src"] = true
 panel_view.render(review, tree_view)
 assert(review.panel.collapsed_dirs["src"] == nil, "a local collapsed_dirs assignment does not survive render")
 
--- h on child file jumps to parent_dir; h on expanded dir collapses it.
+-- h on child file jumps to parent_dir; h on expanded dir collapses it without opening stream.
 vim.api.nvim_win_set_cursor(panel_win, { 11, 0 })
 local collapse_requests_before_file_h = #find_log_lines('"method":"setCollapsed"')
 run_panel_key("h")
 assert(vim.api.nvim_win_get_cursor(panel_win)[1] == 9, "h on child file jumps to parent src/ dir")
 assert(#find_log_lines('"method":"setCollapsed"') == collapse_requests_before_file_h, "h on a file sends no setCollapsed")
+local stream_requests_before_collapse = #find_log_lines('"method":"stream"')
+local was_stream_opened = review.stream_opened
+review.stream_opened = false
 stage_collapsed({ "src" })
 run_panel_key("h")
 wait_src_collapsed("h on expanded dir collapses it", true)
+assert(
+    #find_log_lines('"method":"stream"') == stream_requests_before_collapse,
+    "setCollapsed must not trigger a stream request"
+)
+review.stream_opened = was_stream_opened
 assert(vim.api.nvim_buf_get_lines(review.panel.buf, 8, 9, false)[1] == "▸ src/ (0/2)", "collapsed src/ shows viewed files out of all descendant files")
 assert(vim.api.nvim_win_get_cursor(panel_win)[1] == 9, "cursor stays on collapsed dir")
 local collapse_request = find_log_lines('"method":"setCollapsed"')[#find_log_lines('"method":"setCollapsed"')]

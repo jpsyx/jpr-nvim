@@ -301,12 +301,14 @@ impl ReviewSession {
             .iter()
             .map(|file| file.path.clone())
             .collect();
+        let should_prune_empty = !self.base_cache.merge_base.is_empty();
         self.saved.local.collapsed_dirs = crate::collapsed::create_collapsed_dirs_after_pull(
             &self.saved.local.collapsed_dirs,
             previous,
             forge,
             &self.saved.files,
             &local_only_paths,
+            should_prune_empty,
         );
     }
 
