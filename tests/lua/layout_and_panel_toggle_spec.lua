@@ -177,7 +177,8 @@ local function test_live_layout_transitions_and_panel_toggle()
     assert(vim.api.nvim_win_get_width(review.panel.win) == 54, "manual resize preserved when topology unchanged")
 
     -- 6. Toggle sidebar closed with `:Jpr panel` -> editor takes main width, AI stays 50.
-    review.panel.collapsed_dirs["src"] = true
+    review.view.collapsedDirs = { "src" }
+    panel_view.render(review, review.view)
     session.panel_current()
     assert(not panel_view.is_open(review), "panel closed by :Jpr panel")
     assert(vim.wait(1000, function()
@@ -194,6 +195,16 @@ local function test_live_layout_transitions_and_panel_toggle()
     end), "gP reopens sidebar at width 40")
     assert(review.panel.collapsed_dirs["src"] == true, "collapsed_dirs preserved across close/reopen")
     assert(vim.api.nvim_win_get_width(agent_win) == 50, "agent stays 50 after sidebar reopens")
+
+    session.panel_current()
+    assert(not panel_view.is_open(review), "sidebar closed before a sync")
+    local expanded = vim.deepcopy(review.view)
+    expanded.collapsedDirs = nil
+    require("jpr.session").show(review, expanded)
+    helpers.press_key("gP")
+    assert(vim.wait(1000, function()
+        return panel_view.is_open(review) and review.panel.collapsed_dirs["src"] == nil
+    end), "a sync while the sidebar is closed expands src on reopen")
 
     -- 8. Cannot close sidebar when it is the only window in the tab.
     vim.api.nvim_win_close(agent_win, true)

@@ -63,6 +63,7 @@ fn allowlist_permits_only_expected_socket_methods() {
         "preparePrepass",
         "prepareAgentLaunch",
         "setViewed",
+        "setCollapsed",
         "reply",
         "editMessage",
         "deleteMessage",

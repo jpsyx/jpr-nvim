@@ -121,8 +121,9 @@ impl ReviewSession {
             validate_safe_relative_path(&rename.old_path)?;
             validate_safe_relative_path(&rename.new_path)?;
         }
-        let (did_migrate_threads, did_migrate_local) = self.migrate_renames(renames);
-        if did_migrate_threads || did_migrate_local {
+        let (did_migrate_threads, did_migrate_local, did_migrate_collapsed) =
+            self.migrate_renames(renames);
+        if did_migrate_threads || did_migrate_local || did_migrate_collapsed {
             self.split_and_save_threads()?;
         }
         self.invalidate_base_renames();
@@ -258,9 +259,9 @@ impl ReviewSession {
         (additions, deletions)
     }
 
-    fn migrate_renames(&mut self, renames: &[PathRename]) -> (bool, bool) {
+    fn migrate_renames(&mut self, renames: &[PathRename]) -> (bool, bool, bool) {
         if renames.is_empty() {
-            return (false, false);
+            return (false, false, false);
         }
         let mut did_migrate_threads = false;
         for thread in &mut self.threads {
@@ -283,7 +284,27 @@ impl ReviewSession {
             }
         }
         self.saved.local.local_viewed = updated_viewed;
-        (did_migrate_threads, did_migrate_viewed)
+        let did_migrate_collapsed = self.rewrite_collapsed_dirs(renames);
+        (
+            did_migrate_threads,
+            did_migrate_viewed,
+            did_migrate_collapsed,
+        )
+    }
+
+    fn rewrite_collapsed_dirs(&mut self, renames: &[PathRename]) -> bool {
+        let mut did_change = false;
+        let mut updated = BTreeSet::new();
+        for path in std::mem::take(&mut self.saved.local.collapsed_dirs) {
+            if let Some(rewritten) = apply_renames_to_path(&path, renames) {
+                updated.insert(rewritten);
+                did_change = true;
+            } else {
+                updated.insert(path);
+            }
+        }
+        self.saved.local.collapsed_dirs = updated;
+        did_change
     }
 
     fn emit_refresh_events(

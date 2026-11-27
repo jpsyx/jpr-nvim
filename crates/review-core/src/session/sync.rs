@@ -6,6 +6,7 @@ use review_model::{
 };
 
 use super::ReviewSession;
+use crate::collapsed::viewed_states_from_files;
 use crate::comments::{merge_unflushed_threads, reconcile_concurrent_edits, record_agreed_bodies};
 use crate::ports::{FastForwardOutcome, ForgeSnapshot};
 use crate::reanchor::{collect_changed_digest_paths, hash_bounded_file_bytes};
@@ -270,6 +271,8 @@ impl ReviewSession {
     }
 
     fn reconcile_viewed_and_local_files(&mut self, incoming_files: &mut Vec<ChangedFile>) {
+        let previous = viewed_states_from_files(&self.saved.files);
+        let forge = viewed_states_from_files(incoming_files);
         let did_promote = self.promote_adopted_local_viewed(incoming_files);
         let queue = &mut self.saved.registry.queued_viewed;
         drop_stale_marks(queue, incoming_files);
@@ -285,6 +288,26 @@ impl ReviewSession {
             self.refresh_local_files();
             self.prune_stale_local_viewed();
         }
+        self.apply_collapsed_dirs_after_pull(&previous, &forge);
+    }
+
+    fn apply_collapsed_dirs_after_pull(
+        &mut self,
+        previous: &std::collections::BTreeMap<String, review_model::ViewedState>,
+        forge: &std::collections::BTreeMap<String, review_model::ViewedState>,
+    ) {
+        let local_only_paths: Vec<String> = self
+            .local_files
+            .iter()
+            .map(|file| file.path.clone())
+            .collect();
+        self.saved.local.collapsed_dirs = crate::collapsed::create_collapsed_dirs_after_pull(
+            &self.saved.local.collapsed_dirs,
+            previous,
+            forge,
+            &self.saved.files,
+            &local_only_paths,
+        );
     }
 
     fn handle_head_moved(&mut self, previous_sha: &str, pr_head_sha: &str) -> Result<SessionView> {

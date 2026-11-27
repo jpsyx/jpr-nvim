@@ -155,6 +155,29 @@ local function find_dir_line(panel, dir_path)
     return nil
 end
 
+--- Collapse set from `view.collapsedDirs`. A missing value or a non-array means nothing is collapsed.
+local function collapsed_set_from_view(view)
+    local set = {}
+    local paths = type(view) == "table" and view.collapsedDirs or nil
+    if type(paths) ~= "table" or (vim.islist and not vim.islist(paths)) then
+        return set
+    end
+    for _, path in ipairs(paths) do
+        if type(path) == "string" then
+            set[path] = true
+        end
+    end
+    return set
+end
+
+local function request_set_collapsed(session, path, collapsed)
+    require("jpr.session").request(session, "setCollapsed", { path = path, collapsed = collapsed }, function(updated_view)
+        if type(updated_view) == "table" then
+            require("jpr.session").show(session, updated_view)
+        end
+    end)
+end
+
 local function handle_left(session)
     local row_info = M.get_row_under_cursor(session)
     if not row_info then
@@ -162,8 +185,7 @@ local function handle_left(session)
     end
     local panel, row = session.panel, row_info.row
     if row.kind == "dir" and not row.is_collapsed then
-        panel.collapsed_dirs[row.path] = true
-        return M.render(session, session.view or {})
+        return request_set_collapsed(session, row.path, true)
     end
     if row.parent_dir then
         local parent_line = find_dir_line(panel, row.parent_dir)
@@ -183,8 +205,7 @@ local function handle_right(session)
         return
     end
     if row.is_collapsed then
-        panel.collapsed_dirs[row.path] = nil
-        return M.render(session, session.view or {})
+        return request_set_collapsed(session, row.path, false)
     end
     local current_index = find_selectable_index(panel.selectable_lines, row_info.line)
     local next_line = current_index and panel.selectable_lines[current_index + 1] or nil
@@ -202,8 +223,7 @@ local function handle_open_key(session)
     local row = row_info.row
     if row.kind == "dir" then
         if row.is_collapsed then
-            session.panel.collapsed_dirs[row.path] = nil
-            M.render(session, session.view or {})
+            request_set_collapsed(session, row.path, false)
         end
         return
     end
@@ -217,8 +237,7 @@ local function handle_enter_key(session)
     end
     local row = row_info.row
     if row.kind == "dir" then
-        session.panel.collapsed_dirs[row.path] = (not row.is_collapsed) and true or nil
-        return M.render(session, session.view or {})
+        return request_set_collapsed(session, row.path, not row.is_collapsed)
     end
     M.open_file_under_cursor(session)
 end
@@ -357,7 +376,7 @@ function M.open(session)
     if session.tab and vim.api.nvim_tabpage_is_valid(session.tab) and vim.api.nvim_get_current_tabpage() ~= session.tab then
         vim.api.nvim_set_current_tabpage(session.tab)
     end
-    local collapsed_dirs = (session.panel and session.panel.collapsed_dirs) or session.panel_collapsed_dirs or {}
+    local collapsed_dirs = collapsed_set_from_view(session.view)
     M.close(session)
     local buf = vim.api.nvim_create_buf(false, true)
     local buf_key = require("jpr.session").buf_key(session)
@@ -459,8 +478,11 @@ function M.render(session, view)
         effective_view = vim.tbl_extend("force", type(view) == "table" and view or {}, { isReadOnly = true })
     end
     local width = vim.api.nvim_win_is_valid(panel.win) and vim.api.nvim_win_get_width(panel.win) or nil
+    local collapsed_dirs = collapsed_set_from_view(effective_view)
+    panel.collapsed_dirs = collapsed_dirs
+    session.panel_collapsed_dirs = collapsed_dirs
     local built = render.build(effective_view, os.time(), {
-        collapsed_dirs = panel.collapsed_dirs,
+        collapsed_dirs = collapsed_dirs,
         width = width,
         checkout_branch = cached_checkout_branch(session),
     })

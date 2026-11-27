@@ -1,6 +1,6 @@
 //! The on-disk format's tests: round trips, versions, and defaults.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use review_core::fakes::{changed_file, sample_pr};
 use review_core::ports::{LocalStoreState, SyncRegistry};
@@ -125,6 +125,7 @@ fn the_local_file_round_trips_v1_and_refuses_version_9() {
             promoted_to: Some("PRRT_promoted".into()),
         }],
         local_viewed: BTreeMap::from([("src/local.rs".to_owned(), ViewedState::Viewed)]),
+        collapsed_dirs: BTreeSet::from(["src/core".to_owned()]),
     };
     let bytes = encode_local(&local).unwrap();
     let encoded_json = as_json(&bytes);
@@ -137,6 +138,7 @@ fn the_local_file_round_trips_v1_and_refuses_version_9() {
         encoded_json["threads"][0]["promotedTo"],
         json!("PRRT_promoted")
     );
+    assert_eq!(encoded_json["collapsedDirs"], json!(["src/core"]));
     assert_eq!(decode_local(&bytes).unwrap(), local);
 
     let error = decode_local(br#"{"version": 9}"#).unwrap_err();
@@ -155,6 +157,7 @@ fn local_json_v1_without_local_viewed_deserializes() {
     assert_eq!(decoded.next_round, 1);
     assert_eq!(decoded.threads, Vec::new());
     assert!(decoded.local_viewed.is_empty());
+    assert!(decoded.collapsed_dirs.is_empty());
 }
 
 fn create_sample_queued_ops() -> Vec<review_core::ports::QueuedCommentOp> {

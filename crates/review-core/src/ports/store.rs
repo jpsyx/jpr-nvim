@@ -1,6 +1,6 @@
 //! Durable persistence port and snapshot records for one pull request's review state.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::Result;
 use review_model::{
@@ -49,6 +49,12 @@ pub struct LocalStoreState {
     /// Viewed state for local-only worktree files not yet present on the forge.
     #[serde(default)]
     pub local_viewed: BTreeMap<String, ViewedState>,
+    /// Repository-relative directory paths the sidebar keeps collapsed.
+    ///
+    /// Missing on decode means nothing is collapsed, so an older `local.json`
+    /// still loads.
+    #[serde(default)]
+    pub collapsed_dirs: BTreeSet<String>,
 }
 
 /// What the engine still owes the forge: changes made while the forge could

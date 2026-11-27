@@ -4,6 +4,7 @@
 
 pub mod agent;
 pub mod auth;
+mod collapsed;
 mod comments;
 pub mod guide;
 pub mod ports;

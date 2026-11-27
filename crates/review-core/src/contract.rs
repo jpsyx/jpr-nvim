@@ -1,7 +1,7 @@
 //! Contract tests every adapter of a port must pass. Call them from the
 //! adapter's own tests with a fresh, empty instance.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use review_model::{
     AgentKind, AgentRound, AgentRoundKind, AgentThreadState, Anchor, MentionCandidate, Message,
@@ -88,6 +88,7 @@ fn create_sample_snapshot() -> StoreSnapshot {
             next_round: 2,
             threads: vec![create_sample_local_thread()],
             local_viewed: BTreeMap::from([("src/local.rs".to_owned(), ViewedState::Viewed)]),
+            collapsed_dirs: BTreeSet::new(),
         },
     }
 }
@@ -191,6 +192,7 @@ mod tests {
                 next_round: 2,
                 threads: vec![create_sample_local_thread()],
                 local_viewed: BTreeMap::from([("src/local.rs".to_owned(), ViewedState::Viewed)]),
+                collapsed_dirs: BTreeSet::new(),
             },
             ..StoreSnapshot::default()
         };
