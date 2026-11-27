@@ -7,13 +7,26 @@ function M.is_side(session, win)
     return (session.panel ~= nil and win == session.panel.win) or vim.w[win].jpr_side == true
 end
 
---- The main window of `session`'s tab, opened right of the panel when there
---- is none.
-function M.find(session)
+--- The main window of `session`'s tab when one is already open, or nil when
+--- the editor is closed. Sidebar and agent side windows do not count.
+function M.find_existing(session)
+    if not session or not session.tab or not vim.api.nvim_tabpage_is_valid(session.tab) then
+        return nil
+    end
     for _, win in ipairs(vim.api.nvim_tabpage_list_wins(session.tab)) do
         if not M.is_side(session, win) then
             return win
         end
+    end
+    return nil
+end
+
+--- The main window of `session`'s tab, opened right of the panel when there
+--- is none. Callers that only inspect the editor use `find_existing`.
+function M.find(session)
+    local existing = M.find_existing(session)
+    if existing then
+        return existing
     end
     local panel = session.panel
     local anchor = (panel and vim.api.nvim_win_is_valid(panel.win)) and panel.win or vim.api.nvim_get_current_win()

@@ -523,6 +523,91 @@ end), "gp sends a PR comment from a directory row")
 local gp_comment = helpers.read_requests(log, "comment")[comments_before + 4].params
 assert(vim.deep_equal(gp_comment.anchor, { kind = "pr", side = "RIGHT" }), vim.inspect(gp_comment))
 
+-- Marking a file or directory viewed must not reopen a closed editor.
+-- The agent split is a side window, so the tab can be sidebar + agent only.
+local layout = require("jpr.views.layout")
+local main_window = require("jpr.views.main_window")
+vim.api.nvim_set_current_win(panel_win)
+for _, win in ipairs(vim.api.nvim_tabpage_list_wins(review.tab)) do
+    if win ~= panel_win and vim.api.nvim_win_is_valid(win) then
+        vim.api.nvim_win_close(win, true)
+    end
+end
+local agent_buf = vim.api.nvim_create_buf(false, true)
+vim.bo[agent_buf].bufhidden = "hide"
+local agent_win = require("jpr.agent.window").open_for_direction(review, agent_buf, "vertical", "claude", jpr.config)
+review.agent = { buf = agent_buf, win = agent_win, job = 999, exited = false, kind = "claude" }
+layout.reconcile(review, { force = true })
+panel_view.render(review, tree_view)
+
+local function count_editor_windows()
+    local count = 0
+    for _, win in ipairs(vim.api.nvim_tabpage_list_wins(review.tab)) do
+        if not main_window.is_side(review, win) then
+            count = count + 1
+        end
+    end
+    return count
+end
+
+local function find_panel_line(kind, path)
+    for line, row in pairs(review.panel.rows) do
+        if row.kind == kind and row.path == path then
+            return line
+        end
+    end
+    return nil
+end
+
+assert(layout.classify_tab_windows(review).has_editor == false, "editor starts closed beside the agent")
+assert(count_editor_windows() == 0, "no editor window before marking viewed")
+
+local function mark_paths_viewed(paths, viewed_count)
+    local updated = vim.deepcopy(tree_view)
+    local marked = {}
+    for _, path in ipairs(paths) do
+        marked[path] = true
+    end
+    for _, file in ipairs(updated.files) do
+        if marked[file.path] then
+            file.viewed = "VIEWED"
+        end
+    end
+    updated.viewedCount = viewed_count
+    vim.fn.writefile({ vim.json.encode(updated) }, set_viewed_payload)
+    return updated
+end
+
+local readme_line = find_panel_line("file", "README.md")
+local src_line = find_panel_line("dir", "src")
+assert(readme_line ~= nil and src_line ~= nil, "README.md and src/ rows are selectable")
+
+mark_paths_viewed({ "README.md" }, 4242)
+local before_file_marks = #find_sent_requests('"path":"README.md"')
+press("v", readme_line)
+assert(vim.wait(3000, function()
+    return review.view.viewedCount == 4242 and #find_sent_requests('"path":"README.md"') == before_file_marks + 1
+end), "v on a file still sends setViewed while the editor is closed")
+vim.wait(50, function()
+    return false
+end)
+assert(count_editor_windows() == 0, "marking a file viewed leaves the editor closed")
+assert(vim.api.nvim_get_current_win() == panel_win, "marking a file viewed keeps the sidebar focused")
+
+panel_view.render(review, tree_view)
+src_line = find_panel_line("dir", "src")
+mark_paths_viewed({ "src/a.rs", "src/b.rs" }, 4243)
+local before_dir_marks = #find_sent_requests('"paths":')
+press("v", src_line)
+assert(vim.wait(3000, function()
+    return review.view.viewedCount == 4243 and #find_sent_requests('"paths":') == before_dir_marks + 1
+end), "v on a directory still sends setViewed while the editor is closed")
+vim.wait(50, function()
+    return false
+end)
+assert(count_editor_windows() == 0, "marking a directory viewed leaves the editor closed")
+assert(vim.api.nvim_get_current_win() == panel_win, "marking a directory viewed keeps the sidebar focused")
+
 os.remove(stream_payload)
 os.remove(set_viewed_payload)
 vim.env.FAKE_ENGINE_STREAM_FILE = nil

@@ -136,7 +136,7 @@ Pablo selected **Approach 1**, along with advancing to the next unviewed file wh
     - `row.kind == "file"`: send `{ path = row.path, viewed = viewed ~= "VIEWED" }`.
     - `row.kind == "dir"`: compute `toggle = render.collect_directory_toggle_from_files((session.view and session.view.files) or {}, row.path)` and, when non-nil, send `{ paths = toggle.paths, viewed = toggle.viewed }`.
     - `row.kind == "conversation"` or header lines: no-op.
-  - When marking `viewed == true` and the full branch diff view is **not** visible, check whether the main window is currently displaying one of the newly marked file paths: if so, advance the main window to `find_next_unviewed_path(updated_view, open_path)` (or show the full branch diff view with `jpr.info("all files viewed")` when none remain) while keeping focus in the sidebar panel.
+  - When marking `viewed == true` and the full branch diff view is **not** visible, check whether the main window is currently displaying one of the newly marked file paths: if so, advance the main window to `find_next_unviewed_path(updated_view, open_path)` (or show the full branch diff view with `jpr.info("all files viewed")` when none remain) while keeping focus in the sidebar panel. That lookup must not create a window. A closed editor stays closed until the reviewer opens a diff summary, the conversation, or a file.
 
 ### 4. Single-Line Collapsed Viewed Files & Live Repaint in Full Branch Diff (`lua/jpr/render/stream.lua`, `lua/jpr/views/stream/init.lua`, `lua/jpr/views/stream/navigation.lua`)
 
