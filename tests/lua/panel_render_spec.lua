@@ -552,4 +552,49 @@ assert(collapsed_unviewed.lines[9] == "▸ docs/ (0/1)", vim.inspect(collapsed_u
 assert(collapsed_unviewed.lines[10] == "▸ src/ (1/2)", vim.inspect(collapsed_unviewed.lines))
 assert(collapsed_unviewed.lines[11] == nil, "collapsed filter hides the files under those directories")
 
+-- Expanding a parent keeps collapsed subdirs collapsed and expanded subdirs expanded.
+local independent_view = {
+    pr = { number = 7, title = "Subdirs" },
+    files = {
+        { path = "apps/cli/a.rs", additions = 1, deletions = 0, viewed = "UNVIEWED", threads = 0 },
+        { path = "apps/other/b.rs", additions = 1, deletions = 0, viewed = "UNVIEWED", threads = 0 },
+    },
+    tree = {
+        { depth = 0, name = "apps" },
+        { depth = 1, name = "cli" },
+        { depth = 2, name = "a.rs", file = 0 },
+        { depth = 1, name = "other" },
+        { depth = 2, name = "b.rs", file = 1 },
+    },
+    viewedCount = 0,
+    threadCount = 0,
+    sync = { state = "synced", at = 112 },
+}
+local parent_collapsed = panel.build(independent_view, 112, { collapsed_dirs = { apps = true, ["apps/other"] = true } })
+assert(parent_collapsed.lines[9] == "▸ apps/ (0/2)" and parent_collapsed.lines[10] == nil, vim.inspect(parent_collapsed.lines))
+local parent_expanded = panel.build(independent_view, 112, { collapsed_dirs = { ["apps/other"] = true } })
+assert(parent_expanded.lines[9] == "▾ apps/", vim.inspect(parent_expanded.lines))
+assert(parent_expanded.lines[10] == "  ▾ cli/", vim.inspect(parent_expanded.lines))
+assert(parent_expanded.lines[11] == "      a.rs  +1 -0", vim.inspect(parent_expanded.lines))
+assert(parent_expanded.lines[12] == "  ▸ other/ (0/1)", vim.inspect(parent_expanded.lines))
+assert(parent_expanded.lines[13] == nil, "collapsed sibling subdir stays collapsed after parent expands")
+
+-- A lone-child joined directory stays collapsed when an intermediate prefix is in collapsed_dirs.
+local joined_collapsed = panel.build({
+    pr = { number = 7, title = "Joined" },
+    files = {
+        { path = "docs/x/y.md", additions = 1, deletions = 0, viewed = "UNVIEWED", threads = 0 },
+    },
+    tree = {
+        { depth = 0, name = "docs/x" },
+        { depth = 1, name = "y.md", file = 0 },
+    },
+    viewedCount = 0,
+    threadCount = 0,
+    sync = { state = "synced", at = 112 },
+}, 112, { collapsed_dirs = { docs = true } })
+assert(joined_collapsed.lines[9] == "▸ docs/x/ (0/1)", vim.inspect(joined_collapsed.lines))
+assert(joined_collapsed.lines[10] == nil, "joined directory hides descendants when a prefix segment is collapsed")
+assert(joined_collapsed.rows[9].is_collapsed == true, vim.inspect(joined_collapsed.rows[9]))
+
 print("panel_render_spec: ok")

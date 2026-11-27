@@ -1179,20 +1179,33 @@ expansion directly over RPC.
 ## Collapsed sidebar directories are local review state
 
 **Decision.** The set of collapsed sidebar directories lives in `local.json`
-(`collapsedDirs`) and on every `SessionView`. A successful GitHub pull removes
-a collapsed path only when a file inside it changes to `UNVIEWED` or
-`DISMISSED` in both the forge snapshot and the reconciled state, and that
-differs from the saved viewed state. `setViewed`, a queued mark that
-disagrees with GitHub, and a failed pull do not expand anything.
+(`collapsedDirs`) and on every `SessionView`. Each directory and subdirectory
+owns an independent collapse entry: collapsing a parent hides its subtree
+without modifying child collapse state, so expanding the parent later restores
+each child directory's saved state. Auto-expanding removes only the ancestor
+directories needed to reveal a file that newly transitions to `DISMISSED`:
+either during a successful GitHub pull (when both the forge snapshot and
+reconciled state are `DISMISSED` and the previously saved state was not
+`DISMISSED`), or when a local disk edit transitions a previously `VIEWED`
+local-only file to `DISMISSED`. Re-collapsing a directory that already contains
+a `DISMISSED` file stays collapsed across restarts and future syncs or edits;
+`UNVIEWED` files, `setViewed`, a queued mark that overrides GitHub, and a failed
+pull do not expand anything. Empty collapsed paths are pruned on sync only once
+local worktree files have been scanned, and joined lone-child directory rows
+honor collapsed intermediate prefixes (clearing swallowed prefixes on expand).
 
 **Why.** Viewed files and local threads already survive a restart. Collapse
-was process memory, so every directory opened again. Reopening on any
-unviewed file would throw away a collapse the reviewer just made.
+was process memory, so every directory opened again. Reopening on unchanged
+`DISMISSED` files or `UNVIEWED` files throws away a collapse the reviewer
+intentionally made, while expanding only the direct ancestor chain of a newly
+dismissed file surfaces code that must be re-reviewed without expanding
+unrelated collapsed subdirectories.
 
 **Consequences.** `PROTOCOL_VERSION` advances to `11`. `setCollapsed` is
-stdio-only. Renames rewrite the paths. Linking a local review unions the
-two sets, and the pull that follows can still expand a path when GitHub
-newly marks a file under it for review.
+stdio-only and redraws only the sidebar panel without opening or refreshing the
+diff stream. Renames rewrite the paths. Linking a local review unions the two
+sets while preserving preexisting PR file states so already-dismissed or
+unviewed files do not spuriously expand collapsed directories.
 
 **Revisit when.** A second frontend draws the file tree and needs its own
 collapse set per client instead of one set per review.

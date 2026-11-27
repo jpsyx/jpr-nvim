@@ -276,3 +276,64 @@ fn a_failed_sync_keeps_collapsed_directories() {
         BTreeSet::from(["src".to_owned()])
     );
 }
+
+#[test]
+fn reopening_after_recollapsing_a_dismissed_file_keeps_directory_collapsed() {
+    let fakes = Fakes::new(100);
+    let mut dismissed_snapshot = create_snapshot();
+    dismissed_snapshot.files[0].viewed = ViewedState::Dismissed;
+    fakes.forge.set_snapshot(dismissed_snapshot);
+
+    let mut first = fakes.open_synced();
+    first.set_collapsed("src", true).unwrap();
+    drop(first);
+
+    let mut reopened = fakes.open();
+    assert_eq!(
+        reopened.view().collapsed_dirs,
+        BTreeSet::from(["src".to_owned()])
+    );
+    let synced = reopened.sync().unwrap();
+    assert_eq!(synced.collapsed_dirs, BTreeSet::from(["src".to_owned()]));
+}
+
+#[test]
+fn sync_keeps_local_only_collapsed_directory_before_merge_base_is_prepared() {
+    let fakes = Fakes::new(100);
+    fakes
+        .workspace
+        .put_disk("notes/todo.rs", "pub fn todo() {}\n");
+    let mut first = fakes.open_synced();
+    first.refresh_worktree(&[]).unwrap();
+    first.set_collapsed("notes", true).unwrap();
+    drop(first);
+
+    let mut reopened = fakes.open();
+    let synced = reopened.sync().unwrap();
+    assert_eq!(synced.collapsed_dirs, BTreeSet::from(["notes".to_owned()]));
+}
+
+#[test]
+fn sync_expands_only_ancestors_of_dismissed_file_preserving_collapsed_siblings() {
+    let fakes = Fakes::new(100);
+    let mut initial = create_snapshot();
+    initial.files = vec![
+        crate::fakes::changed_file("apps/cli/a.rs", ViewedState::Viewed),
+        crate::fakes::changed_file("apps/cli/sub/b.rs", ViewedState::Viewed),
+        crate::fakes::changed_file("apps/other/c.rs", ViewedState::Viewed),
+    ];
+    fakes.forge.set_snapshot(initial.clone());
+    let mut session = fakes.open_synced();
+    session.set_collapsed("apps/cli/sub", true).unwrap();
+    session.set_collapsed("apps/other", true).unwrap();
+    session.set_collapsed("apps", true).unwrap();
+
+    let mut updated = initial;
+    updated.files[0].viewed = ViewedState::Dismissed;
+    fakes.forge.set_snapshot(updated);
+    let view = session.sync().unwrap();
+    assert_eq!(
+        view.collapsed_dirs,
+        BTreeSet::from(["apps/cli/sub".to_owned(), "apps/other".to_owned()])
+    );
+}

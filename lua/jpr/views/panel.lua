@@ -174,7 +174,7 @@ end
 local function request_set_collapsed(session, path, collapsed)
     require("jpr.session").request(session, "setCollapsed", { path = path, collapsed = collapsed }, function(updated_view)
         if type(updated_view) == "table" then
-            require("jpr.session").show(session, updated_view)
+            require("jpr.session").show_panel_only(session, updated_view)
         end
     end)
 end

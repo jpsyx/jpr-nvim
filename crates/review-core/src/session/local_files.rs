@@ -153,9 +153,10 @@ impl ReviewSession {
         Ok(view)
     }
 
-    /// Transitions any local-only `Viewed` file in `changed_paths` to `Dismissed`.
+    /// Transitions any local-only `Viewed` file in `changed_paths` to `Dismissed`
+    /// and expands only the collapsed ancestor directories needed to reveal it.
     pub(super) fn dismiss_edited_local_viewed(&mut self, changed_paths: &[String]) -> Result<bool> {
-        let mut did_dismiss = false;
+        let mut dismissed_paths = Vec::new();
         for path in changed_paths {
             if self.is_local_only_file(path)
                 && self.saved.local.local_viewed.get(path) == Some(&ViewedState::Viewed)
@@ -164,13 +165,18 @@ impl ReviewSession {
                     .local
                     .local_viewed
                     .insert(path.clone(), ViewedState::Dismissed);
-                did_dismiss = true;
+                dismissed_paths.push(path.clone());
             }
         }
-        if did_dismiss {
-            self.ports.store.save(&self.saved)?;
+        if dismissed_paths.is_empty() {
+            return Ok(false);
         }
-        Ok(did_dismiss)
+        self.saved.local.collapsed_dirs = crate::collapsed::create_collapsed_dirs_after_dismiss(
+            &self.saved.local.collapsed_dirs,
+            &dismissed_paths,
+        );
+        self.ports.store.save(&self.saved)?;
+        Ok(true)
     }
 
     /// Promotes `local_viewed` entries for files newly present in `incoming_files`
