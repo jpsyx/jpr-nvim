@@ -508,9 +508,10 @@ local function get_window_changed_path(session, win)
     return require("jpr.views.diff").buffer_to_changed_path(session, buf)
 end
 
---- Advances the main window to the next unviewed file (or full branch diff when
---- all files are viewed) if it is currently showing one of `marked_paths` and
---- the full diff stream is not already visible.
+--- Advances an already-open main window to the next unviewed file (or the full
+--- branch diff when all files are viewed) when it is showing one of
+--- `marked_paths` and the full diff stream is not already visible. A closed
+--- editor stays closed: marking viewed never opens a window.
 function M.advance_after_viewed(session, updated_view, marked_paths, opts)
     if session.closing or not vim.api.nvim_tabpage_is_valid(session.tab) then
         return
@@ -520,7 +521,10 @@ function M.advance_after_viewed(session, updated_view, marked_paths, opts)
         return
     end
     local main_window = require("jpr.views.main_window")
-    local main_win = main_window.find(session)
+    local main_win = main_window.find_existing(session)
+    if not main_win then
+        return
+    end
     local open_path = get_window_changed_path(session, main_win)
     if not open_path or not vim.tbl_contains(marked_paths or {}, open_path) then
         return
