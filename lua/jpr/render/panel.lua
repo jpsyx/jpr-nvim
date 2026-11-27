@@ -368,10 +368,10 @@ local function is_directory_collapsed(collapsed_dirs, parent_dir, segment, dir_p
     if segment:find("/", 1, true) == nil then
         return false
     end
-    local current = parent_dir
+    local current_path = parent_dir
     for part in segment:gmatch("[^/]+") do
-        current = current and (current .. "/" .. part) or part
-        if collapsed_dirs[current] == true then
+        current_path = current_path and (current_path .. "/" .. part) or part
+        if collapsed_dirs[current_path] == true then
             return true
         end
     end

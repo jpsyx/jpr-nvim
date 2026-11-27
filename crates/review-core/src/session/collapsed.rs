@@ -16,7 +16,7 @@ impl ReviewSession {
     /// writing. A failed save restores the previous set.
     pub fn set_collapsed(&mut self, path: &str, collapsed: bool) -> Result<SessionView> {
         validate_safe_relative_path(path)?;
-        let updated = if collapsed {
+        let updated_dirs = if collapsed {
             let mut next_set = self.saved.local.collapsed_dirs.clone();
             next_set.insert(path.to_owned());
             next_set
@@ -26,10 +26,10 @@ impl ReviewSession {
                 create_file_tree_from_paths(effective.iter().map(|(file, _)| file.path.as_str()));
             create_collapsed_dirs_after_expand(&self.saved.local.collapsed_dirs, path, &tree)
         };
-        if updated == self.saved.local.collapsed_dirs {
+        if updated_dirs == self.saved.local.collapsed_dirs {
             return Ok(self.view());
         }
-        let previous = std::mem::replace(&mut self.saved.local.collapsed_dirs, updated);
+        let previous = std::mem::replace(&mut self.saved.local.collapsed_dirs, updated_dirs);
         if let Err(error) = self.ports.store.save(&self.saved) {
             self.saved.local.collapsed_dirs = previous;
             return Err(error);

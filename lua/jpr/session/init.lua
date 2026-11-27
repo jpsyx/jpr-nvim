@@ -313,18 +313,12 @@ function M.have_commits_changed(previous_view, view)
     return (previous_local ~= nil and current_pr ~= nil)
 end
 
---- Keeps `view` as the session's latest and redraws from it: the panel
---- always, and the stream and the diffs once the PR or local context is known.
-function M.show(session, view)
-    if session.is_read_only and type(view) == "table" then
-        view.isReadOnly = true
+local function normalize_session_view(session, previous_view, view)
+    local normalized_view = view
+    if session.is_read_only and type(normalized_view) == "table" then
+        normalized_view = vim.tbl_extend("force", normalized_view, { isReadOnly = true })
     end
-    local previous_view = session.view
-    local has_synced_pr = type(view.pr) == "table"
-    local has_local_context = type(view.localContext) == "table"
-    if has_synced_pr and session.mode == "local" then
-        require("jpr.session.open_local").upgrade_local_session_to_pr(session, view.pr)
-    end
+    local has_synced_pr = type(normalized_view.pr) == "table"
     if
         not has_synced_pr
         and previous_view
@@ -332,10 +326,31 @@ function M.show(session, view)
         and previous_view.pr.headSha == nil
         and previous_view.pr.baseSha == nil
     then
-        view = vim.tbl_extend("force", view, { pr = previous_view.pr })
+        normalized_view = vim.tbl_extend("force", normalized_view, { pr = previous_view.pr })
     end
-    session.view = view
-    panel.render(session, view)
+    return normalized_view, has_synced_pr
+end
+
+--- Stores `view` as the session's latest and redraws only the sidebar panel.
+--- Called by `jpr.views.panel` after `setCollapsed` so collapsing or expanding
+--- a directory does not open or refresh the diff stream.
+function M.show_panel_only(session, view)
+    local normalized_view = normalize_session_view(session, session.view, view)
+    session.view = normalized_view
+    panel.render(session, normalized_view)
+end
+
+--- Keeps `view` as the session's latest and redraws from it: the panel
+--- always, and the stream and the diffs once the PR or local context is known.
+function M.show(session, view)
+    local previous_view = session.view
+    local normalized_view, has_synced_pr = normalize_session_view(session, previous_view, view)
+    local has_local_context = type(normalized_view.localContext) == "table"
+    if has_synced_pr and session.mode == "local" then
+        require("jpr.session.open_local").upgrade_local_session_to_pr(session, normalized_view.pr)
+    end
+    session.view = normalized_view
+    panel.render(session, normalized_view)
     if (not has_synced_pr and not has_local_context) or session.is_read_only then
         return
     end
@@ -348,7 +363,7 @@ function M.show(session, view)
         stream.refresh(session)
     end
     local diff = require("jpr.views.diff")
-    if M.have_commits_changed(previous_view, view) then
+    if M.have_commits_changed(previous_view, normalized_view) then
         diff.redraw_all(session)
     else
         diff.reconcile(session)

@@ -171,29 +171,10 @@ local function collapsed_set_from_view(view)
     return set
 end
 
-local function apply_panel_view(session, updated_view)
-    local previous_view = session.view
-    local has_synced_pr = type(updated_view.pr) == "table"
-    if session.is_read_only then
-        updated_view.isReadOnly = true
-    end
-    if
-        not has_synced_pr
-        and previous_view
-        and type(previous_view.pr) == "table"
-        and previous_view.pr.headSha == nil
-        and previous_view.pr.baseSha == nil
-    then
-        updated_view = vim.tbl_extend("force", updated_view, { pr = previous_view.pr })
-    end
-    session.view = updated_view
-    M.render(session, updated_view)
-end
-
 local function request_set_collapsed(session, path, collapsed)
     require("jpr.session").request(session, "setCollapsed", { path = path, collapsed = collapsed }, function(updated_view)
         if type(updated_view) == "table" then
-            apply_panel_view(session, updated_view)
+            require("jpr.session").show_panel_only(session, updated_view)
         end
     end)
 end

@@ -6,9 +6,12 @@ use review_model::{ChangedFile, TreeRow, ViewedState};
 
 use crate::viewed::is_path_in_directory;
 
-/// The collapsed set after a pull. A directory expands only when a file inside
-/// it newly changes to `Dismissed` on GitHub. When `should_prune_empty` is true,
-/// collapsed paths with no remaining PR or local-only file are dropped.
+/// Computes the persisted `collapsed_dirs` set after a GitHub pull.
+///
+/// Called by `ReviewSession::apply_collapsed_dirs_after_pull` on a successful
+/// sync. Expands a directory only when a file inside it newly changes to
+/// `Dismissed` on GitHub. When `should_prune_empty` is true, drops collapsed
+/// paths with no remaining PR or local-only file.
 #[must_use]
 pub fn create_collapsed_dirs_after_pull(
     collapsed: &BTreeSet<String>,
@@ -32,6 +35,10 @@ pub fn create_collapsed_dirs_after_pull(
 
 /// Removes only the collapsed ancestor directories needed to reveal each newly
 /// dismissed file path, leaving sibling and unrelated collapsed directories intact.
+///
+/// Called by `create_collapsed_dirs_after_pull` after a GitHub sync and by
+/// `ReviewSession::dismiss_edited_local_viewed` when a local disk edit dismisses
+/// a previously viewed local-only file.
 #[must_use]
 pub fn create_collapsed_dirs_after_dismiss(
     collapsed: &BTreeSet<String>,
@@ -46,6 +53,10 @@ pub fn create_collapsed_dirs_after_dismiss(
 
 /// Removes `path` from `collapsed` when expanding a sidebar directory, plus any
 /// strict ancestor prefix swallowed into a lone-child joined row for `path`.
+///
+/// Called by `ReviewSession::set_collapsed` when expanding a directory so that
+/// expanding a joined row like `docs/x` also clears a collapsed `docs` prefix
+/// without clearing a separately rendered parent row.
 #[must_use]
 pub fn create_collapsed_dirs_after_expand(
     collapsed: &BTreeSet<String>,
