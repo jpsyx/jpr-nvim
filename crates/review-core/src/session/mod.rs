@@ -302,11 +302,13 @@ impl ReviewSession {
 
 const fn get_view_from_event(event: &Event) -> Option<&SessionView> {
     match event {
-        Event::Synced { view }
+        Event::Synced { view, .. }
         | Event::ViewedChanged { view }
         | Event::ThreadsChanged { view }
         | Event::FilesChanged { view, .. }
         | Event::AgentRound { view, .. }
+        | Event::AgentReplied { view, .. }
+        | Event::AgentPrepassWritten { view, .. }
         | Event::WorktreeStatusChanged { view }
         | Event::HeadMoved { view, .. } => Some(view),
         Event::SyncFailed { .. } => None,

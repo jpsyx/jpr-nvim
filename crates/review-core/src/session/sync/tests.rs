@@ -42,7 +42,7 @@ pub(super) fn take_head_moved_and_synced(
         other => panic!("expected HeadMoved, got {other:?}"),
     };
     match events.try_recv().expect("expected Synced event") {
-        Event::Synced { view } => assert_eq!(*view, head_moved.5),
+        Event::Synced { view, .. } => assert_eq!(*view, head_moved.5),
         other => panic!("expected Synced, got {other:?}"),
     }
     head_moved
@@ -65,7 +65,9 @@ fn sync_pulls_saves_and_announces() {
     assert_eq!(
         events.try_recv().expect("an event was sent"),
         Event::Synced {
-            view: Box::new(view)
+            view: Box::new(view),
+            is_background: false,
+            delta: None,
         }
     );
 }

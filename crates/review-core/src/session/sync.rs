@@ -200,6 +200,8 @@ impl ReviewSession {
             };
         self.publish(&Event::Synced {
             view: Box::new(view.clone()),
+            is_background: false,
+            delta: None,
         });
         Ok(view)
     }

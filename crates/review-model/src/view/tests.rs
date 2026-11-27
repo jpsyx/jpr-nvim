@@ -66,10 +66,14 @@ fn session_view_omits_empty_collapsed_dirs_and_serializes_a_sorted_set() {
 fn synced_event_uses_camel_case_view_fields() {
     let view = create_sample_view();
     let json = serde_json::to_value(Event::Synced {
-        view: Box::new(view),
+        view: Box::new(view.clone()),
+        is_background: false,
+        delta: None,
     })
     .unwrap();
     assert_eq!(json["type"], "synced");
+    assert_eq!(json["isBackground"], false);
+    assert!(json.get("delta").is_none());
     assert_eq!(json["view"]["viewedCount"], 1);
     assert_eq!(json["view"]["threadCount"], 3);
     assert_eq!(json["view"]["draftCount"], 1);
@@ -77,6 +81,76 @@ fn synced_event_uses_camel_case_view_fields() {
     assert_eq!(json["view"]["localUnsentCount"], 4);
     assert_eq!(json["view"]["queuedCount"], 2);
     assert_eq!(json["view"]["files"][0]["viewed"], "VIEWED");
+
+    let with_delta = serde_json::to_value(Event::Synced {
+        view: Box::new(view),
+        is_background: true,
+        delta: Some(SyncDelta {
+            files_changed: 3,
+            new_comments: 2,
+            updated_comments: 1,
+            resolved_threads: 1,
+            reopened_threads: 0,
+            head_moved: true,
+        }),
+    })
+    .unwrap();
+    assert_eq!(with_delta["isBackground"], true);
+    assert_eq!(with_delta["delta"]["filesChanged"], 3);
+    assert_eq!(with_delta["delta"]["newComments"], 2);
+    assert_eq!(with_delta["delta"]["updatedComments"], 1);
+    assert_eq!(with_delta["delta"]["resolvedThreads"], 1);
+    assert_eq!(with_delta["delta"]["reopenedThreads"], 0);
+    assert_eq!(with_delta["delta"]["headMoved"], true);
+}
+
+#[test]
+fn sync_delta_is_empty_only_when_all_fields_are_zero_or_false() {
+    let empty = SyncDelta::default();
+    assert!(empty.is_empty());
+    assert!(!SyncDelta { files_changed: 1, ..empty }.is_empty());
+    assert!(!SyncDelta { new_comments: 1, ..empty }.is_empty());
+    assert!(!SyncDelta { updated_comments: 1, ..empty }.is_empty());
+    assert!(!SyncDelta { resolved_threads: 1, ..empty }.is_empty());
+    assert!(!SyncDelta { reopened_threads: 1, ..empty }.is_empty());
+    assert!(!SyncDelta { head_moved: true, ..empty }.is_empty());
+}
+
+#[test]
+fn agent_replied_and_prepass_written_events_serialize_camel_case() {
+    let view = create_sample_view();
+    let replied = serde_json::to_value(Event::AgentReplied {
+        thread_id: "loc-1".into(),
+        author: "claude".into(),
+        file: Some("src/a.rs".into()),
+        line: Some(42),
+        view: Box::new(view.clone()),
+    })
+    .unwrap();
+    assert_eq!(replied["type"], "agentReplied");
+    assert_eq!(replied["threadId"], "loc-1");
+    assert_eq!(replied["author"], "claude");
+    assert_eq!(replied["file"], "src/a.rs");
+    assert_eq!(replied["line"], 42);
+
+    let replied_pr = serde_json::to_value(Event::AgentReplied {
+        thread_id: "loc-2".into(),
+        author: "agent".into(),
+        file: None,
+        line: None,
+        view: Box::new(view.clone()),
+    })
+    .unwrap();
+    assert!(replied_pr.get("file").is_none());
+    assert!(replied_pr.get("line").is_none());
+
+    let prepass = serde_json::to_value(Event::AgentPrepassWritten {
+        count: 3,
+        view: Box::new(view),
+    })
+    .unwrap();
+    assert_eq!(prepass["type"], "agentPrepassWritten");
+    assert_eq!(prepass["count"], 3);
 }
 
 #[test]
