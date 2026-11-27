@@ -40,7 +40,7 @@ session.show(review, { pr = { number = 21, title = "Hostile" }, files = files, v
 
 for index, name in ipairs(hostile) do
     vim.api.nvim_set_current_win(review.panel.win)
-    vim.api.nvim_win_set_cursor(review.panel.win, { 6 + index, 0 })
+    vim.api.nvim_win_set_cursor(review.panel.win, { 7 + index, 0 })
     panel_view.open_file_under_cursor(review)
     local opened = vim.api.nvim_buf_get_name(0)
     assert(vim.g.pwned == nil, "opening " .. name .. " ran code")
@@ -64,8 +64,8 @@ session.show(review, {
     threadCount = 0,
 })
 lines = vim.api.nvim_buf_get_lines(review.panel.buf, 0, -1, false)
-assert(lines[1] == "#21 Two lines" and lines[7] == "  new line.md  +1 -0", vim.inspect(lines))
-assert(review.panel.paths[7] == "new\nline.md", "the real path is kept for opening")
+assert(lines[1] == "#21 Two lines" and lines[8] == "  new line.md  +1 -0", vim.inspect(lines))
+assert(review.panel.paths[8] == "new\nline.md", "the real path is kept for opening")
 
 session.close_current()
 print("untrusted_text_spec: ok")

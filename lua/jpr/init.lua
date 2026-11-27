@@ -327,6 +327,7 @@ local ZERO_ARG_SESSION_METHODS = {
     stream = "stream_current",
     suggest = "suggest_current",
     expand = "expand_current",
+    summary = "summary_current",
     conversation = "conversation_current",
     submit = "submit_current",
     push = "push_current",

@@ -185,6 +185,7 @@ event is written before the `shutdown` response.
 ```json
 {
   "pr": { "owner": "octo", "repo": "widgets", "number": 7, "title": "Fix the widget",
+          "body": "Fixes the widget crash.",
           "url": "https://github.com/octo/widgets/pull/7", "nodeId": "PR_7", "author": "alice",
           "headRef": "fix/widget", "headSha": "abc123", "baseRef": "main", "baseSha": "base000",
           "isCrossRepository": false },
@@ -201,8 +202,10 @@ event is written before the `shutdown` response.
 }
 ```
 
-- `pr` is `null` until the first successful sync; `pr.isCrossRepository` is
-  `true` when the pull request's head branch lives in a fork repository.
+- `pr` is `null` until the first successful sync; `pr.body` holds the pull
+  request's Markdown description (`""` when empty or omitted in older saved
+  state), and `pr.isCrossRepository` is `true` when the pull request's head
+  branch lives in a fork repository.
 - Each `FileRow` in `files` carries `viewed` (`VIEWED`, `UNVIEWED`, or
   `DISMISSED` when viewed and later changed on GitHub or edited on disk for a
   local-only file), `threads` (all GitHub and local threads anchored to

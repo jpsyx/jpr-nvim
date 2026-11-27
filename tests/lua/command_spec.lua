@@ -52,12 +52,12 @@ assert(
 assert(
     vim.deep_equal(
         jpr.complete("", "Jpr "),
-        { "open", "local", "sync", "toggle", "panel", "stream", "comment", "suggest", "expand", "conversation", "submit", "push", "agent", "send", "prepass", "close", "keys" }
+        { "open", "local", "sync", "toggle", "panel", "stream", "comment", "suggest", "expand", "summary", "conversation", "submit", "push", "agent", "send", "prepass", "close", "keys" }
     ),
     "all subcommands"
 )
 assert(vim.deep_equal(jpr.complete("k", "Jpr k"), { "keys" }), "filtered k subcommand")
-assert(vim.deep_equal(jpr.complete("s", "Jpr s"), { "sync", "stream", "suggest", "submit", "send" }), "filtered s subcommands")
+assert(vim.deep_equal(jpr.complete("s", "Jpr s"), { "sync", "stream", "suggest", "summary", "submit", "send" }), "filtered s subcommands")
 assert(vim.deep_equal(jpr.complete("p", "Jpr p"), { "panel", "push", "prepass" }), "filtered p subcommands")
 assert(vim.deep_equal(jpr.complete("c", "Jpr c"), { "comment", "conversation", "close" }), "filtered c subcommands")
 assert(vim.deep_equal(jpr.complete("", "Jpr open "), {}), "nothing after open subcommand")
@@ -256,6 +256,9 @@ package.loaded["jpr.session"] = {
     expand_current = function()
         calls[#calls + 1] = { fn = "expand_current" }
     end,
+    summary_current = function()
+        calls[#calls + 1] = { fn = "summary_current" }
+    end,
     conversation_current = function()
         calls[#calls + 1] = { fn = "conversation_current" }
     end,
@@ -276,6 +279,7 @@ package.loaded["jpr.session"] = {
 jpr.command({ "toggle" })
 jpr.command({ "suggest" })
 jpr.command({ "expand" })
+jpr.command({ "summary" })
 jpr.command({ "conversation" })
 jpr.command({ "submit" })
 jpr.command({ "push" })
@@ -295,16 +299,17 @@ jpr.action("prev_thread")
 assert(calls[1].fn == "toggle_view")
 assert(calls[2].fn == "suggest_current")
 assert(calls[3].fn == "expand_current")
-assert(calls[4].fn == "conversation_current")
-assert(calls[5].fn == "submit_current")
-assert(calls[6].fn == "push_current")
-assert(calls[7].fn == "comment_current" and calls[7].opts.line1 == 1 and calls[7].opts.line2 == 2 and calls[7].opts.range == 2)
-assert(calls[8].fn == "comment_current" and not calls[8].opts.suggest and not calls[8].opts.file)
-assert(calls[9].fn == "comment_current" and calls[9].opts.suggest == true)
-assert(calls[10].fn == "comment_current" and calls[10].opts.file == true)
-assert(calls[11].fn == "popup_current")
-assert(calls[12].fn == "jump_thread_current" and calls[12].step == 1)
-assert(calls[13].fn == "jump_thread_current" and calls[13].step == -1)
+assert(calls[4].fn == "summary_current")
+assert(calls[5].fn == "conversation_current")
+assert(calls[6].fn == "submit_current")
+assert(calls[7].fn == "push_current")
+assert(calls[8].fn == "comment_current" and calls[8].opts.line1 == 1 and calls[8].opts.line2 == 2 and calls[8].opts.range == 2)
+assert(calls[9].fn == "comment_current" and not calls[9].opts.suggest and not calls[9].opts.file)
+assert(calls[10].fn == "comment_current" and calls[10].opts.suggest == true)
+assert(calls[11].fn == "comment_current" and calls[11].opts.file == true)
+assert(calls[12].fn == "popup_current")
+assert(calls[13].fn == "jump_thread_current" and calls[13].step == 1)
+assert(calls[14].fn == "jump_thread_current" and calls[14].step == -1)
 
 jpr.bind_buffer_keys(range_buf)
 vim.api.nvim_win_set_cursor(0, { 1, 0 })

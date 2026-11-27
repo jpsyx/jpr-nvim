@@ -105,7 +105,7 @@ return function(context)
             assert(
                 vim.deep_equal(pr_panel_ids, {
                     "open", "local", "sync", "toggle", "panel", "stream", "expand",
-                    "conversation", "submit", "push", "agent", "prepass", "close", "keys",
+                    "summary", "conversation", "submit", "push", "agent", "prepass", "close", "keys",
                 }),
                 "linked PR outside diff hides comment, suggest, and send: " .. vim.inspect(pr_panel_ids)
             )
@@ -172,8 +172,8 @@ return function(context)
                 jpr.command({})
                 local read_only_cached_ids = extract_visible_command_ids(helpers.palette_results_text())
                 assert(
-                    vim.deep_equal(read_only_cached_ids, { "open", "local", "toggle", "panel", "expand", "conversation", "agent", "close", "keys" }),
-                    "read-only session retains cached conversation and live agent: " .. vim.inspect(read_only_cached_ids)
+                    vim.deep_equal(read_only_cached_ids, { "open", "local", "toggle", "panel", "expand", "summary", "conversation", "agent", "close", "keys" }),
+                    "read-only session retains cached summary/conversation and live agent: " .. vim.inspect(read_only_cached_ids)
                 )
                 wizard.close()
             end)
