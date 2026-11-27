@@ -8,10 +8,12 @@ return function(ctx)
     local find_compose_win = ctx.find_compose_win
 
     -- 5. open_reply uses [GitHub draft] Reply when draftCount > 0 else [GitHub reply] Reply, and <C-s> sends reply.
+    -- Threads without messages fall back to the single reply float with no history pane.
     review.view.draftCount = 0
     compose.open_reply(review, { threadId = "T1", anchor = line_anchor })
     local reply_win_immediate = find_compose_win()
     assert(helpers.win_title(reply_win_immediate):find("[GitHub reply] Reply", 1, true) ~= nil, helpers.win_title(reply_win_immediate))
+    assert(review.compose.history_win == nil and review.compose.history_buf == nil, "empty thread opens single reply float")
     compose.close(review)
 
     review.view.draftCount = 2
@@ -211,4 +213,140 @@ return function(ctx)
     assert(helpers.read_requests(log, "comment")[locked_before + 1].params.origin == "local", "submitted origin is local")
     review.view.files = saved_files
     review.compose_destination = nil
+
+    -- 6f. Docked two-pane reply modal: read-only thread history above reply box, pane switching, shared cancel/submit/wipeout, and small-terminal geometry.
+    local reply_history = require("jpr.comments.reply_history")
+    local small_geometry = reply_history.compute_stacked_geometry(20, 80, 30)
+    assert(small_geometry.history_height >= 4 and small_geometry.reply_height >= 4, vim.inspect(small_geometry))
+    assert(small_geometry.history_row >= 1, vim.inspect(small_geometry))
+    assert(small_geometry.reply_row == small_geometry.history_row + small_geometry.history_height + 2, vim.inspect(small_geometry))
+    assert(small_geometry.reply_row + small_geometry.reply_height + 2 <= 20, vim.inspect(small_geometry))
+
+    compose.open_reply(review, { threadId = "T_NIL_MSGS", anchor = line_anchor, messages = vim.NIL })
+    assert(review.compose.history_win == nil and review.compose.history_buf == nil, "vim.NIL messages falls back to single reply float")
+    compose.close(review)
+
+    local long_tail_lines = {}
+    for idx = 1, 24 do
+        long_tail_lines[idx] = ("tail detail %d"):format(idx)
+    end
+    local thread_with_history = {
+        threadId = "T_HIST",
+        state = "open",
+        anchor = line_anchor,
+        messages = {
+            {
+                id = "M_H1",
+                author = "alice",
+                body = "Original question",
+                created = "2026-11-20T00:00:00Z",
+                updated = "2026-11-20T00:00:00Z",
+                sync = "published",
+                viewerDidAuthor = false,
+                reactions = {},
+            },
+            {
+                id = "M_H2",
+                author = "bob",
+                body = table.concat(long_tail_lines, "\n"),
+                created = "2026-11-20T00:01:00Z",
+                updated = "2026-11-20T00:01:00Z",
+                sync = "published",
+                viewerDidAuthor = false,
+                reactions = {},
+            },
+        },
+    }
+
+    review.view.draftCount = 0
+    compose.open_reply(review, thread_with_history)
+    local docked_reply_win = review.compose.win
+    local docked_reply_buf = review.compose.buf
+    local history_win = review.compose.history_win
+    local history_buf = review.compose.history_buf
+    assert(docked_reply_win and vim.api.nvim_win_is_valid(docked_reply_win), "reply window opens")
+    assert(history_win and vim.api.nvim_win_is_valid(history_win), "history window opens")
+    assert(vim.api.nvim_get_current_win() == docked_reply_win, "focus starts in reply pane")
+    assert(vim.bo[history_buf].modifiable == false, "history buffer is read-only")
+
+    local history_lines = vim.api.nvim_buf_get_lines(history_buf, 0, -1, false)
+    local history_text = table.concat(history_lines, "\n")
+    assert(history_text:find("Original question", 1, true) ~= nil, history_text)
+    assert(history_text:find("tail detail 1", 1, true) ~= nil, history_text)
+    assert(history_text:find("[r]eply", 1, true) == nil, "history pane omits popup action footer")
+
+    local history_config = vim.api.nvim_win_get_config(history_win)
+    local reply_config = vim.api.nvim_win_get_config(docked_reply_win)
+    assert(history_config.width == reply_config.width and history_config.col == reply_config.col, "panes share width and column")
+    assert(history_config.row + history_config.height + 2 == reply_config.row, "reply pane docks directly below history pane")
+
+    local bob_header_line = helpers.find_line_number(history_lines, "@bob")
+    local history_topline = vim.api.nvim_win_call(history_win, function()
+        return vim.fn.winsaveview().topline
+    end)
+    assert(vim.api.nvim_win_get_cursor(history_win)[1] == bob_header_line, "history cursor starts at last message")
+    assert(history_topline == bob_header_line, "tall last comment in history snaps topline to last message start")
+
+    -- Pane switching via <Tab> and <C-w>k / <C-w>j in Normal mode.
+    helpers.press_key("<Tab>")
+    assert(vim.api.nvim_get_current_win() == history_win, "<Tab> from reply focuses history pane")
+    helpers.press_key("<Tab>")
+    assert(vim.api.nvim_get_current_win() == docked_reply_win, "<Tab> from history focuses reply pane")
+    helpers.press_key("<C-w>k")
+    assert(vim.api.nvim_get_current_win() == history_win, "<C-w>k from reply focuses history pane")
+    helpers.press_key("<C-w>j")
+    assert(vim.api.nvim_get_current_win() == docked_reply_win, "<C-w>j from history focuses reply pane")
+
+    -- Dirty-check cancel triggered from the history pane.
+    vim.api.nvim_buf_set_lines(docked_reply_buf, 0, -1, false, { "Draft in progress" })
+    helpers.press_key("<Tab>")
+    assert(vim.api.nvim_get_current_win() == history_win)
+    local original_confirm = vim.fn.confirm
+    local confirm_calls = 0
+    vim.fn.confirm = function()
+        confirm_calls = confirm_calls + 1
+        return 2
+    end
+    helpers.press_key("q")
+    assert(confirm_calls == 1, "q in history pane checks dirty reply buffer")
+    assert(vim.api.nvim_win_is_valid(docked_reply_win) and vim.api.nvim_win_is_valid(history_win), "Keep editing preserves both panes")
+
+    vim.fn.confirm = function()
+        confirm_calls = confirm_calls + 1
+        return 1
+    end
+    helpers.press_key("<Esc>")
+    vim.fn.confirm = original_confirm
+    assert(confirm_calls == 2, "<Esc> in history pane prompts to discard")
+    assert(not vim.api.nvim_win_is_valid(docked_reply_win) and not vim.api.nvim_win_is_valid(history_win), "Discard closes both panes")
+
+    -- Submitting from either pane sends only reply buffer text and closes both panes.
+    compose.open_reply(review, thread_with_history)
+    local submit_reply_win = review.compose.win
+    local submit_reply_buf = review.compose.buf
+    local submit_history_win = review.compose.history_win
+    local replies_before_docked = #helpers.read_requests(log, "reply")
+    vim.api.nvim_buf_set_lines(submit_reply_buf, 0, -1, false, { "My reply" })
+    helpers.press_key("<Tab>")
+    assert(vim.api.nvim_get_current_win() == submit_history_win, "switched to history pane before <C-s>")
+    helpers.press_key("<C-s>")
+    assert(not vim.api.nvim_win_is_valid(submit_reply_win) and not vim.api.nvim_win_is_valid(submit_history_win), "<C-s> from history pane closes both panes")
+    assert(vim.wait(3000, function()
+        return #helpers.read_requests(log, "reply") == replies_before_docked + 1
+    end), "docked reply RPC sent")
+    local docked_sent = helpers.read_requests(log, "reply")[replies_before_docked + 1].params
+    assert(docked_sent.threadId == "T_HIST" and docked_sent.body == "My reply", vim.inspect(docked_sent))
+
+    -- Wiping either buffer tears down its companion with no orphan float.
+    compose.open_reply(review, thread_with_history)
+    local wipe_reply_win = review.compose.win
+    local wipe_history_buf = review.compose.history_buf
+    vim.api.nvim_buf_delete(wipe_history_buf, { force = true })
+    assert(not vim.api.nvim_win_is_valid(wipe_reply_win), "deleting history buffer closes reply pane")
+
+    compose.open_reply(review, thread_with_history)
+    local wipe_reply_buf = review.compose.buf
+    local wipe_history_win = review.compose.history_win
+    vim.api.nvim_buf_delete(wipe_reply_buf, { force = true })
+    assert(not vim.api.nvim_win_is_valid(wipe_history_win), "deleting reply buffer closes history pane")
 end

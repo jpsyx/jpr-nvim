@@ -47,19 +47,48 @@ return function(context)
     assert(initial_text:find("nit: rename this", 1, true) ~= nil, initial_text)
     assert(initial_text:find("[r]eply  [e]dit  [d]elete  [R]esolve  [+]react  [X]retry  [q]uit", 1, true) ~= nil, initial_text)
 
-    -- 3. Pressing R resolves then unresolves via fake_engine.sh and refreshes popup.
+    -- 3. Pressing R resolves and auto-closes popup; pressing R on a resolved thread unresolves and keeps popup open.
     local resolve_before = helpers.count_requests(log, '"method":"setResolved"')
     helpers.press_key("R")
     assert(vim.wait(3000, function()
         return helpers.count_requests(log, '"method":"setResolved"', '"resolved":true') == resolve_before + 1
-            and table.concat(win_lines(popup_win), "\n"):find("Thread (Resolved)", 1, true) ~= nil
-    end), "R sends setResolved(true) and refreshes popup: " .. table.concat(win_lines(popup_win), "\n"))
+            and not vim.api.nvim_win_is_valid(popup_win)
+    end), "R sends setResolved(true) and auto-closes popup")
+
+    popup_module.open(review, {
+        {
+            threadId = "T1",
+            displayLine = 2,
+            kind = "published",
+            state = "resolved",
+            outdated = false,
+            messageCount = 1,
+            firstAuthor = "alice",
+            snippet = "nit: rename this",
+            messages = {
+                {
+                    id = "M1",
+                    author = "alice",
+                    body = "nit: rename this",
+                    created = "2026-11-20T00:00:00Z",
+                    updated = "2026-11-20T00:00:00Z",
+                    sync = "published",
+                    viewerDidAuthor = false,
+                    reactions = {},
+                },
+            },
+        },
+    })
+    popup_win = helpers.find_floating_win()
+    popup_buf = vim.api.nvim_win_get_buf(popup_win)
+    assert(table.concat(win_lines(popup_win), "\n"):find("Thread (Resolved)", 1, true) ~= nil, "resolved popup opens")
 
     helpers.press_key("R")
     assert(vim.wait(3000, function()
         return helpers.count_requests(log, '"method":"setResolved"', '"resolved":false') >= 1
+            and vim.api.nvim_win_is_valid(popup_win)
             and table.concat(win_lines(popup_win), "\n"):find("Thread (Open)", 1, true) ~= nil
-    end), "second R sends setResolved(false) and refreshes popup")
+    end), "R on resolved thread sends setResolved(false), keeps popup open, and refreshes")
 
     -- 4. Pressing + opens vim.ui.select with REACTION_ORDER and sends toggleReaction, refreshing reaction pill.
     local original_select = vim.ui.select
@@ -212,14 +241,6 @@ return function(context)
         return helpers.count_requests(log, '"method":"toggleReaction"', '"messageId":"M_1B"', '"content":"HEART"') == react_1b_before + 1
     end), "+ targets M_1B under popup cursor")
 
-    local line_2a = helpers.find_line_number(win_lines(multi_win), "line 1")
-    vim.api.nvim_win_set_cursor(multi_win, { line_2a, 0 })
-    local resolve_t2_before = helpers.count_requests(log, '"method":"setResolved"', '"threadId":"T_TWO"')
-    helpers.press_key("R")
-    assert(vim.wait(3000, function()
-        return helpers.count_requests(log, '"method":"setResolved"', '"threadId":"T_TWO"', '"resolved":true') == resolve_t2_before + 1
-    end), "R targets T_TWO under popup cursor")
-
     local lines_before_shrink = #win_lines(multi_win)
     vim.api.nvim_win_set_cursor(multi_win, { lines_before_shrink, 0 })
     popup_module.refresh_from_thread(review, {
@@ -244,8 +265,21 @@ return function(context)
     assert(vim.api.nvim_win_get_height(multi_win) == math.min(22, math.max(6, lines_after_shrink)), "popup height clamped on shrink")
     assert(vim.api.nvim_win_get_cursor(multi_win)[1] <= lines_after_shrink, "popup cursor clamped on shrink")
 
+    local line_2a = helpers.find_line_number(win_lines(multi_win), "short failed body")
+    vim.api.nvim_win_set_cursor(multi_win, { line_2a, 0 })
+    local resolve_t2_before = helpers.count_requests(log, '"method":"setResolved"', '"threadId":"T_TWO"')
+    helpers.press_key("R")
+    assert(vim.wait(3000, function()
+        return helpers.count_requests(log, '"method":"setResolved"', '"threadId":"T_TWO"', '"resolved":true') == resolve_t2_before + 1
+            and not vim.api.nvim_win_is_valid(multi_win)
+    end), "R targets T_TWO under popup cursor and closes popup")
+
     -- 9. Pressing X on a sync == "failed" message sends retryMessage and closes popup.
-    local failed_line = helpers.find_line_number(win_lines(multi_win), "short failed body")
+    vim.api.nvim_set_current_win(win)
+    vim.api.nvim_win_set_cursor(win, { 3, 0 })
+    session.popup_current()
+    multi_win = helpers.find_floating_win()
+    local failed_line = helpers.find_line_number(win_lines(multi_win), "line 1")
     vim.api.nvim_win_set_cursor(multi_win, { failed_line, 0 })
     local retry_m2a_before = helpers.count_requests(log, '"method":"retryMessage"', '"messageId":"M_2A"')
     helpers.press_key("X")

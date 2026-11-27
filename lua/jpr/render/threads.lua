@@ -321,7 +321,8 @@ local function has_any_local_thread(threads)
 end
 
 --- Creates the lines, highlights, and cursor-to-message ranges for the thread popup.
-function M.create_popup_layout_from_threads(threads)
+--- Set `opts.include_footer = false` to omit the popup key-hint footer (used by reply history).
+function M.create_popup_layout_from_threads(threads, opts)
     local layout = M.create_message_layout()
     for index, thread in ipairs(threads or {}) do
         if index > 1 then
@@ -333,10 +334,13 @@ function M.create_popup_layout_from_threads(threads)
             layout.add("")
         end
     end
-    local footer = has_any_local_thread(threads)
-            and "[r]eply  [e]dit  [d]elete  [R]esolve  [+]react  [X]retry  [p]romote  [s]end  [q]uit"
-        or "[r]eply  [e]dit  [d]elete  [R]esolve  [+]react  [X]retry  [q]uit"
-    layout.add(footer, "JprMuted")
+    local include_footer = not opts or opts.include_footer ~= false
+    if include_footer then
+        local footer = has_any_local_thread(threads)
+                and "[r]eply  [e]dit  [d]elete  [R]esolve  [+]react  [X]retry  [p]romote  [s]end  [q]uit"
+            or "[r]eply  [e]dit  [d]elete  [R]esolve  [+]react  [X]retry  [q]uit"
+        layout.add(footer, "JprMuted")
+    end
     return layout
 end
 

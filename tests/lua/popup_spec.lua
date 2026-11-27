@@ -53,6 +53,7 @@ local context = {
 
 dofile(root .. "/tests/lua/popup_spec/actions.lua")(context)
 dofile(root .. "/tests/lua/popup_spec/lifecycle.lua")(context)
+dofile(root .. "/tests/lua/popup_spec/scroll.lua")(context)
 
 local function build_local_preview(overrides)
     local base = {
@@ -210,8 +211,11 @@ local function test_local_reply_and_delete()
     assert(not vim.api.nvim_win_is_valid(reply_popup), "r on local thread closes popup")
     local reply_win = helpers.find_floating_win("Local reply")
     assert(reply_win ~= nil and vim.api.nvim_win_is_valid(reply_win), "r on local thread opens [Local reply]")
+    local history_win = review.compose and review.compose.history_win
+    assert(history_win ~= nil and vim.api.nvim_win_is_valid(history_win), "r on local thread docks history pane")
     vim.api.nvim_buf_set_lines(vim.api.nvim_win_get_buf(reply_win), 0, -1, false, { "Local popup reply" })
     helpers.press_key("<C-s>")
+    assert(not vim.api.nvim_win_is_valid(reply_win) and not vim.api.nvim_win_is_valid(history_win), "<C-s> closes both reply and history panes")
     assert(vim.wait(3000, function()
         return #helpers.read_requests(log, "reply") == replies_before + 1
     end), "r on local thread submits reply")

@@ -107,6 +107,9 @@ local function toggle_resolved(session)
         if session.popup ~= popup then
             return
         end
+        if next_resolved then
+            return M.close(session)
+        end
         if result and result.thread then
             M.refresh_from_thread(session, result.thread)
         end
@@ -334,6 +337,30 @@ function M.refresh_from_thread(session, updated_thread)
     end
 end
 
+--- Scrolls floating thread window `win` to the bottom of `layout` while
+--- ensuring the first line of the last message stays visible at or below the
+--- viewport top, placing the cursor at that message's start.
+function M.scroll_to_last_message(win, layout)
+    if not win or not vim.api.nvim_win_is_valid(win) or type(layout) ~= "table" then
+        return
+    end
+    local lines = layout.lines or {}
+    local ranges = layout.message_ranges or {}
+    local last_range = ranges[#ranges]
+    if #lines == 0 or not last_range then
+        return
+    end
+    vim.api.nvim_win_call(win, function()
+        vim.api.nvim_win_set_cursor(win, { #lines, 0 })
+        vim.cmd("normal! zb")
+        local top_line = vim.fn.winsaveview().topline
+        vim.api.nvim_win_set_cursor(win, { last_range.first, 0 })
+        if top_line > last_range.first then
+            vim.cmd("normal! zt")
+        end
+    end)
+end
+
 --- Opens the floating thread popup displaying `threads` at the cursor.
 function M.open(session, threads)
     if not threads or #threads == 0 then
@@ -359,6 +386,7 @@ function M.open(session, threads)
         title_pos = "center",
     })
     vim.api.nvim_set_option_value("wrap", true, { win = popup.win, scope = "local" })
+    M.scroll_to_last_message(popup.win, popup.layout)
     session.popup = popup
     vim.api.nvim_create_autocmd("BufWipeout", {
         buffer = buf,
