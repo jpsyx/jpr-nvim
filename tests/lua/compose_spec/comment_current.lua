@@ -114,10 +114,11 @@ return function(ctx)
         { file = "README.md", kind = "file", side = "RIGHT" }
     ))
 
-    ctx.captured.errors = {}
     vim.api.nvim_win_set_cursor(stream_win, { 2, 0 })
-    session.comment_current()
-    assert(find_compose_win() == nil and #ctx.captured.errors == 1, "stream hunk header notifies error")
+    assert(vim.deep_equal(
+        comment_and_submit(),
+        { file = "README.md", kind = "file", side = "RIGHT" }
+    ), "gc on a hunk header opens the only available file comment")
 
     ctx.captured.errors = {}
     session.comment_current({ line1 = 4, line2 = 5, range = 2 })

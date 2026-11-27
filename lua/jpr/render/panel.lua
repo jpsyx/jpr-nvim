@@ -214,26 +214,80 @@ local function add_file_line(content, file, name, indent, depth, parent_dir, is_
     end
 end
 
-local function count_descendant_files(tree, dir_index, dir_depth, files)
-    local file_count = 0
+local DIRECTORY_CHECK = "✓"
+
+--- Counts changed files nested under the directory at `dir_index`, including
+--- files inside child directories. `viewed_count` includes only `VIEWED`.
+local function count_descendant_viewed_files(tree, dir_index, dir_depth, files)
+    local viewed_count = 0
+    local total_count = 0
     for index = dir_index + 1, #tree do
         local descendant = tree[index]
         if descendant.depth <= dir_depth then
             break
         end
-        if descendant.file ~= nil and files[descendant.file + 1] ~= nil then
-            file_count = file_count + 1
+        local file = descendant.file ~= nil and files[descendant.file + 1] or nil
+        if file then
+            total_count = total_count + 1
+            if file.viewed == "VIEWED" then
+                viewed_count = viewed_count + 1
+            end
         end
     end
-    return file_count
+    return viewed_count, total_count
 end
 
-local function add_directory_line(content, row, dir_path, parent_dir, is_collapsed, descendant_count)
-    local indent = ("  "):rep(row.depth)
+--- Directory label after the indent: fold indicator, optional check, name,
+--- and a collapsed viewed/total suffix while any descendant file is unviewed.
+local function build_directory_label(name, is_collapsed, viewed_count, total_count)
     local indicator = is_collapsed and "▸ " or "▾ "
-    local count_suffix = is_collapsed and (" (%d)"):format(descendant_count) or ""
-    content.add_line(indent .. indicator .. M.one_line(row.name) .. "/" .. count_suffix, "JprMuted")
+    local is_complete = total_count > 0 and viewed_count == total_count
+    local mark = is_complete and (DIRECTORY_CHECK .. " ") or ""
+    local suffix = ""
+    if is_collapsed and not is_complete then
+        suffix = (" (%d/%d)"):format(viewed_count, total_count)
+    end
+    return indicator .. mark .. name .. "/" .. suffix, is_complete, #indicator
+end
+
+local function add_muted_span(content, line, col_start, col_end)
+    if col_end > col_start then
+        content.highlights[#content.highlights + 1] = {
+            line = line,
+            col_start = col_start,
+            col_end = col_end,
+            group = "JprMuted",
+        }
+    end
+end
+
+--- Paints a directory line muted, with the check in `JprViewed` when every
+--- nested file is viewed.
+local function add_directory_highlights(content, line, indent_bytes, text_bytes, is_complete, indicator_bytes)
+    if not is_complete then
+        add_muted_span(content, line, 0, text_bytes)
+        return
+    end
+    local mark_start = indent_bytes + indicator_bytes
+    local mark_end = mark_start + #DIRECTORY_CHECK
+    add_muted_span(content, line, 0, mark_start)
+    content.highlights[#content.highlights + 1] = {
+        line = line,
+        col_start = mark_start,
+        col_end = mark_end,
+        group = "JprViewed",
+    }
+    add_muted_span(content, line, mark_end, text_bytes)
+end
+
+local function add_directory_line(content, row, dir_path, parent_dir, is_collapsed, viewed_count, total_count)
+    local indent = ("  "):rep(row.depth)
+    local label, is_complete, indicator_bytes =
+        build_directory_label(M.one_line(row.name), is_collapsed, viewed_count, total_count)
+    local text = indent .. label
+    content.add_line(text)
     local line_1based = #content.lines
+    add_directory_highlights(content, line_1based - 1, #indent, #text, is_complete, indicator_bytes)
     content.rows[line_1based] = {
         kind = "dir",
         path = dir_path,
@@ -267,8 +321,8 @@ local function render_tree_rows(content, view, collapsed_dirs, is_unlinked_local
             local segment = tostring(row.name):gsub("/+$", "")
             local dir_path = parent_dir and (parent_dir .. "/" .. segment) or segment
             local is_collapsed = collapsed_dirs[dir_path] == true
-            local descendant_count = is_collapsed and count_descendant_files(tree, index, row.depth, files) or 0
-            add_directory_line(content, row, dir_path, parent_dir, is_collapsed, descendant_count)
+            local viewed_count, total_count = count_descendant_viewed_files(tree, index, row.depth, files)
+            add_directory_line(content, row, dir_path, parent_dir, is_collapsed, viewed_count, total_count)
             if is_collapsed then
                 skip_depth = row.depth
             else

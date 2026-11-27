@@ -16,6 +16,16 @@ local function inspect_stream_cursor(current_session, win)
     }
 end
 
+local function inspect_panel_cursor(current_session)
+    local info = require("jpr.views.panel").get_row_under_cursor(current_session)
+    local row = info and info.row or nil
+    return {
+        is_on_diff_line = false,
+        can_comment_file = row ~= nil and row.kind == "file",
+        is_in_changed_worktree_file = false,
+    }
+end
+
 local function inspect_cursor_view_context(current_session)
     if not current_session then
         return {
@@ -26,6 +36,18 @@ local function inspect_cursor_view_context(current_session)
     end
     local win = vim.api.nvim_get_current_win()
     local buf = vim.api.nvim_win_get_buf(win)
+    local panel = current_session.panel
+    if panel ~= nil and buf == panel.buf then
+        return inspect_panel_cursor(current_session)
+    end
+    local conversation = current_session.conversation
+    if conversation ~= nil and buf == conversation.buf then
+        return {
+            is_on_diff_line = false,
+            can_comment_file = false,
+            is_in_changed_worktree_file = false,
+        }
+    end
     local buffers = current_session.stream and current_session.stream.buffers
     if buffers ~= nil and (buf == buffers.main or buf == buffers.left) then
         return inspect_stream_cursor(current_session, win)

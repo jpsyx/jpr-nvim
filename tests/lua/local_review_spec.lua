@@ -48,9 +48,9 @@ local function has_notification(substring)
     return false
 end
 
--- 1. Schema has 18 commands with `local` right after `open`, discriminant-first steps, and ref validation.
+-- 1. Schema has 19 commands with `local` right after `open`, discriminant-first steps, and ref validation.
 local ids = commands_schema.list_command_ids()
-helpers.eq(#ids, 18, "expected 18 :Jpr subcommands")
+helpers.eq(#ids, 19, "expected 19 :Jpr subcommands")
 helpers.eq(ids[1], "open", "first subcommand is open")
 helpers.eq(ids[2], "local", "second subcommand is local")
 local local_spec = commands_schema.find_command_spec("local")

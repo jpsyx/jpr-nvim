@@ -52,13 +52,13 @@ assert(
 assert(
     vim.deep_equal(
         jpr.complete("", "Jpr "),
-        { "open", "local", "sync", "toggle", "panel", "stream", "comment", "suggest", "expand", "summary", "conversation", "submit", "push", "agent", "send", "prepass", "close", "keys" }
+        { "open", "local", "sync", "toggle", "panel", "stream", "comment", "suggest", "expand", "summary", "conversation", "pr-comment", "submit", "push", "agent", "send", "prepass", "close", "keys" }
     ),
     "all subcommands"
 )
 assert(vim.deep_equal(jpr.complete("k", "Jpr k"), { "keys" }), "filtered k subcommand")
 assert(vim.deep_equal(jpr.complete("s", "Jpr s"), { "sync", "stream", "suggest", "summary", "submit", "send" }), "filtered s subcommands")
-assert(vim.deep_equal(jpr.complete("p", "Jpr p"), { "panel", "push", "prepass" }), "filtered p subcommands")
+assert(vim.deep_equal(jpr.complete("p", "Jpr p"), { "panel", "pr-comment", "push", "prepass" }), "filtered p subcommands")
 assert(vim.deep_equal(jpr.complete("c", "Jpr c"), { "comment", "conversation", "close" }), "filtered c subcommands")
 assert(vim.deep_equal(jpr.complete("", "Jpr open "), {}), "nothing after open subcommand")
 assert(vim.deep_equal(jpr.complete("", "Jpr toggle "), { "unified", "split" }), "toggle argument completions")
@@ -105,6 +105,7 @@ for _, plug in ipairs({
     "<Plug>(jpr-comment)",
     "<Plug>(jpr-suggest-comment)",
     "<Plug>(jpr-file-comment)",
+    "<Plug>(jpr-pr-comment)",
     "<Plug>(jpr-full-diff)",
     "<Plug>(jpr-toggle-viewed)",
     "<Plug>(jpr-thread-popup)",
@@ -165,6 +166,8 @@ assert(buf_has_map(key_buf, "n", "gv") and not buf_has_map(key_buf, "x", "gv"), 
 assert(buf_has_map(key_buf, "n", "gt"), "gt bound in n")
 assert(buf_has_map(key_buf, "n", "]t"), "]t bound in n")
 assert(buf_has_map(key_buf, "n", "[t"), "[t bound in n")
+assert(buf_has_map(key_buf, "n", "gp"), "gp bound to standalone PR comment")
+assert(buf_has_map(key_buf, "n", "gP"), "gP bound to panel toggle")
 vim.api.nvim_buf_delete(key_buf, { force = true })
 jpr.setup({})
 

@@ -287,7 +287,7 @@ assert(vim.deep_equal(collapsed.lines, {
     "  💬 Conversation [2]",
     "▾ docs/",
     "    x.md  +4 -4",
-    "▸ src/ (2)",
+    "▸ src/ (1/2)",
 }), vim.inspect(collapsed.lines))
 assert(collapsed.paths[10] == nil and collapsed.paths[11] == nil and collapsed.paths[12] == nil, vim.inspect(collapsed.paths))
 assert(collapsed.rows[11] == nil and collapsed.rows[12] == nil, "collapsed descendants omitted from rows")
@@ -376,5 +376,57 @@ local all_viewed_view = {
     tree = { { depth = 0, name = "src" }, { depth = 1, name = "a.rs", file = 1 }, { depth = 0, name = "README.md", file = 0 } },
 }
 assert(panel.find_next_unviewed_path(all_viewed_view, "src/a.rs") == nil, "nil when every file is viewed")
+
+-- Directory checks are recursive. A parent stays unchecked while any nested
+-- file is unviewed, and a collapsed directory shows viewed/total. DISMISSED
+-- does not count as viewed. A complete directory keeps its check when collapsed.
+local function create_nested_view(lib_b_viewed)
+    return {
+        pr = { number = 1, title = "Nested" },
+        files = {
+            { path = "src/a.rs", additions = 1, deletions = 0, viewed = "VIEWED" },
+            { path = "src/lib/b.rs", additions = 1, deletions = 0, viewed = lib_b_viewed },
+            { path = "src/lib/c.rs", additions = 1, deletions = 0, viewed = "VIEWED" },
+        },
+        tree = {
+            { depth = 0, name = "src" },
+            { depth = 1, name = "a.rs", file = 0 },
+            { depth = 1, name = "lib" },
+            { depth = 2, name = "b.rs", file = 1 },
+            { depth = 2, name = "c.rs", file = 2 },
+        },
+        viewedCount = lib_b_viewed == "VIEWED" and 3 or 2,
+        sync = { state = "synced", at = 100 },
+    }
+end
+
+local function viewed_marks_on_line(result, line_number)
+    local marks = {}
+    for _, highlight in ipairs(result.highlights) do
+        if highlight.group == "JprViewed" and highlight.line == line_number - 1 then
+            marks[#marks + 1] = result.lines[line_number]:sub(highlight.col_start + 1, highlight.col_end)
+        end
+    end
+    return marks
+end
+
+local nested_partial = panel.build(create_nested_view("UNVIEWED"), 100, { collapsed_dirs = { ["src/lib"] = true } })
+assert(nested_partial.lines[8] == "▾ src/", "expanded parent stays unchecked while a nested file is unviewed: " .. nested_partial.lines[8])
+assert(nested_partial.lines[10] == "  ▸ lib/ (1/2)", "collapsed child counts nested files: " .. tostring(nested_partial.lines[10]))
+assert(nested_partial.lines[11] == nil, "collapsed child omits its files")
+
+local nested_dismissed = panel.build(create_nested_view("DISMISSED"), 100, { collapsed_dirs = { src = true } })
+assert(nested_dismissed.lines[8] == "▸ src/ (2/3)", "DISMISSED nested file keeps the parent incomplete: " .. nested_dismissed.lines[8])
+
+local nested_complete = panel.build(create_nested_view("VIEWED"), 100)
+assert(nested_complete.lines[8] == "▾ ✓ src/", "expanded parent shows a check when every nested file is viewed: " .. nested_complete.lines[8])
+assert(nested_complete.lines[10] == "  ▾ ✓ lib/", "expanded child shows a check: " .. tostring(nested_complete.lines[10]))
+assert(vim.deep_equal(viewed_marks_on_line(nested_complete, 8), { "✓" }), vim.inspect(viewed_marks_on_line(nested_complete, 8)))
+assert(vim.deep_equal(viewed_marks_on_line(nested_complete, 10), { "✓" }), vim.inspect(viewed_marks_on_line(nested_complete, 10)))
+
+local nested_collapsed = panel.build(create_nested_view("VIEWED"), 100, { collapsed_dirs = { src = true } })
+assert(nested_collapsed.lines[8] == "▸ ✓ src/", "collapsed complete directory keeps its check: " .. nested_collapsed.lines[8])
+assert(vim.deep_equal(viewed_marks_on_line(nested_collapsed, 8), { "✓" }), vim.inspect(viewed_marks_on_line(nested_collapsed, 8)))
+assert(nested_collapsed.lines[9] == nil, "collapsed complete directory omits descendants")
 
 print("panel_render_spec: ok")

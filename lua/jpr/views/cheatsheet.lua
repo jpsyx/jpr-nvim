@@ -24,7 +24,7 @@ local function create_diff_section_from_keys(keys)
     return {
         title = "Diff & Stream Views",
         entries = {
-            create_key_entry_from_binding(configured.comment, "New draft comment (Normal / Visual)"),
+            create_key_entry_from_binding(configured.comment, "New draft comment on a diff line, or the only comment this view allows"),
             create_key_entry_from_binding(configured.suggest_comment, "New code suggestion comment (Normal / Visual)"),
             create_key_entry_from_binding(configured.file_comment, "New file-level comment"),
             create_key_entry_from_binding(configured.full_diff, "Return to full branch diff view"),
@@ -42,7 +42,15 @@ local function create_diff_section_from_keys(keys)
     }
 end
 
-local function create_comments_section()
+local function build_conversation_comment_key(keys)
+    local comment_key = type(keys) == "table" and keys.comment or nil
+    if type(comment_key) == "string" and comment_key ~= "" and comment_key ~= "c" then
+        return "c / " .. comment_key
+    end
+    return "c"
+end
+
+local function create_comments_section(keys)
     return {
         title = "Comments, Threads & Submit",
         entries = {
@@ -62,7 +70,7 @@ local function create_comments_section()
             { key = "X", desc = "Retry failed comment" },
             { key = "q / <Esc>", desc = "Close thread popup" },
             { heading = "PR Diff Summary & Conversation" },
-            { key = "c", desc = "Add PR conversation comment" },
+            { key = build_conversation_comment_key(keys), desc = "Add PR conversation comment" },
             { key = "r / e / d", desc = "Reply (local) / edit / delete comment" },
             { key = "p / s", desc = "Promote local thread to GitHub / send to agent" },
             { key = "+ / X", desc = "Toggle GitHub reaction / retry failed comment" },
@@ -82,6 +90,7 @@ local function create_session_and_agent_section_from_keys(keys)
     return {
         title = "Review Session & Agent",
         entries = {
+            create_key_entry_from_binding(configured.pr_comment, "New standalone PR comment"),
             create_key_entry_from_binding(configured.send_agent, "Send local threads to agent (confirms)"),
             create_key_entry_from_binding(configured.submit_review, "Submit GitHub review (confirms)"),
             create_key_entry_from_binding(configured.toggle_agent, "Toggle coding agent panel (hides without quitting)"),
@@ -104,12 +113,14 @@ local function create_sections_from_config(config)
                 { key = "<LeftMouse>", desc = "Click file/summary/conversation to open, or dir to toggle" },
                 { key = "r", desc = "Rename or move file / directory" },
                 { key = "a", desc = "Create file or directory" },
+                create_key_entry_from_binding(current_config.keys and current_config.keys.comment, "Comment on the file, Diff summary, or Conversation under the cursor"),
+                create_key_entry_from_binding(current_config.keys and current_config.keys.file_comment, "New file-level comment on the file under the cursor"),
                 { key = "v", desc = "Toggle file or directory viewed" },
                 { key = "?", desc = "Show keyboard shortcuts" },
             },
         },
         create_diff_section_from_keys(current_config.keys),
-        create_comments_section(),
+        create_comments_section(current_config.keys),
         create_session_and_agent_section_from_keys(current_config.keys),
         {
             title = "Command Palette & Steppers",

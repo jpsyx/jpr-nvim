@@ -49,6 +49,7 @@ M.defaults = {
         comment = "gc",
         suggest_comment = "gC",
         file_comment = "gf",
+        pr_comment = "gp",
         full_diff = "gF",
         toggle_viewed = "gv",
         thread_popup = "gt",
@@ -57,7 +58,7 @@ M.defaults = {
         send_agent = "gS",
         submit_review = "gs",
         toggle_agent = "ga",
-        toggle_panel = "gp",
+        toggle_panel = "gP",
     },
 }
 
@@ -122,10 +123,13 @@ local function bind_plug_key(buf, modes, lhs, plug, desc)
     end
 end
 
---- Binds review-wide session keys (`send_agent`, `submit_review`,
---- `toggle_agent`, `toggle_panel`) on `buf`, skipping any entry set to `false` or empty.
+--- Binds review-wide session keys (`comment`, `pr_comment`, `send_agent`,
+--- `submit_review`, `toggle_agent`, `toggle_panel`) on `buf`, skipping any
+--- entry set to `false` or empty.
 function M.bind_session_keys(buf)
     local keys = M.config.keys or {}
+    bind_plug_key(buf, "n", keys.comment, "<Plug>(jpr-comment)", "New comment for the current view")
+    bind_plug_key(buf, "n", keys.pr_comment, "<Plug>(jpr-pr-comment)", "New standalone PR comment")
     bind_plug_key(buf, "n", keys.send_agent, "<Plug>(jpr-send-agent)", "Send local threads to coding agent")
     bind_plug_key(buf, "n", keys.submit_review, "<Plug>(jpr-submit-review)", "Open GitHub review submission modal")
     bind_plug_key(buf, "n", keys.toggle_agent, "<Plug>(jpr-toggle-agent)", "Toggle coding agent terminal panel")
@@ -162,6 +166,23 @@ function M.bind_tab_aware_full_diff_key(buf)
         end
         return full_diff_key
     end, { buffer = buf, expr = true, remap = true, silent = true, nowait = true, desc = "Switch to the full branch diff view" })
+end
+
+--- Binds `keys.pr_comment` on a non-changed worktree buffer `buf` with an expr
+--- guard so it opens a standalone PR comment inside review tabs and falls back
+--- to the native key in non-review tabs.
+function M.bind_tab_aware_pr_comment_key(buf)
+    local comment_key = M.config.keys and M.config.keys.pr_comment
+    if type(comment_key) ~= "string" or comment_key == "" then
+        return
+    end
+    vim.keymap.set("n", comment_key, function()
+        local session_module = package.loaded["jpr.session"]
+        if session_module and session_module.current() ~= nil then
+            return "<Plug>(jpr-pr-comment)"
+        end
+        return comment_key
+    end, { buffer = buf, expr = true, remap = true, silent = true, nowait = true, desc = "New standalone PR comment" })
 end
 
 --- Binds `keys.toggle_panel` on a non-changed worktree buffer `buf` with an
@@ -335,6 +356,7 @@ local ZERO_ARG_SESSION_METHODS = {
     expand = "expand_current",
     summary = "summary_current",
     conversation = "conversation_current",
+    ["pr-comment"] = "pr_comment_current",
     submit = "submit_current",
     push = "push_current",
     send = "send_current",
@@ -461,6 +483,7 @@ function M.action(name)
         file_comment = function()
             session.comment_current({ file = true })
         end,
+        pr_comment = session.pr_comment_current,
         full_diff = session.stream_current,
         toggle_viewed = session.toggle_viewed_current,
         thread_popup = session.popup_current,
