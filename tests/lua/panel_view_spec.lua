@@ -725,8 +725,8 @@ assert(restored_text:find("b.rs", 1, true) ~= nil, restored_text)
 
 -- Clicking the header filter pill toggles the unviewed filter without losing focus.
 assert(review.panel.filter_line ~= nil, "filter_line is recorded on the panel")
-local filter_mouse_orig = vim.fn.getmousepos
-local is_filter_click_ok, filter_click_err = pcall(function()
+local original_filter_getmousepos = vim.fn.getmousepos
+local is_filter_click_ok, filter_click_error = pcall(function()
     vim.fn.getmousepos = function()
         return { winid = review.panel.win, line = review.panel.filter_line, column = 10 }
     end
@@ -739,8 +739,8 @@ local is_filter_click_ok, filter_click_err = pcall(function()
     helpers.press_key("<LeftMouse>")
     assert(review.panel_hide_viewed == false, "clicking filter pill again disables unviewed filter")
 end)
-vim.fn.getmousepos = filter_mouse_orig
-assert(is_filter_click_ok, tostring(filter_click_err))
+vim.fn.getmousepos = original_filter_getmousepos
+assert(is_filter_click_ok, tostring(filter_click_error))
 
 press("u", find_panel_line("file", "README.md"))
 assert(panel_view.toggle(review) == true, "sidebar closes while the agent window is open")
